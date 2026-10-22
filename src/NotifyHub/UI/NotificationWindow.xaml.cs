@@ -18,17 +18,19 @@ public partial class NotificationWindow : Window
 {
     private readonly DispatcherTimer _timer = new();
     private readonly int _durationMs;
+    private readonly double _marqueeSpeed;
 
     private double _remainingMs;
     private DateTime _segmentStart;
     private bool _closing;
 
-    public NotificationWindow(NotifyMessage message, int durationMs)
+    public NotificationWindow(NotifyMessage message, int durationMs, double marqueeSpeed = MarqueeText.DefaultSpeed)
     {
         InitializeComponent();
 
         Message = message;
         _durationMs = Math.Clamp(durationMs, AppConfig.MinDurationMs, AppConfig.MaxDurationMs);
+        _marqueeSpeed = marqueeSpeed;
 
         Fill(message);
 
@@ -167,6 +169,7 @@ public partial class NotificationWindow : Window
         TimeText.Text = message.Time.ToString("HH:mm");
         SenderText.Text = string.IsNullOrWhiteSpace(message.Sender) ? message.SourceText : message.Sender;
         ContentText.Text = string.IsNullOrWhiteSpace(message.Content) ? "（无内容）" : message.Content;
+        ContentText.Speed = _marqueeSpeed;
 
         Color iconColor;
         string glyph;

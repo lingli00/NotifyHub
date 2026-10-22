@@ -123,7 +123,7 @@ public sealed class NotificationManager
         }
 
         var message = _pending.Dequeue();
-        var window = new NotificationWindow(message, config.NotificationDurationMs);
+        var window = new NotificationWindow(message, config.NotificationDurationMs, config.MarqueeSpeed);
         window.Dismissed += OnWindowDismissed;
         window.Clicked += OnWindowClicked;
 
@@ -171,6 +171,15 @@ public sealed class NotificationManager
         if (DemoMode)
         {
             _log.Info("通知", "演示模式：点击不做窗口定位", message.Sender);
+            return;
+        }
+
+        // 需求 3：ntfy 通知点击 → 唤起浏览器打开该 topic 的 Web UI 页面
+        if (message.Source == MessageSource.Ntfy && !string.IsNullOrWhiteSpace(message.LinkUrl))
+        {
+            _log.AddEvent(message, EventStatus.Info, "打开 topic 页面");
+            _log.Info("通知", "ntfy 点击：唤起浏览器", message.LinkUrl);
+            BrowserLauncher.Open(_configProvider().BrowserPath, message.LinkUrl);
             return;
         }
 

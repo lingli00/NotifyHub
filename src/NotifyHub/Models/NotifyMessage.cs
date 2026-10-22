@@ -27,6 +27,12 @@ public sealed class NotifyMessage
     /// </summary>
     public bool LowFidelity { get; init; }
 
+    /// <summary>
+    /// 点击通知要打开的地址（目前仅 ntfy：该 topic 的 Web UI 页面，需求 3）。
+    /// 空表示没有关联地址（微信/QQ 走“定位到聊天”逻辑）。
+    /// </summary>
+    public string LinkUrl { get; init; } = string.Empty;
+
     public string SourceText => Source switch
     {
         MessageSource.WeChat => "微信",

@@ -139,11 +139,15 @@ public sealed class NtfySubscriber : IDisposable
                 _status = "连接中";
 
                 // 断线重连时带 since= 上次收到消息的时间，把断线窗口内积压的消息补回来；
-                // 首次连接不带（只收新消息），重复投递由 Id 去重兜底
-                var connectUrl = _everConnected && Interlocked.Read(ref _lastEventUnix) > 0
-                    ? url + (url.Contains('?', StringComparison.Ordinal) ? "&" : "?")
-                      + "since=" + Interlocked.Read(ref _lastEventUnix)
-                    : url;
+                // 全新进程启动一律带 since=当前时间——ntfy 服务端会缓存历史消息，
+                // 不带 since 就会把老早之前的消息全部重弹一遍（需求 7：启动不回溯历史）。
+                var lastEvent = Interlocked.Read(ref _lastEventUnix);
+                var sinceUnix = _everConnected && lastEvent > 0
+                    ? lastEvent
+                    : (long)(DateTimeOffset.UtcNow - DateTimeOffset.UnixEpoch).TotalSeconds;
+
+                var connectUrl = url + (url.Contains('?', StringComparison.Ordinal) ? "&" : "?")
+                                 + "since=" + sinceUnix;
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, connectUrl);
                 request.Headers.Accept.ParseAdd("text/event-stream");
@@ -244,6 +248,9 @@ public sealed class NtfySubscriber : IDisposable
             Sender = message.Sender,
             Content = message.Content,
             Time = message.Time,
+
+            // 点击通知 → 打开该 topic 的 Web UI 页面（需求 3，不是消息里的链接）
+            LinkUrl = BrowserLauncher.BuildTopicUrl(_config.Current.NtfyUrl) ?? string.Empty,
         });
     }
 

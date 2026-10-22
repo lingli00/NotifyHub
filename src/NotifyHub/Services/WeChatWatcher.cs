@@ -14,12 +14,14 @@ public sealed class WeChatWatcher : ChatAppWatcher
     private static readonly string[] Processes = { "WeChat", "Weixin" };
     private static readonly string[] Classes = { "WeChatMainWndForPC", "WeChatMainWndForPC1", "mmui::MainWindow" };
 
-    public WeChatWatcher(LogService log, ConfigService config)
-        : base("微信监听", Processes, Classes, log, config)
+    public WeChatWatcher(LogService log, ConfigService config, MessageCursorStore cursorStore)
+        : base("微信监听", Processes, Classes, log, config, cursorStore)
     {
     }
 
     protected override MessageSource Source => MessageSource.WeChat;
+
+    protected override string SourceKey => "wechat";
 
     protected override bool IsEnabled(AppConfig config) => config.WeChatEnabled;
 

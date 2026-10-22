@@ -21,6 +21,7 @@ public sealed class MonitorController : IDisposable
     private readonly LogService _log;
     private readonly ConfigService _config;
     private readonly DedupCache _dedup;
+    private readonly MessageCursorStore _cursor;
     private readonly WeChatWatcher _wechat;
     private readonly QQWatcher _qq;
     private readonly NtfySubscriber _ntfy;
@@ -39,8 +40,11 @@ public sealed class MonitorController : IDisposable
             Retention = TimeSpan.FromHours(config.Current.DedupHours),
         };
 
-        _wechat = new WeChatWatcher(log, config);
-        _qq = new QQWatcher(log, config);
+        // 消息游标落盘：重启后只弹游标之后的新消息，不回溯历史（需求 7）
+        _cursor = new MessageCursorStore(AppPaths.CursorFile);
+
+        _wechat = new WeChatWatcher(log, config, _cursor);
+        _qq = new QQWatcher(log, config, _cursor);
         _ntfy = new NtfySubscriber(log, config);
 
         _wechat.MessageDetected += OnMessage;
@@ -102,12 +106,17 @@ public sealed class MonitorController : IDisposable
         _ntfy.Start();
     }
 
-    /// <summary>把去重缓存落盘（由 UI 定时器周期调用）。</summary>
-    public void FlushCaches() => _dedup.Flush();
+    /// <summary>把去重/游标缓存落盘（由 UI 定时器周期调用）。</summary>
+    public void FlushCaches()
+    {
+        _dedup.Flush();
+        _cursor.Flush();
+    }
 
     public void Dispose()
     {
         _dedup.Flush();
+        _cursor.Flush();
         _wechat.Stop();
         _qq.Stop();
         _ntfy.Dispose();

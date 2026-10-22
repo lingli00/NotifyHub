@@ -14,11 +14,14 @@ namespace NotifyHub.UI;
 
 /// <summary>
 /// 灵动岛 / 悬浮条：单一深色圆角长条，同一面板内横排展示
-///   [♪] 歌名-歌手 | [上一首][播放/暂停][下一首] | 单行实时动作。
+///   [App图标/♪] 歌名-歌手 | [上一首][播放/暂停][下一首] | 单行实时动作。
 /// 固定模式锁定屏幕顶部居中；自由模式下按住空白区可拖动（左键/右键都行），
-/// 10 秒无交互自动吸附到最近的一条屏幕边（四边都算）：
-/// 贴左右边收成竖细条、贴上/下边收成横细条（SnapStripWindow），
+/// 拖动与吸附只允许顶部边缘：水平限中间 3/5（最左/最右 1/5 禁停），
+/// 10 秒无交互自动吸附到顶部并收成一条横细条（SnapStripWindow），
 /// 鼠标移入细条立即展开完整悬浮条，离开 1.4s 再收回细条。
+///
+/// 长文本（歌名/任务状态）走跑马灯：超宽自动横滚、悬停暂停、速度可调；
+/// 短文本在容器内水平居中，滚动时可视区中心钉在岛中心（MarqueeText）。
 ///
 /// 动效参数（严格要求）：
 ///   展开 180ms ease-out｜状态文字切换 120ms 淡入｜完成停留 600ms｜收缩 220ms ease-in。
@@ -105,10 +108,7 @@ public partial class IslandWindow : Window
     private enum Edge
     {
         None,
-        Left,
-        Right,
         Top,
-        Bottom,
     }
 
     public IslandWindow()
@@ -120,6 +120,10 @@ public partial class IslandWindow : Window
         StatusGroup.Visibility = Visibility.Collapsed;
         MusicGroup.Visibility = Visibility.Collapsed;
         Divider.Visibility = Visibility.Collapsed;
+
+        // 跑马灯速度跟随配置（可调）
+        MusicText.Speed = MarqueeSpeedProvider?.Invoke() ?? MarqueeText.DefaultSpeed;
+        StatusText.Speed = MarqueeSpeedProvider?.Invoke() ?? MarqueeText.DefaultSpeed;
 
         _statusTimer.Tick += (_, _) => OnStatusHoldElapsed();
         _musicTimer.Tick += (_, _) => OnMusicGraceElapsed();
@@ -173,6 +177,9 @@ public partial class IslandWindow : Window
 
     /// <summary>注入的配置读取：音乐控制模块开关。</summary>
     public Func<bool>? MusicEnabledProvider { get; set; }
+
+    /// <summary>注入的配置读取：跑马灯滚动速度（DIP/秒）。</summary>
+    public Func<int>? MarqueeSpeedProvider { get; set; }
 
     /// <summary>小岛当前是否可见（诊断用）。</summary>
     public bool IsShowing => !_hidden && IsVisible;
@@ -396,9 +403,49 @@ public partial class IslandWindow : Window
             var artist = string.IsNullOrWhiteSpace(_media.Artist) ? _media.AppName : _media.Artist;
             MusicText.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
             PlayPauseGlyph.Data = (Geometry)FindResource(_media.IsPlaying ? "GlyphPause" : "GlyphPlay");
+            UpdateMusicIcon(_media);
         }
 
         UpdateChrome();
+    }
+
+    /// <summary>
+    /// 岛最左侧的当前播放 App 图标（需求 5）：从进程 exe 提取透明图标，
+    /// 圆角由外层 Border 裁剪；提不到图标时回落到 ♪ 字符，无播放时整组收起。
+    /// </summary>
+    private void UpdateMusicIcon(MediaInfo media)
+    {
+        try
+        {
+            var icon = AppIconExtractor.GetIcon(media.ProcessName);
+            if (icon is not null)
+            {
+                MusicAppIcon.Source = icon;
+                MusicIconBox.Visibility = Visibility.Visible;
+                MusicGlyph.Visibility = Visibility.Collapsed;
+                return;
+            }
+        }
+        catch
+        {
+            // 提图标失败不影响音乐行
+        }
+
+        MusicAppIcon.Source = null;
+        MusicIconBox.Visibility = Visibility.Collapsed;
+        MusicGlyph.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>
+    /// 刷新音乐组可见性：设置页「音乐控制模块」开关切换后立即生效
+    /// （需求 8：勾选→显示、取消→隐藏，此前只有保存后不刷新才"不消失"）。
+    /// </summary>
+    public void RefreshMedia()
+    {
+        MusicText.Speed = MarqueeSpeedProvider?.Invoke() ?? MarqueeText.DefaultSpeed;
+        StatusText.Speed = MarqueeSpeedProvider?.Invoke() ?? MarqueeText.DefaultSpeed;
+        UpdateMusicGroup();
+        Evaluate();
     }
 
     /// <summary>分隔线只在音乐与任务两组同时可见时出现。</summary>
@@ -685,29 +732,13 @@ public partial class IslandWindow : Window
         }
     }
 
-    /// <summary>保持当前吸附边不变，按新的条体尺寸重新贴边（文字变长/变短时用）。</summary>
+    /// <summary>保持吸附边不变，按新的条体尺寸重新贴边（文字变长/变短时用）。</summary>
     private void ReapplySnap()
     {
-        var area = SystemParameters.WorkArea;
-        var w = ActualWidth > 1 ? ActualWidth : 400;
-        var h = ActualHeight > 1 ? ActualHeight : 76;
-        var pad = PillPad;
-
-        switch (_snapEdge)
-        {
-            case Edge.Left:
-                Left = area.Left + EdgeGap - pad;
-                break;
-            case Edge.Right:
-                Left = area.Right - w - EdgeGap + pad;
-                break;
-            case Edge.Top:
-                Top = area.Top + EdgeGap - pad;
-                break;
-            case Edge.Bottom:
-                Top = area.Bottom - h - EdgeGap + pad;
-                break;
-        }
+        // v0.2.3 起只吸附顶部：水平位置按中间 3/5 重新收敛，垂直贴顶
+        var (left, _) = ClampToScreen(Left, Top);
+        Left = left;
+        Top = SystemParameters.WorkArea.Top + EdgeGap - PillPad;
     }
 
     /// <summary>固定模式：水平居中、贴顶（视觉缝隙 = EdgeGap）。可重复调用（尺寸变化后纠偏）。</summary>
@@ -739,8 +770,11 @@ public partial class IslandWindow : Window
     }
 
     /// <summary>
-    /// 把位置限制在可视区域内。只允许"阴影留白"出屏，条体本体必须完整可见，
-    /// 否则会出现"拖到边上被裁掉一半"的观感。
+    /// 把位置限制在允许的停靠区内（需求 4）：
+    ///   垂直：只允许顶部一带（阴影留白可轻微出屏，不允许拖到屏幕中下部）；
+    ///   水平：仅限中间 3/5，最左 1/5 与最右 1/5 禁停；
+    ///   以"岛中心点"判定分区，长短不一的岛行为一致。
+    /// 固定模式钉死顶部正中间；自由模式保存的位置同样按此收敛。
     /// </summary>
     private (double Left, double Top) ClampToScreen(double left, double top)
     {
@@ -749,10 +783,12 @@ public partial class IslandWindow : Window
         var h = ActualHeight > 1 ? ActualHeight : 76;
         var slack = PillPad + 2;
 
-        var minLeft = area.Left - slack;
-        var maxLeft = area.Right - w + slack;
+        var zoneInset = area.Width * 0.2;
+        var minLeft = area.Left + zoneInset - (w / 2);
+        var maxLeft = area.Right - zoneInset - (w / 2);
+
         var minTop = area.Top - slack;
-        var maxTop = area.Bottom - h + slack;
+        var maxTop = area.Top + 120;
 
         return (Math.Clamp(left, minLeft, maxLeft), Math.Clamp(top, minTop, maxTop));
     }
@@ -815,58 +851,27 @@ public partial class IslandWindow : Window
         RestartIdleTimer();
     }
 
-    /// <summary>吸附到距离最近的那条屏幕边，贴边后整岛收成一条「细条」。</summary>
+    /// <summary>
+    /// 吸附到顶部边缘（v0.2.3：彻底砍掉左/右/下边缘停靠，只允许顶部）。
+    /// 水平位置保留用户拖到的落点（收敛进中间 3/5），垂直贴顶。
+    /// </summary>
     private void SnapToNearestEdge()
     {
         var area = SystemParameters.WorkArea;
-        var w = ActualWidth > 1 ? ActualWidth : 400;
-        var h = ActualHeight > 1 ? ActualHeight : 76;
         var pad = PillPad;
 
-        var left = Left;
-        var top = Top;
+        var (targetLeft, _) = ClampToScreen(Left, Top);
+        var targetTop = area.Top + EdgeGap - pad;
 
-        var distLeft = left - area.Left;
-        var distRight = area.Right - (left + w);
-        var distTop = top - area.Top;
-        var distBottom = area.Bottom - (top + h);
-
-        var min = Math.Min(Math.Min(distLeft, distRight), Math.Min(distTop, distBottom));
-
-        double targetLeft = left;
-        double targetTop = top;
-        Edge edge;
-
-        if (Math.Abs(min - distLeft) < 0.01)
-        {
-            targetLeft = area.Left + EdgeGap - pad;
-            edge = Edge.Left;
-        }
-        else if (Math.Abs(min - distRight) < 0.01)
-        {
-            targetLeft = area.Right - w - EdgeGap + pad;
-            edge = Edge.Right;
-        }
-        else if (Math.Abs(min - distTop) < 0.01)
-        {
-            targetTop = area.Top + EdgeGap - pad;
-            edge = Edge.Top;
-        }
-        else
-        {
-            targetTop = area.Bottom - h - EdgeGap + pad;
-            edge = Edge.Bottom;
-        }
-
-        _snapEdge = edge;
+        _snapEdge = Edge.Top;
         _snapped = true;
         _peeked = false;
 
-        // 先顺滑滑到边上，落定后整岛收成细条
+        // 先顺滑滑到顶部，落定后整岛收成细条
         SlideTo(targetLeft, targetTop, SlideDurationMs, SwitchToStrip);
     }
 
-    /// <summary>滑到边后：岛快速淡出，屏幕边只留一条细条（左右边 = 竖条）。</summary>
+    /// <summary>滑到顶后：岛快速淡出，屏幕顶部只留一条横细条。</summary>
     private void SwitchToStrip()
     {
         if (_stripMode || _dragging)
@@ -875,7 +880,7 @@ public partial class IslandWindow : Window
         }
 
         _stripMode = true;
-        EnsureStrip().ShowFor(_snapEdge.ToString(), IsDoneState);
+        EnsureStrip().ShowFor("Top", IsDoneState);
 
         var token = ++_animToken;
         BeginAnimation(OpacityProperty, null);
@@ -913,27 +918,10 @@ public partial class IslandWindow : Window
         _snapped = false;
         _peeked = true;
 
-        // 贴边全展开：留出与吸附同款缝隙
-        var area = SystemParameters.WorkArea;
-        var w = ActualWidth > 1 ? ActualWidth : 400;
-        var h = ActualHeight > 1 ? ActualHeight : 76;
-        var pad = PillPad;
-
-        switch (_snapEdge)
-        {
-            case Edge.Left:
-                Left = area.Left + EdgeGap - pad;
-                break;
-            case Edge.Right:
-                Left = area.Right - w - EdgeGap + pad;
-                break;
-            case Edge.Top:
-                Top = area.Top + EdgeGap - pad;
-                break;
-            case Edge.Bottom:
-                Top = area.Bottom - h - EdgeGap + pad;
-                break;
-        }
+        // 贴顶全展开：水平收敛进中间 3/5，垂直留出与吸附同款缝隙
+        var (left, _) = ClampToScreen(Left, Top);
+        Left = left;
+        Top = SystemParameters.WorkArea.Top + EdgeGap - PillPad;
 
         Show();
         UpdateLayout();
@@ -1224,7 +1212,7 @@ public partial class IslandWindow : Window
         var x = _dragStartWindow.Left + (cursor.X - _dragStartCursor.X);
         var y = _dragStartWindow.Top + (cursor.Y - _dragStartCursor.Y);
 
-        // 别让用户把条拖到屏幕外找不回来：至少留 80×40 像素可见
+        // 别让用户把条拖出允许停靠区（需求 4）：水平限中间 3/5，垂直限顶部一带
         var area = SystemParameters.WorkArea;
         var dpi = VisualTreeHelper.GetDpi(this);
         var sx = dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX;
@@ -1233,10 +1221,11 @@ public partial class IslandWindow : Window
         var width = _dragStartWindow.Right - _dragStartWindow.Left;
         var height = _dragStartWindow.Bottom - _dragStartWindow.Top;
 
-        var minX = (int)(area.Left * sx) - width + 80;
-        var maxX = (int)(area.Right * sx) - 80;
-        var minY = (int)(area.Top * sy) - height + 40;
-        var maxY = (int)(area.Bottom * sy) - 40;
+        var zoneInset = (int)(area.Width * 0.2 * sx);
+        var minX = (int)(area.Left * sx) + zoneInset - (width / 2);
+        var maxX = (int)(area.Right * sx) - zoneInset - (width / 2);
+        var minY = (int)(area.Top * sy) - 40;
+        var maxY = (int)((area.Top + 120) * sy);
 
         _dragMoved = true;
         NativeMethods.MoveWindowTo(_hwnd, Math.Clamp(x, minX, maxX), Math.Clamp(y, minY, maxY));

@@ -33,6 +33,8 @@ public sealed class IslandController : IDisposable
         _sound = sound;
 
         _media = new MediaPlayerMonitor(log);
+        _media.WhitelistProvider = () =>
+            MusicAppWhitelist.Effective(_config.Current.MusicAppWhitelist);
         _fullscreen = new FullscreenWatcher(log);
     }
 
@@ -205,6 +207,7 @@ public sealed class IslandController : IDisposable
         var island = new IslandWindow();
         island.ModeProvider = () => _config.Current.IslandMode;
         island.MusicEnabledProvider = () => _config.Current.MusicEnabled;
+        island.MarqueeSpeedProvider = () => _config.Current.MarqueeSpeed;
         island.SavedPositionProvider = () =>
         {
             var config = _config.Current;
@@ -284,6 +287,11 @@ public sealed class IslandController : IDisposable
             try
             {
                 Island().ApplyModeChange();
+
+                // 音乐开关/跑马灯速度等变更即时生效：
+                // 需求 8——此前只调 ApplyModeChange，音乐组可见性不会重算，
+                // 表现为“取消勾选保存后不消失、重新勾选反而消失”。
+                Island().RefreshMedia();
             }
             catch (Exception ex)
             {

@@ -5,9 +5,11 @@ namespace NotifyHub.Services.Parsing;
 /// <summary>
 /// 一条会话行：联系人/群名 + 最后一条消息摘要。
 /// <paramref name="Muted"/> 来自 UIA 图标/说明里的“消息免打扰”信号；
-/// <paramref name="Signals"/> 是该会话项里所有元素名称/说明的拼接，供过滤规则做关键词判定。
+/// <paramref name="Signals"/> 是该会话项里所有元素名称/说明的拼接，供过滤规则做关键词判定；
+/// <paramref name="HasUnread"/> 表示摘要里带未读证据（微信 4.x 的“[N条]”前缀或“有人@我”），
+/// 已读会话没有该前缀——需求 7 用它区分“用户已看过的老消息”与“真正的新消息”。
 /// </summary>
-public sealed record SessionRow(string Contact, string Summary, bool Muted = false, string Signals = "");
+public sealed record SessionRow(string Contact, string Summary, bool Muted = false, string Signals = "", bool HasUnread = false);
 
 /// <summary>
 /// 把 UIA 抓到的文本片段还原成 (联系人, 摘要)。
@@ -52,6 +54,10 @@ public static partial class MessageTextParser
             return null;
         }
 
+        // 未读证据：微信 4.x 未读会话摘要带“[N条]”前缀，@我的会话带“有人@我”。
+        // 实测（本机 dump）：已读会话摘要为“发言人: 内容”，没有任何前缀。
+        var hasUnread = false;
+
         var contact = texts[0];
         if (contact.Length > 80 || TimeLikeRegex().IsMatch(contact) || BadgeLikeRegex().IsMatch(contact))
         {
@@ -78,6 +84,11 @@ public static partial class MessageTextParser
                 continue;
             }
 
+            if (UnreadPrefixRegex().IsMatch(text) || text.Contains("有人@我", StringComparison.Ordinal))
+            {
+                hasUnread = true;
+            }
+
             var cleaned = CleanSummaryText(text);
             if (cleaned.Length == 0)
             {
@@ -93,7 +104,7 @@ public static partial class MessageTextParser
         }
 
         var summary = string.Join(" ", Distinct(parts)).Trim();
-        return new SessionRow(contact, summary);
+        return new SessionRow(contact, summary, HasUnread: hasUnread);
     }
 
     /// <summary>清洗：按行拆分、去零宽字符、去空行、去相邻重复。</summary>

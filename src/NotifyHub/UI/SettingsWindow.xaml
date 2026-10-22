@@ -117,7 +117,7 @@
                                             Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="NtfyEnabledCheck" Content="启用 ntfy 订阅" />
                                     <TextBlock Style="{StaticResource HintText}"
-                                               Text="填 https://ntfy.sh/你的主题 即可，程序会自动补 /sse" />
+                                               Text="填 https://ntfy.sh/你的主题 即可，程序会自动补 /sse；点击通知会用浏览器打开该主题的网页" />
                                 </StackPanel>
                             </Grid>
                         </GroupBox>
@@ -189,6 +189,7 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <Grid Grid.Row="0">
@@ -209,7 +210,7 @@
                                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="MusicEnabledCheck" Content="音乐控制模块" MinWidth="196" />
                                     <TextBlock Style="{StaticResource HintText}"
-                                               Text="播放音乐时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏" />
+                                               Text="播放白名单内的音乐 App 时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏" />
                                 </StackPanel>
 
                                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
@@ -218,8 +219,48 @@
                                                Text="AI 的反馈文字实时上岛，回合结束报完成态并响完成音" />
                                 </StackPanel>
 
-                                <TextBlock Grid.Row="3" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
-                                           Text="自由模式下 10 秒无交互自动吸附到最近的屏幕边（上下左右都算）：贴左右边收成竖条、贴上边收成细条，鼠标移上去即展开完整悬浮条。" />
+                                <Grid Grid.Row="3" Margin="24,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="长文本滚动速度" Margin="0,0,10,0" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                        <Slider x:Name="MarqueeSpeedSlider" Width="150" Minimum="10" Maximum="120"
+                                                SmallChange="5" LargeChange="10" ValueChanged="OnMarqueeSpeedChanged" />
+                                        <TextBlock x:Name="MarqueeSpeedText" Margin="8,0,0,0" Width="70" Foreground="#8A8F98" Text="45" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock Grid.Row="4" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
+                                           Text="停靠只允许屏幕顶部：最左 1/5 与最右 1/5 禁停，仅中间 3/5 可拖可吸附；10 秒无交互吸附到顶部并收成横细条，鼠标移上去即展开。歌名/任务状态超宽时自动横向滚动（悬停暂停），短文本居中。" />
+                            </Grid>
+                        </GroupBox>
+
+                        <!--  音乐 App 白名单 + 浏览器  -->
+                        <GroupBox Header="音乐 App 白名单与浏览器">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="白名单" Margin="0,0,10,0" />
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="MusicWhitelistBox" Height="28"
+                                         ToolTip="进程名关键词，逗号分隔；留空 = 内置默认名单" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="浏览器" Margin="0,8,10,0" />
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="BrowserPathBox" Height="28" Margin="0,8,0,0"
+                                         ToolTip="点击 ntfy 通知时用这个浏览器打开；留空 = 系统默认浏览器" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
+                                           Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="只有白名单内进程的媒体会话才会显示音乐控制栏与 App 图标——浏览器（chrome/edge/firefox/brave…）刷视频/直播一律忽略，不再误弹控制栏。内置名单含 QQ音乐/酷狗/网易云/酷我/咪咕/foobar2000/FOLIA 等。" />
                             </Grid>
                         </GroupBox>
 

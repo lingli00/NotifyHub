@@ -13,6 +13,7 @@ public enum AppMode
     Media,
     Settings,
     IslandStream,
+    MarqueeTest,
     Help,
 }
 
@@ -62,6 +63,9 @@ public sealed record CommandLineOptions(
                 case "--island-stream":
                     // --island-stream：从标准输入逐行读状态并转发（长连接，更新延迟 <100ms）
                     return new CommandLineOptions(AppMode.IslandStream, 0);
+                case "--marquee-test":
+                    // --marquee-test：离屏渲染跑马灯各形态（短文本居中/长文本滚动）自检
+                    return new CommandLineOptions(AppMode.MarqueeTest, 0);
                 case "--help":
                 case "-h":
                 case "/?":

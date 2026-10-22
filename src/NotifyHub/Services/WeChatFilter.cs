@@ -22,8 +22,16 @@ public static class WeChatFilter
     private static readonly string[] OfficialKeywords =
     {
         "服务通知", "微信团队", "微信支付", "订阅号消息", "公众号", "订阅号",
+        "服务号", "官方账号", "官方通知",
         "看一看", "搜一搜", "游戏中心", "微信运动", "腾讯新闻", "QQ邮箱提醒",
         "微信广告", "广告通知", "小程序",
+        "微信读书", "腾讯客服", "理财通", "阿里云", "腾讯充值",
+    };
+
+    /// <summary>公众号文章链接特征（摘要里出现即拦截，来自官方推送通道）。</summary>
+    private static readonly string[] OfficialLinkMarkers =
+    {
+        "mp.weixin.qq.com", "mp.weixinbridge.com",
     };
 
     /// <summary>判断是否拦截。reason 用于日志（说明拦截依据）。</summary>
@@ -43,7 +51,7 @@ public static class WeChatFilter
             return true;
         }
 
-        // 2) 公众号 / 服务通知 / 广告营销（名称或摘要命中）
+        // 2) 公众号 / 服务号 / 服务通知 / 广告营销（名称或摘要命中）
         if (ContainsAny(row.Contact, OfficialKeywords))
         {
             reason = "公众号/服务通知";
@@ -53,6 +61,20 @@ public static class WeChatFilter
         if (ContainsAny(row.Summary, OfficialKeywords))
         {
             reason = "含公众号/服务通知标识";
+            return true;
+        }
+
+        // 2b) 官方推送通道特征：摘要带公众号文章链接（mp.weixin.qq.com …）
+        if (ContainsAny(row.Summary, OfficialLinkMarkers))
+        {
+            reason = "公众号文章链接";
+            return true;
+        }
+
+        // 2c) 会话项 UIA 信号里带“服务号/订阅号”标识（图标 Name / HelpText）
+        if (ContainsAny(row.Signals, new[] { "服务号", "订阅号", "公众号", "official", "oa_" }))
+        {
+            reason = "UIA 信号：服务号/公众号";
             return true;
         }
 

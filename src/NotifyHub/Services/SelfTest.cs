@@ -279,6 +279,105 @@ public static class SelfTest
                    && changed[0].Summary == "收到请回复";
         });
 
+        Check("会话解析：未读证据 [N条]/有人@我 → HasUnread，已读会话无证据", () =>
+        {
+            var unread = MessageTextParser.Parse(new[] { "张三", "[3条] 张三: 在吗" });
+            var atMe = MessageTextParser.Parse(new[] { "产品群", "[有人@我] 王五: 明天十点开会" });
+            var read = MessageTextParser.Parse(new[] { "张三", "10:23", "你好，在吗" });
+            return unread is { HasUnread: true, Summary: "张三: 在吗" }
+                   && atMe is { HasUnread: true }
+                   && read is { HasUnread: false };
+        });
+
+        Check("消息游标：落盘后重启只放行摘要变化的消息（需求 7）", () =>
+        {
+            var path = Path.Combine(Path.GetTempPath(), $"notifyhub-cursor-{Guid.NewGuid():N}.json");
+            try
+            {
+                var store = new MessageCursorStore(path);
+                store.Update("wechat", "张三", "在吗");
+                store.Update("wechat", "李四", "旧消息");
+                store.SetNtfyCursor(1700000000);
+                store.Flush();
+
+                var reloaded = new MessageCursorStore(path);
+                var snapshot = reloaded.GetSnapshot("wechat");
+                return snapshot is { Count: 2 }
+                       && snapshot["张三"] == "在吗"
+                       && snapshot["李四"] == "旧消息"
+                       && reloaded.NtfyCursor == 1700000000
+                       && reloaded.GetSnapshot("qq") is null;
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(path);
+                }
+                catch
+                {
+                    // 忽略
+                }
+            }
+        });
+
+        Check("消息游标建基线：PrimeWith 后只把摘要变化的当新消息", () =>
+        {
+            var tracker = new SessionDiffTracker();
+            var t0 = DateTime.Now;
+
+            tracker.PrimeWith(new Dictionary<string, string> { ["张三"] = "在吗" }, t0);
+
+            // 摘要没变（用户早看过/历史消息）→ 不产出
+            var same = tracker.Diff(new[] { new SessionRow("张三", "在吗") }, t0.AddSeconds(1), out var baseline);
+            // 摘要变了（新到达）→ 产出
+            var changed = tracker.Diff(new[] { new SessionRow("张三", "吃饭了吗") }, t0.AddSeconds(2), out _);
+
+            return !baseline
+                   && same.Count == 0
+                   && changed.Count == 1
+                   && changed[0].Summary == "吃饭了吗";
+        });
+
+        Check("音乐白名单：FOLIA/QQ音乐命中，chrome/edge 一律忽略（需求 5/6）", () =>
+        {
+            var defaults = MusicAppWhitelist.Defaults;
+            return MusicAppWhitelist.Matches(@"C:\Users\Me\AppData\Local\Programs\Folia\Folia.exe", defaults)
+                   && MusicAppWhitelist.Matches("QQMusic.exe", defaults)
+                   && MusicAppWhitelist.Matches("SpotifyAB.SpotifyMusic_zpdnejdrhbcvj", defaults)
+                   && !MusicAppWhitelist.Matches("chrome.exe", defaults)
+                   && !MusicAppWhitelist.Matches("msedge.exe", defaults)
+                   && !MusicAppWhitelist.Matches("C:\\Program Files\\BraveSoftware\\Brave-Browser\\brave.exe", defaults)
+                   && MusicAppWhitelist.DisplayName("Folia.exe", defaults) == "FOLIA"
+                   && MusicAppWhitelist.Effective("").Count > 0
+                   && MusicAppWhitelist.Parse("a, b，c").Count == 3;
+        });
+
+        Check("浏览器地址：从订阅地址推导 topic Web UI（需求 3）", () =>
+        {
+            return BrowserLauncher.BuildTopicUrl("https://ntfy.sh/notifyhub-test") == "https://ntfy.sh/notifyhub-test"
+                   && BrowserLauncher.BuildTopicUrl("https://ntfy.sh/notifyhub-test/sse") == "https://ntfy.sh/notifyhub-test"
+                   && BrowserLauncher.BuildTopicUrl("ntfy.sh/my-topic") == "https://ntfy.sh/my-topic"
+                   && BrowserLauncher.BuildTopicUrl("http://192.168.1.9:8080/alerts") == "http://192.168.1.9:8080/alerts"
+                   && BrowserLauncher.BuildTopicUrl("") is null
+                   && BrowserLauncher.BuildTopicUrl("https://ntfy.sh/") is null;
+        });
+
+        Check("微信过滤：服务号/公众号文件夹/文章链接拦截（需求 9）", () =>
+        {
+            var config = new AppConfig { WeChatFilterEnabled = true };
+
+            var serviceAccount = new SessionRow("服务号", "宝塔面板: PHP 补丁包上线");
+            var officialFolder = new SessionRow("公众号", "求是网: 权力为什么必须关进笼子？");
+            var articleLink = new SessionRow("湖南电信小笼包（互联网卡）", "[链接] 专属互联网卡福利来啦！ https://mp.weixin.qq.com/s/abc123");
+            var friend = new SessionRow("比企谷八蟠", "bzdq");
+
+            return WeChatFilter.ShouldBlock(serviceAccount, config, out _)
+                   && WeChatFilter.ShouldBlock(officialFolder, config, out _)
+                   && WeChatFilter.ShouldBlock(articleLink, config, out _)
+                   && !WeChatFilter.ShouldBlock(friend, config, out _);
+        });
+
         Check("UI Automation 客户端可用（能读到根元素与顶层窗口）", () =>
         {
             var root = AutomationElement.RootElement;

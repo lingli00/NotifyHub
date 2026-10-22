@@ -10,8 +10,9 @@ using NotifyHub.Interop;
 namespace NotifyHub.UI;
 
 /// <summary>
-/// 吸附态的「细条」：灵动岛 10 秒无交互吸附到屏幕边后，只显示一条小细条
-/// （贴左右边 = 竖条，贴上/下边 = 横条），不占地方；鼠标移入或点击立即展开完整悬浮条。
+/// 吸附态的「细条」：灵动岛 10 秒无交互吸附到屏幕顶部后，只显示一条横细条
+/// （v0.2.3 起只允许顶部边缘停靠，左右竖条已按需求 4 砍掉），不占地方；
+/// 鼠标移入或点击立即展开完整悬浮条。
 /// 窗口比可视条大一圈（留 8px 命中余量），"容易点到"就是靠这个 + 128ms 快速淡入。
 /// </summary>
 public sealed class SnapStripWindow : Window
@@ -28,19 +29,8 @@ public sealed class SnapStripWindow : Window
     /// <summary>窗口四边命中余量（DIP）。</summary>
     private const double HitPadding = 8;
 
-    private bool _vertical;
-    private Edge _edge = Edge.Top;
-
     private readonly Border _bar;
     private readonly Ellipse _dot;
-
-    private enum Edge
-    {
-        Left,
-        Right,
-        Top,
-        Bottom,
-    }
 
     public SnapStripWindow()
     {
@@ -91,23 +81,12 @@ public sealed class SnapStripWindow : Window
         MouseLeftButtonUp += (_, _) => ExpandRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>按吸附边摆放细条并淡入（已可见时只刷新位置）。</summary>
+    /// <summary>把细条摆到屏幕顶部中央并淡入（已可见时只刷新位置）。</summary>
     public void ShowFor(string edgeName, bool doneState)
     {
-        _edge = edgeName switch
-        {
-            "Left" => Edge.Left,
-            "Right" => Edge.Right,
-            "Bottom" => Edge.Bottom,
-            _ => Edge.Top,
-        };
-        _vertical = _edge is Edge.Left or Edge.Right;
-
-        // 竖条：细 × 长；横条：长 × 细。窗口外扩 HitPadding 扩大命中区。
-        var barLen = BarLength;
-        var barThick = BarThickness;
-        var winW = (_vertical ? barThick : barLen) + (HitPadding * 2);
-        var winH = (_vertical ? barLen : barThick) + (HitPadding * 2);
+        // 横条：长 × 细。窗口外扩 HitPadding 扩大命中区。
+        var winW = BarLength + (HitPadding * 2);
+        var winH = BarThickness + (HitPadding * 2);
 
         Width = winW;
         Height = winH;
@@ -118,30 +97,8 @@ public sealed class SnapStripWindow : Window
         var area = SystemParameters.WorkArea;
         var gap = 8; // 与岛吸附同款缝隙
 
-        double left, top;
-
-        switch (_edge)
-        {
-            case Edge.Left:
-                left = area.Left + gap - HitPadding;
-                top = area.Top + ((area.Height - winH) / 2);
-                break;
-            case Edge.Right:
-                left = area.Right - gap - winW + HitPadding;
-                top = area.Top + ((area.Height - winH) / 2);
-                break;
-            case Edge.Bottom:
-                left = area.Left + ((area.Width - winW) / 2);
-                top = area.Bottom - gap - winH + HitPadding;
-                break;
-            default:
-                left = area.Left + ((area.Width - winW) / 2);
-                top = area.Top + gap - HitPadding;
-                break;
-        }
-
-        Left = Math.Round(left);
-        Top = Math.Round(top);
+        Left = Math.Round(area.Left + ((area.Width - winW) / 2));
+        Top = Math.Round(area.Top + gap - HitPadding);
 
         // 完成态显示绿点，其余时间黄点
         _dot.Fill = new SolidColorBrush(doneState

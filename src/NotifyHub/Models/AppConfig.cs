@@ -88,6 +88,25 @@ public sealed class AppConfig
     /// <summary>已推送消息去重缓存保留时长（小时）。</summary>
     public int DedupHours { get; set; } = 24;
 
+    /// <summary>
+    /// 长文本跑马灯滚动速度（DIP/秒）。适用于灵动岛歌名、任务状态与 ntfy 通知正文；
+    /// 文本超出容器才滚动，悬停暂停。默认 45（平缓），范围 10~120。
+    /// </summary>
+    public int MarqueeSpeed { get; set; } = 45;
+
+    /// <summary>
+    /// 音乐 App 白名单（进程名关键词，逗号分隔，小写包含匹配）。
+    /// 只有名单内进程的媒体会话才会显示音乐控制栏与 App 图标——
+    /// 浏览器（chrome/edge/firefox/brave…）刷视频/直播一律忽略（需求 5/6 共用）。
+    /// 留空 = 用内置默认名单（含 QQ音乐/酷狗/网易云/酷我/咪咕/foobar2000/FOLIA 等）。
+    /// </summary>
+    public string MusicAppWhitelist { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 浏览器可执行文件路径（点击 ntfy 通知时唤起）。留空 = 系统默认浏览器。
+    /// </summary>
+    public string BrowserPath { get; set; } = string.Empty;
+
     public AppConfig Clone() => (AppConfig)MemberwiseClone();
 
     public void Normalize()
@@ -105,6 +124,9 @@ public sealed class AppConfig
         TaskSoundStyle = NormalizeSoundStyle(TaskSoundStyle,
             "Ascend", "Success", "Bell", "Chord");
         DedupHours = Math.Clamp(DedupHours, 1, 168);
+        MarqueeSpeed = Math.Clamp(MarqueeSpeed, 10, 120);
+        MusicAppWhitelist = (MusicAppWhitelist ?? string.Empty).Trim();
+        BrowserPath = (BrowserPath ?? string.Empty).Trim();
         WeChatBlockedKeywords = (WeChatBlockedKeywords ?? string.Empty).Trim();
     }
 

@@ -114,38 +114,230 @@ public partial class App : Application
             }
 
             case AppMode.Settings:
-            {
-                // 只开设置窗口（不启动监听、不留托盘），用于排版检查；
-                // 用 RenderTargetBitmap 自渲染成 PNG——不依赖屏幕截屏，也没遮挡问题。
-                // 两个 Tab 各截一张（设置 / 运行日志）。
-                var configService = new ConfigService(log);
-                configService.Load();
-                var notifications = new NotificationManager(log, () => configService.Current, _sound) { DemoMode = true };
-                var monitor = new MonitorController(log, configService);
-                var settings = new SettingsWindow(configService, log, monitor, notifications);
-                settings.Show();
-
-                var captureTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-                captureTimer.Tick += (_, _) =>
                 {
-                    captureTimer.Stop();
-                    CaptureWindow(settings, "settings-capture.png", log);
+                    // 只开设置窗口（不启动监听、不留托盘），用于排版检查；
+                    // 用 RenderTargetBitmap 自渲染成 PNG——不依赖屏幕截屏，也没遮挡问题。
+                    // 两个 Tab 各截一张（设置 / 运行日志）。
+                    var configService = new ConfigService(log);
+                    configService.Load();
+                    var notifications = new NotificationManager(log, () => configService.Current, _sound) { DemoMode = true };
+                    var monitor = new MonitorController(log, configService);
+                    var settings = new SettingsWindow(configService, log, monitor, notifications);
+                    settings.Show();
 
-                    settings.Tabs.SelectedIndex = 1;
-                    settings.UpdateLayout();
-
-                    var second = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-                    second.Tick += (_, _) =>
+                    var captureTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                    captureTimer.Tick += (_, _) =>
                     {
-                        second.Stop();
-                        CaptureWindow(settings, "settings-logs.png", log);
-                        Shutdown();
+                        captureTimer.Stop();
+                        CaptureWindow(settings, "settings-capture.png", log);
+
+                        settings.Tabs.SelectedIndex = 1;
+                        settings.UpdateLayout();
+
+                        var second = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+                        second.Tick += (_, _) =>
+                        {
+                            second.Stop();
+                            CaptureWindow(settings, "settings-logs.png", log);
+                            Shutdown();
+                        };
+                        second.Start();
                     };
-                    second.Start();
-                };
-                captureTimer.Start();
-                return;
-            }
+                    captureTimer.Start();
+                    return;
+                }
+
+            case AppMode.MarqueeTest:
+                {
+                    // 跑马灯离屏自检：各形态离屏渲染成 PNG，并按“非背景像素数”判定文字是否真的画出来了。
+                    var host = new Window
+                    {
+                        Width = 900,
+                        Height = 420,
+                        WindowStyle = WindowStyle.None,
+                        AllowsTransparency = true,
+                        Background = Brushes.Transparent,
+                        ShowInTaskbar = false,
+                        WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                        Topmost = true,
+                    };
+
+                    var panel = new StackPanel
+                    {
+                        Orientation = Orientation.Vertical,
+                        Margin = new Thickness(24),
+                    };
+                    var dark = new Border
+                    {
+                        CornerRadius = new CornerRadius(22),
+                        Padding = new Thickness(18, 10, 18, 10),
+                        Background = new SolidColorBrush(Color.FromArgb(0xF2, 0x2C, 0x2C, 0x31)),
+                        Child = panel,
+                    };
+                    host.Content = dark;
+
+                    // 四个形态：短文本(显式色)/短文本(继承色)/长文本(滚动)/长文本(继承色)
+                    var shortExplicit = new UI.MarqueeText
+                    {
+                        Width = 500,
+                        FontSize = 14,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xF2, 0xF2, 0xF7)),
+                        Text = "短文本应该水平居中显示",
+                    };
+                    var shortInherit = new UI.MarqueeText { Width = 500, FontSize = 14, Text = "继承色短文本" };
+                    var longExplicit = new UI.MarqueeText
+                    {
+                        Width = 500,
+                        FontSize = 14,
+                        Foreground = new SolidColorBrush(Color.FromRgb(0xF2, 0xF2, 0xF7)),
+                        Text = new string('滚', 60) + "——长文本应该自动横向循环滚动",
+                    };
+                    var longInherit = new UI.MarqueeText { Width = 500, FontSize = 14, Text = new string('动', 60) };
+
+                    // ②④ 的前景色来自父级容器（ContentControl 本地值经继承链下传）。
+                    // 注意：WPF 继承属性有个固有行为——树中无人设色时，继承链会从树根解析出
+                    // Control 的黑色默认值，优先级高于派生类型的元数据默认值（实测探针证实），
+                    // 所以“控件自身默认色”在视觉树里永远是黑色；这里验证的是 OverrideMetadata
+                    // 中声明的 Inherits 选项：父级设色能正常传到自绘控件上。
+                    var inheritBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xD9, 0x66));
+                    var shortInheritHost = new ContentControl { Foreground = inheritBrush, Content = shortInherit };
+                    var longInheritHost = new ContentControl { Foreground = inheritBrush, Content = longInherit };
+
+                    panel.Children.Add(new TextBlock { Text = "① 短文本·显式前景色（居中不滚动）", Foreground = Brushes.White });
+                    panel.Children.Add(shortExplicit);
+                    panel.Children.Add(new TextBlock { Text = "② 短文本·父级继承色（居中不滚动）", Foreground = Brushes.White });
+                    panel.Children.Add(shortInheritHost);
+                    panel.Children.Add(new TextBlock { Text = "③ 长文本·显式前景色（循环滚动）", Foreground = Brushes.White });
+                    panel.Children.Add(longExplicit);
+                    panel.Children.Add(new TextBlock { Text = "④ 长文本·父级继承色（循环滚动）", Foreground = Brushes.White });
+                    panel.Children.Add(longInheritHost);
+
+                    host.Show();
+
+                    var evalTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
+                    evalTimer.Tick += async (_, _) =>
+                    {
+                        evalTimer.Stop();
+
+                        var controls = new (string Name, UI.MarqueeText Control, bool ExpectScroll)[]
+                        {
+                            ("① 短文本·显式前景色", shortExplicit, false),
+                            ("② 短文本·父级继承色", shortInherit, false),
+                            ("③ 长文本·显式前景色", longExplicit, true),
+                            ("④ 长文本·父级继承色", longInherit, true),
+                        };
+
+                        // 先挂起逐帧重绘，保证抓拍稳定（悬停校验前再恢复）
+                        foreach (var (_, control, _) in controls)
+                        {
+                            control.SuspendRendering = true;
+                        }
+                        host.UpdateLayout();
+
+                        var lines = new List<string>();
+                        var allOk = true;
+
+                        // 整窗抓拍 + 逐控件裁剪计数。
+                        // 注意：RTB 直接 Render 滚动控件会抓到空帧——这是 WPF 对持续
+                        // InvalidateVisual 动画控件的已知局限（实测静态控件正常、滚动控件空帧），
+                        // 整窗抓拍不受影响，故走“整窗抓拍 → 按控件坐标裁剪”的路径。
+                        BitmapSource? shot = null;
+                        try
+                        {
+                            shot = CaptureWindowBitmap(host);
+                        }
+                        catch (Exception ex)
+                        {
+                            lines.Add($"FAIL  整窗抓拍失败: {ex.GetType().Name}: {ex.Message}");
+                            allOk = false;
+                        }
+
+                        var dumpIndex = 1;
+                        foreach (var (name, control, expectScroll) in controls)
+                        {
+                            var lit = -1;
+                            var litCenter = -1.0;
+                            var cropWidth = 500.0;
+                            var rect = default(Int32Rect);
+                            var alphaCount = -1;
+                            var maxR = -1;
+                            var maxG = -1;
+                            if (shot is not null)
+                            {
+                                (lit, litCenter, cropWidth, rect, alphaCount, maxR, maxG) =
+                                    LitInShot(shot, host, control, $"marquee-crop-{dumpIndex++}.png");
+                            }
+
+                            var scrollOk = control.IsScrolling == expectScroll;
+                            var renderOk = lit > 30;
+                            // 短文本居中校验（需求 2）：亮像素水平中心应落在可视区中心 ±2px
+                            var centerOk = expectScroll || Math.Abs(litCenter - cropWidth / 2.0) <= 2;
+                            var ok = scrollOk && renderOk && centerOk;
+                            allOk &= ok;
+                            lines.Add(
+                                $"{(ok ? "PASS" : "FAIL")}  {name}: 亮像素={lit} " +
+                                $"亮区中心={litCenter:F1}（期望 {cropWidth / 2.0:F1}） " +
+                                $"滚动={control.IsScrolling}（期望 {expectScroll}）");
+                            lines.Add(
+                                $"      调试 {name}: {control.DebugState} " +
+                                $"[裁剪={rect} alpha>200的像素={alphaCount} maxR={maxR} maxG={maxG}]");
+                        }
+
+                        // 悬停暂停 / 移开继续（需求 1）：合成鼠标进入/离开事件，观察滚动位移
+                        foreach (var (_, control, _) in controls)
+                        {
+                            control.SuspendRendering = false;
+                        }
+                        await Task.Delay(150);
+
+                        var hoverIn = new System.Windows.Input.MouseEventArgs(
+                            System.Windows.Input.Mouse.PrimaryDevice, 0)
+                        {
+                            RoutedEvent = System.Windows.Input.Mouse.MouseEnterEvent,
+                        };
+                        var hoverOut = new System.Windows.Input.MouseEventArgs(
+                            System.Windows.Input.Mouse.PrimaryDevice, 0)
+                        {
+                            RoutedEvent = System.Windows.Input.Mouse.MouseLeaveEvent,
+                        };
+
+                        var offsetBefore = longExplicit.Offset;
+                        longExplicit.RaiseEvent(hoverIn);
+                        await Task.Delay(450);
+                        var offsetHovering = longExplicit.Offset;
+                        var hoverPaused = Math.Abs(offsetHovering - offsetBefore) < 0.5;
+
+                        longExplicit.RaiseEvent(hoverOut);
+                        await Task.Delay(450);
+                        var offsetAfter = longExplicit.Offset;
+                        var resumed = offsetAfter < offsetHovering - 1;
+
+                        var hoverOk = hoverPaused && resumed;
+                        allOk &= hoverOk;
+                        lines.Add(
+                            $"{(hoverOk ? "PASS" : "FAIL")}  ⑤ 悬停暂停/移开继续: " +
+                            $"进入前={offsetBefore:F1} 悬停中={offsetHovering:F1} 离开后={offsetAfter:F1}");
+
+                        foreach (var line in lines)
+                        {
+                            ConsoleBridge.WriteLine(line);
+                            log.Write(allOk ? LogLevel.Info : LogLevel.Error, "MarqueeTest", line);
+                        }
+
+                        try
+                        {
+                            CaptureWindow(host, "marquee-test.png", log);
+                        }
+                        catch
+                        {
+                            // 截图失败不影响结论
+                        }
+
+                        Environment.Exit(allOk ? 0 : 1);
+                    };
+                    evalTimer.Start();
+                    return;
+                }
 
         }
 
@@ -212,18 +404,27 @@ public partial class App : Application
         log.Info("App", "NotifyHub 已启动（托盘常驻）");
     }
 
+    /// <summary>把窗口当前外观自渲染成位图（排版验证/自检用，不依赖屏幕截屏）。</summary>
+    private static BitmapSource CaptureWindowBitmap(Window window)
+    {
+        // 注意方向：TransformToDevice 才是 DIP→设备像素的缩放（1.0=96DPI）
+        var toDevice = PresentationSource.FromVisual(window)?.CompositionTarget?.TransformToDevice
+                       ?? Matrix.Identity;
+        var width = (int)Math.Ceiling(window.ActualWidth * toDevice.M11);
+        var height = (int)Math.Ceiling(window.ActualHeight * toDevice.M22);
+
+        var rtb = new RenderTargetBitmap(
+            width, height, 96 * toDevice.M11, 96 * toDevice.M22, PixelFormats.Pbgra32);
+        rtb.Render(window);
+        return rtb;
+    }
+
     /// <summary>把窗口当前外观自渲染成 PNG（排版验证用，不依赖屏幕截屏）。</summary>
     private static void CaptureWindow(Window window, string fileName, LogService log)
     {
         try
         {
-            var dpi = PresentationSource.FromVisual(window)?.CompositionTarget?.TransformFromDevice
-                      ?? Matrix.Identity;
-            var width = (int)Math.Ceiling(window.ActualWidth * dpi.M11);
-            var height = (int)Math.Ceiling(window.ActualHeight * dpi.M22);
-
-            var rtb = new RenderTargetBitmap(width, height, 96 * dpi.M11, 96 * dpi.M22, PixelFormats.Pbgra32);
-            rtb.Render(window);
+            var rtb = CaptureWindowBitmap(window);
 
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(rtb));
@@ -237,6 +438,93 @@ public partial class App : Application
         {
             log.Error("Settings", "窗口渲染失败", $"{ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// 从整窗抓拍位图中裁出指定控件的区域，统计“亮像素”（文字笔画）数量，
+    /// 并返回亮像素水平中心与裁剪区宽度（短文本居中校验用）。
+    /// </summary>
+    private static (int Lit, double Center, int CropWidth, Int32Rect Rect, int AlphaCount, int MaxR, int MaxG) LitInShot(
+        BitmapSource shot, Window host, UI.MarqueeText control, string? dumpFileName = null)
+    {
+        var toDevice = PresentationSource.FromVisual(host)?.CompositionTarget?.TransformToDevice
+                       ?? Matrix.Identity;
+        var topLeft = control.TranslatePoint(new Point(0, 0), host);
+        var x = (int)Math.Round(topLeft.X * toDevice.M11);
+        var y = (int)Math.Round(topLeft.Y * toDevice.M22);
+        var w = (int)Math.Round(control.ActualWidth * toDevice.M11);
+        var h = (int)Math.Round(control.ActualHeight * toDevice.M22);
+
+        // 裁进位图边界内
+        x = Math.Max(0, Math.Min(x, shot.PixelWidth - 1));
+        y = Math.Max(0, Math.Min(y, shot.PixelHeight - 1));
+        w = Math.Max(1, Math.Min(w, shot.PixelWidth - x));
+        h = Math.Max(1, Math.Min(h, shot.PixelHeight - y));
+
+        var crop = new CroppedBitmap(shot, new Int32Rect(x, y, w, h));
+
+        if (!string.IsNullOrEmpty(dumpFileName))
+        {
+            try
+            {
+                var encoder = new PngBitmapEncoder();
+                encoder.Frames.Add(BitmapFrame.Create(crop));
+                var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, dumpFileName);
+                using var fs = File.Create(path);
+                encoder.Save(fs);
+            }
+            catch
+            {
+                // 诊断落盘失败不影响主流程
+            }
+        }
+
+        var pixels = new byte[crop.PixelWidth * crop.PixelHeight * 4];
+        crop.CopyPixels(pixels, crop.PixelWidth * 4, 0);
+        var lit = 0;
+        var minX = int.MaxValue;
+        var maxX = int.MinValue;
+        var alphaCount = 0;
+        var maxR = 0;
+        var maxG = 0;
+        for (var row = 0; row < crop.PixelHeight; row++)
+        {
+            for (var col = 0; col < crop.PixelWidth; col++)
+            {
+                var i = (row * crop.PixelWidth + col) * 4;
+                // 文字笔画：高亮度且不透明（深色卡片底 R=44，通不过该阈值）。
+                // 注意字节序：PixelFormats.Pbgra32 的通道序是 B,G,R,A——
+                // R 在 i+2、G 在 i+1、A 在 i+3（曾按 RGBA 读，导致灰色文字
+                // 碰巧通过、彩色文字全被漏判）。
+                if (pixels[i + 3] > 200 && pixels[i + 2] > 150 && pixels[i + 1] > 150)
+                {
+                    lit++;
+                    if (col < minX)
+                    {
+                        minX = col;
+                    }
+                    if (col > maxX)
+                    {
+                        maxX = col;
+                    }
+                }
+                if (pixels[i + 3] > 200)
+                {
+                    alphaCount++;
+                }
+                if (pixels[i + 2] > maxR)
+                {
+                    maxR = pixels[i + 2];
+                }
+                if (pixels[i + 1] > maxG)
+                {
+                    maxG = pixels[i + 1];
+                }
+            }
+        }
+
+        var center = lit > 0 ? (minX + maxX) / 2.0 : -1;
+        return (lit, center, crop.PixelWidth, new Int32Rect(x, y, w, h), alphaCount, maxR, maxG);
     }
 
     /// <summary>

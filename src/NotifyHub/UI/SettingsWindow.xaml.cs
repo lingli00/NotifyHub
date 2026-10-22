@@ -85,8 +85,21 @@ public partial class SettingsWindow : Window
         WeChatFilterCheck.IsChecked = config.WeChatFilterEnabled;
         FilterKeywordsBox.Text = config.WeChatBlockedKeywords;
 
+        MarqueeSpeedSlider.Value = Math.Clamp(config.MarqueeSpeed, 10, 120);
+        MarqueeSpeedText.Text = $"{Math.Clamp(config.MarqueeSpeed, 10, 120)}";
+        MusicWhitelistBox.Text = config.MusicAppWhitelist;
+        BrowserPathBox.Text = config.BrowserPath;
+
         var cornerIndex = Array.IndexOf(CornerValues, AppConfig.NormalizeCorner(config.NotificationCorner));
         CornerCombo.SelectedIndex = cornerIndex < 0 ? 0 : cornerIndex;
+    }
+
+    private void OnMarqueeSpeedChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (MarqueeSpeedText is not null)
+        {
+            MarqueeSpeedText.Text = $"{(int)Math.Round(e.NewValue)}";
+        }
     }
 
     private void OnMessageVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -209,6 +222,10 @@ public partial class SettingsWindow : Window
 
         next.WeChatFilterEnabled = WeChatFilterCheck.IsChecked == true;
         next.WeChatBlockedKeywords = FilterKeywordsBox.Text.Trim();
+
+        next.MarqueeSpeed = (int)Math.Round(Math.Clamp(MarqueeSpeedSlider.Value, 10, 120));
+        next.MusicAppWhitelist = MusicWhitelistBox.Text.Trim();
+        next.BrowserPath = BrowserPathBox.Text.Trim();
 
         if (!_config.Save(next))
         {

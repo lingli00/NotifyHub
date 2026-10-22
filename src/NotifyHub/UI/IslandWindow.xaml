@@ -1,6 +1,7 @@
 <Window x:Class="NotifyHub.UI.IslandWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:NotifyHub.UI"
         Title="NotifyHub 灵动岛"
         SizeToContent="WidthAndHeight" MaxWidth="820"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
@@ -73,13 +74,17 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!--  音乐组：图标 + 歌名（超长省略）+ 三个控件  -->
+            <!--  音乐组：App 图标 + 歌名（跑马灯）+ 三个控件  -->
             <StackPanel x:Name="MusicGroup" Grid.Column="0" Orientation="Horizontal"
                         VerticalAlignment="Center" Margin="6,0,2,0">
+                <!--  当前播放音乐 App 的透明圆角图标（需求 5）：无播放/提不到图标时收起  -->
+                <Border x:Name="MusicIconBox" Width="20" Height="20" CornerRadius="6"
+                        VerticalAlignment="Center" Margin="0,0,7,0" Visibility="Collapsed">
+                    <Image x:Name="MusicAppIcon" Width="20" Height="20" Stretch="Uniform" />
+                </Border>
                 <TextBlock x:Name="MusicGlyph" Text="&#x266A;" FontSize="15" Foreground="#FFD60A"
                            VerticalAlignment="Center" Margin="4,0,7,0" />
-                <TextBlock x:Name="MusicText" MaxWidth="200" FontSize="12.5" Foreground="#F2F2F7"
-                           TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                <local:MarqueeText x:Name="MusicText" Width="180" FontSize="12.5" Foreground="#F2F2F7"
                            VerticalAlignment="Center" Text="正在播放" />
                 <StackPanel Orientation="Horizontal" Margin="8,0,0,0" VerticalAlignment="Center">
                     <Button x:Name="PrevButton" Style="{StaticResource IslandButton}"
@@ -121,9 +126,10 @@
                           VerticalAlignment="Center" />
                 </Grid>
 
-                <TextBlock x:Name="StatusText" Margin="9,0,0,0" MaxWidth="470" FontSize="13"
-                           Foreground="#F2F2F7" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                           VerticalAlignment="Center" Text="正在执行任务…" />
+                <!--  任务状态文字：跑马灯（超宽横滚、悬停暂停、短文本居中）  -->
+                <local:MarqueeText x:Name="StatusText" Width="440" FontSize="13"
+                           Foreground="#F2F2F7" VerticalAlignment="Center" Margin="9,0,12,0"
+                           Text="正在执行任务…" />
             </StackPanel>
         </Grid>
     </Border>

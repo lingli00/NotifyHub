@@ -23,6 +23,9 @@ public static class AppPaths
 
     public static string DedupFile => Path.Combine(Root, "dedup.json");
 
+    /// <summary>消息游标（各来源“最后一条已展示消息”的边界，重启不回溯历史）。</summary>
+    public static string CursorFile => Path.Combine(Root, "cursor.json");
+
     public static string LogDir => Path.Combine(Root, "logs");
 
     public static string DumpDir => Path.Combine(Root, "dump");

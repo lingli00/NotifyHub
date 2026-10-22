@@ -21,12 +21,14 @@ public sealed class QQWatcher : ChatAppWatcher
     private DateTime _lastGenericAt = DateTime.MinValue;
     private bool _fallbackWarned;
 
-    public QQWatcher(LogService log, ConfigService config)
-        : base("QQ监听", Processes, Classes, log, config)
+    public QQWatcher(LogService log, ConfigService config, MessageCursorStore cursorStore)
+        : base("QQ监听", Processes, Classes, log, config, cursorStore)
     {
     }
 
     protected override MessageSource Source => MessageSource.QQ;
+
+    protected override string SourceKey => "qq";
 
     protected override bool IsEnabled(AppConfig config) => config.QQEnabled;
 

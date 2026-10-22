@@ -23,6 +23,41 @@ public sealed class SessionDiffTracker
 
     public bool HasBaseline => _primed;
 
+    /// <summary>
+    /// 用持久化游标（上次运行最后展示的会话摘要快照）直接建立基线，
+    /// 不走“重建 + 补发”路径：启动时只弹游标之后的新消息（需求 7）。
+    /// </summary>
+    public void PrimeWith(IReadOnlyDictionary<string, string> snapshot, DateTime now)
+    {
+        lock (_lastSummary)
+        {
+            _lastSummary.Clear();
+            _lastIndex.Clear();
+            _previousSummary.Clear();
+            _hadBaseline = false;
+
+            foreach (var pair in snapshot)
+            {
+                if (!string.IsNullOrEmpty(pair.Key))
+                {
+                    _lastSummary[pair.Key] = pair.Value ?? string.Empty;
+                }
+            }
+
+            _primed = true;
+            _lastSuccessUtc = now;
+        }
+    }
+
+    /// <summary>当前基线快照（联系人 → 摘要），供持久化游标落盘。</summary>
+    public Dictionary<string, string> Snapshot()
+    {
+        lock (_lastSummary)
+        {
+            return new Dictionary<string, string>(_lastSummary, StringComparer.Ordinal);
+        }
+    }
+
     /// <summary>最近一次重建基线时补发的恢复变更（诊断/自检用）。</summary>
     public IReadOnlyList<SessionRow> LastRecoveredChanges { get; private set; } = Array.Empty<SessionRow>();
 

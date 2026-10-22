@@ -1,0 +1,29 @@
+# 构建产物
+bin/
+obj/
+dist/
+dist-trim/
+release/
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# 本地运行数据（便携模式下会出现在项目目录）
+logs/
+dump/
+sounds/
+selftest-*.log
+demo-capture.png
+settings-capture.png
+console-capture.png
+events.json
+dedup.json
+
+# 调试过程中随手截的图（正式截图在 docs/）
+tools/*.png
+
+# 系统
+Thumbs.db
+.DS_Store

@@ -17,26 +17,23 @@
         中间：会话名称（好友昵称 / 群名）
         主体：消息预览（单行，超长末尾省略，不折行撑大弹窗）
         底部：时间标签
-      圆角 20，柔和外阴影，与灵动岛 / 音乐悬浮条同一视觉体系。
-
-      Margin 14 必须 ≥ 阴影扩散范围（blur 12 + depth 2），否则阴影会被窗口矩形裁成
-      一圈灰白硬边——之前"毛玻璃外多了个方框"就是这个原因。
+      圆角 20，深色渐变 + 1px 高光描边，与灵动岛同一视觉体系。
+      v0.2.2 起不再使用 DropShadowEffect（软件渲染掉帧）；Margin 14 的透明留白
+      保留，配合 Win32 侧 HTTRANSPARENT 阴影区穿透，不挡下层点击。
     -->
     <Border x:Name="Card" Margin="14" CornerRadius="20"
             BorderBrush="#26FFFFFF" BorderThickness="1"
             Cursor="Hand" MouseLeftButtonUp="OnCardClick" MouseRightButtonUp="OnCardRightClick">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270" Opacity="0.32" Color="#FF000000" />
-        </Border.Effect>
         <Border.RenderTransform>
             <TranslateTransform x:Name="CardTransform" X="40" />
         </Border.RenderTransform>
 
-        <!--  毛玻璃质感：深色半透明 + 顶部极淡高光渐变  -->
+        <!--  毛玻璃质感：深色半透明 + 顶部极淡高光渐变（v0.2.2 去掉 DropShadowEffect 提升滑入帧率）  -->
         <Border.Background>
             <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#FA2A2A2F" Offset="0" />
-                <GradientStop Color="#F21B1B1F" Offset="1" />
+                <GradientStop Color="#FA313136" Offset="0" />
+                <GradientStop Color="#F92A2A2F" Offset="0.4" />
+                <GradientStop Color="#F2151518" Offset="1" />
             </LinearGradientBrush>
         </Border.Background>
 

@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Windows.Media;
 using NotifyHub.Models;
 
@@ -8,15 +10,17 @@ namespace NotifyHub.Services;
 /// 两套互相独立的提示音：
 ///   1) 消息通知提示音：仅在聊天消息通过过滤、真正弹窗时播放；
 ///   2) WorkBuddy 任务完成提示音：任务完成态出现时播放。
-/// 音效由程序内合成 WAV（首次启动生成到 %AppData%\NotifyHub\sounds），
+/// 音效由程序内合成 WAV（按音色缓存到 %AppData%\NotifyHub\sounds），
 /// 不依赖微信/QQ 客户端铃声，也几乎不增加安装包体积。
 /// 播放用 WPF MediaPlayer，音量按各自配置独立控制。
+/// v0.2.2：音色可选（消息 5 种 / 完成 4 种）、合成增益加大、支持试听。
 /// </summary>
 public sealed class SoundService : IDisposable
 {
     private readonly LogService _log;
     private readonly MediaPlayer _messagePlayer = new();
     private readonly MediaPlayer _taskDonePlayer = new();
+    private readonly object _gate = new();
     private bool _prepared;
 
     public SoundService(LogService log) => _log = log;
@@ -29,7 +33,7 @@ public sealed class SoundService : IDisposable
             return;
         }
 
-        Play(_messagePlayer, "message.wav", config.MessageSoundVolume);
+        Play(_messagePlayer, MessageTone(config.MessageSoundStyle), config.MessageSoundVolume);
     }
 
     /// <summary>WorkBuddy 任务完成提示音（与消息提示音完全独立）。</summary>
@@ -40,8 +44,40 @@ public sealed class SoundService : IDisposable
             return;
         }
 
-        Play(_taskDonePlayer, "task-done.wav", config.TaskSoundVolume);
+        Play(_taskDonePlayer, TaskTone(config.TaskSoundStyle), config.TaskSoundVolume);
     }
+
+    /// <summary>设置页试听：直接用指定的合成音符播一次。</summary>
+    public void Preview((double Freq, int Ms, double Vol)[] notes, int volume)
+        => Play(new MediaPlayer(), notes, volume);
+
+    /// <summary>音色名 → 合成器（消息类）。</summary>
+    public static (double Freq, int Ms, double Volume)[] MessageTone(string style) => style switch
+    {
+        // 清脆：高音两连，短促明亮
+        "Crystal" => new[] { (1568.0, 70, 0.34), (0.0, 30, 0.0), (2093.0, 110, 0.30) },
+        // 水泡：低到高的滑音，圆润
+        "Bubble" => new[] { (392.0, 60, 0.5), (523.25, 60, 0.5), (659.25, 60, 0.5), (783.99, 130, 0.4) },
+        // 木琴：双音同奏，木质衰减
+        "Marimba" => new[] { (523.25, 120, 0.34), (0.0, 30, 0.0), (783.99, 160, 0.32) },
+        // 电子：方波感的双 blip
+        "Digital" => new[] { (1244.5, 60, 0.3), (0.0, 40, 0.0), (1244.5, 60, 0.3), (0.0, 40, 0.0), (1661.2, 90, 0.3) },
+        // 默认 叮咚
+        _ => new[] { (880.0, 90, 0.42), (0.0, 40, 0.0), (1174.7, 140, 0.38) },
+    };
+
+    /// <summary>音色名 → 合成器（完成类）。</summary>
+    public static (double Freq, int Ms, double Volume)[] TaskTone(string style) => style switch
+    {
+        // 成功双音：E5 → B5
+        "Success" => new[] { (659.25, 110, 0.4), (987.77, 190, 0.4) },
+        // 铃声：高频两响，急衰减
+        "Bell" => new[] { (1760.0, 90, 0.3), (0.0, 60, 0.0), (1760.0, 200, 0.26) },
+        // 和弦：C-E-G 同时起
+        "Chord" => new[] { (523.25, 260, 0.26), (659.25, 260, 0.26), (783.99, 300, 0.26) },
+        // 默认 上行三音 E5-A5-E6
+        _ => new[] { (659.25, 95, 0.4), (880.0, 95, 0.42), (1318.5, 170, 0.44) },
+    };
 
     public void Dispose()
     {
@@ -56,11 +92,12 @@ public sealed class SoundService : IDisposable
         }
     }
 
-    private void Play(MediaPlayer player, string fileName, int volume)
+    private void Play(MediaPlayer player, (double Freq, int Ms, double Vol)[] notes, int volume)
     {
         try
         {
-            if (!EnsurePrepared(fileName, out var path))
+            var path = EnsurePrepared(notes, out var ok);
+            if (!ok)
             {
                 return;
             }
@@ -80,26 +117,30 @@ public sealed class SoundService : IDisposable
         }
     }
 
-    private bool EnsurePrepared(string fileName, out string path)
+    /// <summary>按音符序列合成/取缓存 WAV，返回路径；ok=false 表示失败。</summary>
+    private string EnsurePrepared((double Freq, int Ms, double Vol)[] notes, out bool ok)
     {
-        path = string.Empty;
+        ok = false;
+        var path = string.Empty;
 
         try
         {
             var dir = Path.Combine(AppPaths.Root, "sounds");
             Directory.CreateDirectory(dir);
-            path = Path.Combine(dir, fileName);
+
+            // 文件名按音符序列指纹：换音色自动换文件，互不覆盖
+            var sig = string.Join("|", notes.Select(n => $"{n.Freq:0.##}-{n.Ms}-{n.Vol}"));
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sig)))[..12];
+            path = Path.Combine(dir, $"tone-{hash}.wav");
 
             if (!File.Exists(path))
             {
-                var bytes = fileName.Contains("task", StringComparison.OrdinalIgnoreCase)
-                    ? BuildTaskDoneTone()
-                    : BuildMessageTone();
-                File.WriteAllBytes(path, bytes);
+                File.WriteAllBytes(path, BuildWav(notes));
             }
 
             _prepared = true;
-            return true;
+            ok = true;
+            return path;
         }
         catch (Exception ex)
         {
@@ -108,25 +149,9 @@ public sealed class SoundService : IDisposable
                 _log.Warn("Sound", "提示音初始化失败", ex.Message);
             }
 
-            return false;
+            return path;
         }
     }
-
-    /// <summary>消息音：两声柔和的“叮咚”（880Hz → 1174Hz）。</summary>
-    private static byte[] BuildMessageTone() => BuildWav(new[]
-    {
-        (880.0, 90, 0.42),
-        (0.0, 40, 0.0),
-        (1174.0, 140, 0.36),
-    });
-
-    /// <summary>任务完成音：三音上行（E5 → A5 → E6），明显的“办完了”正向反馈。</summary>
-    private static byte[] BuildTaskDoneTone() => BuildWav(new[]
-    {
-        (659.25, 95, 0.38),
-        (880.0, 95, 0.40),
-        (1318.5, 170, 0.42),
-    });
 
     private static byte[] BuildWav((double Freq, int Ms, double Volume)[] notes, int sampleRate = 44100)
     {
@@ -154,7 +179,8 @@ public sealed class SoundService : IDisposable
                             + 0.16 * Math.Sin(2 * Math.PI * freq * 2 * t)
                             + 0.06 * Math.Sin(2 * Math.PI * freq * 3 * t);
 
-                var scaled = value * volume * envelope * 0.55;
+                // v0.2.2：合成增益 0.55 → 0.85，同样 80% 音量下明显更响
+                var scaled = value * volume * envelope * 0.85;
                 samples.Add((short)(Math.Clamp(scaled, -1.0, 1.0) * short.MaxValue));
             }
         }

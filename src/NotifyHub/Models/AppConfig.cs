@@ -60,11 +60,23 @@ public sealed class AppConfig
     /// <summary>【消息通知提示音】音量 0-100。</summary>
     public int MessageSoundVolume { get; set; } = 80;
 
+    /// <summary>【消息通知提示音】音色：DingDong/Crystal/Bubble/Marimba/Digital。</summary>
+    public string MessageSoundStyle { get; set; } = "DingDong";
+
     /// <summary>【WorkBuddy 任务完成提示音】开关（与消息提示音互相独立）。</summary>
     public bool TaskSoundEnabled { get; set; } = true;
 
     /// <summary>【WorkBuddy 任务完成提示音】音量 0-100。</summary>
     public int TaskSoundVolume { get; set; } = 80;
+
+    /// <summary>【任务完成提示音】音色：Ascend/Success/Bell/Chord。</summary>
+    public string TaskSoundStyle { get; set; } = "Ascend";
+
+    /// <summary>
+    /// 自动静音微信/QQ 自带提示音：消息提示音开启时把微信/QQ 的音频会话静音，
+    /// 只保留本应用音效；关闭本项或消息提示音时恢复。
+    /// </summary>
+    public bool SuppressAppSounds { get; set; } = true;
 
     /// <summary>微信通知过滤：只推好友私聊与未免打扰群，拦截公众号/服务通知/免打扰群。</summary>
     public bool WeChatFilterEnabled { get; set; } = true;
@@ -88,6 +100,10 @@ public sealed class AppConfig
         NotificationCorner = NormalizeCorner(NotificationCorner);
         MessageSoundVolume = Math.Clamp(MessageSoundVolume, 0, 100);
         TaskSoundVolume = Math.Clamp(TaskSoundVolume, 0, 100);
+        MessageSoundStyle = NormalizeSoundStyle(MessageSoundStyle,
+            "DingDong", "Crystal", "Bubble", "Marimba", "Digital");
+        TaskSoundStyle = NormalizeSoundStyle(TaskSoundStyle,
+            "Ascend", "Success", "Bell", "Chord");
         DedupHours = Math.Clamp(DedupHours, 1, 168);
         WeChatBlockedKeywords = (WeChatBlockedKeywords ?? string.Empty).Trim();
     }
@@ -99,4 +115,18 @@ public sealed class AppConfig
         "BottomLeft" => "BottomLeft",
         _ => "TopRight",
     };
+
+    /// <summary>音色名收敛到白名单，非法值回落默认。</summary>
+    private static string NormalizeSoundStyle(string? style, string fallback, params string[] allowed)
+    {
+        foreach (var a in allowed)
+        {
+            if (string.Equals(style, a, StringComparison.OrdinalIgnoreCase))
+            {
+                return a;
+            }
+        }
+
+        return fallback;
+    }
 }

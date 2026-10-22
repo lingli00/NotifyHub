@@ -27,6 +27,7 @@ public partial class App : Application
     private NotificationManager? _notifications;
     private IslandController? _islandController;
     private SoundService? _sound;
+    private AppSoundMuter? _soundMuter;
     private SettingsWindow? _settings;
     private MenuItem? _pauseMenuItem;
     private DispatcherTimer? _eventFlushTimer;
@@ -158,9 +159,13 @@ public partial class App : Application
 
         _configService = new ConfigService(log);
         _configService.Load();
-        _configService.Changed += (_, config) => log.Info("App", $"配置已更新: 间隔={config.PollIntervalMs}ms 时长={config.NotificationDurationMs}ms");
+        _configService.Changed += OnConfigChanged;
 
         _notifications = new NotificationManager(log, () => _configService.Current, _sound);
+
+        // 监听应用提示音静音：本应用消息提示音开启时，微信/QQ 自带音效自动关闭
+        _soundMuter = new AppSoundMuter(log);
+        _soundMuter.Apply(ShouldMuteAppSounds());
 
         if (options.Mode is AppMode.Demo or AppMode.SelfTestUi)
         {
@@ -186,6 +191,9 @@ public partial class App : Application
         {
             log.FlushIfDirty();
             _monitor?.FlushCaches();
+
+            // 周期补静音：微信/QQ 比 NotifyHub 后启动时，新音频会话也要静音（内部有节流）
+            _soundMuter?.Apply(ShouldMuteAppSounds());
         };
         _eventFlushTimer.Start();
 
@@ -336,6 +344,7 @@ public partial class App : Application
         _notifications?.Clear();
         _monitor?.Dispose();
         _islandController?.Dispose();
+        _soundMuter?.RestoreSync();
         _sound?.Dispose();
         LogService.Shared.FlushIfDirty();
 
@@ -464,6 +473,15 @@ public partial class App : Application
             LogService.Shared.Warn("App", "打开日志目录失败", ex.Message);
         }
     }
+
+    private void OnConfigChanged(object? sender, AppConfig config)
+    {
+        LogService.Shared.Info("App", $"配置已更新: 间隔={config.PollIntervalMs}ms 时长={config.NotificationDurationMs}ms");
+        _soundMuter?.Apply(ShouldMuteAppSounds());
+    }
+
+    private bool ShouldMuteAppSounds()
+        => _configService is { } cfg && cfg.Current.SuppressAppSounds && cfg.Current.MessageSoundEnabled;
 
     private void OnNotificationReady(NotifyMessage message)
     {

@@ -188,6 +188,7 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <Grid Grid.Row="0">
@@ -206,19 +207,19 @@
                                 </Grid>
 
                                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
-                                    <CheckBox x:Name="MusicEnabledCheck" Content="音乐控制模块" />
+                                    <CheckBox x:Name="MusicEnabledCheck" Content="音乐控制模块" MinWidth="196" />
                                     <TextBlock Style="{StaticResource HintText}"
-                                               Text="播放音乐时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏；全屏观影/游戏时整岛隐藏" />
+                                               Text="播放音乐时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏" />
                                 </StackPanel>
 
                                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                                    <CheckBox x:Name="WbWatchCheck" Content="自动读取 WorkBuddy 任务进度" />
+                                    <CheckBox x:Name="WbWatchCheck" Content="自动读取 WorkBuddy 任务进度" MinWidth="196" />
                                     <TextBlock Style="{StaticResource HintText}"
-                                               Text="监视 WorkBuddy 本地会话记录，AI 每一步动作实时上岛，回合结束报完成态并响完成音" />
+                                               Text="AI 的反馈文字实时上岛，回合结束报完成态并响完成音" />
                                 </StackPanel>
 
-                                <TextBlock Grid.Row="2" Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap"
-                                           Text="自由模式下 10 秒无交互会自动吸附到最近的一条屏幕边（上下左右都算），贴边留一条缝隙；鼠标移到条上会自动滑出，移开后重新计时。" />
+                                <TextBlock Grid.Row="3" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
+                                           Text="自由模式下 10 秒无交互自动吸附到最近的屏幕边（上下左右都算）：贴左右边收成竖条、贴上边收成细条，鼠标移上去即展开完整悬浮条。" />
                             </Grid>
                         </GroupBox>
 
@@ -228,25 +229,51 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <StackPanel Grid.Row="0" Orientation="Horizontal">
                                     <CheckBox x:Name="MessageSoundCheck" Content="消息通知提示音" Width="128" />
-                                    <TextBlock Text="音量" Margin="4,0,6,0" />
+                                    <TextBlock Text="音色" Margin="0,0,6,0" />
+                                    <ComboBox x:Name="MessageSoundCombo" Width="104" Height="26" FontSize="12.5" SelectedIndex="0">
+                                        <ComboBoxItem Content="叮咚" Tag="DingDong" />
+                                        <ComboBoxItem Content="清脆" Tag="Crystal" />
+                                        <ComboBoxItem Content="水泡" Tag="Bubble" />
+                                        <ComboBoxItem Content="木琴" Tag="Marimba" />
+                                        <ComboBoxItem Content="电子" Tag="Digital" />
+                                    </ComboBox>
+                                    <TextBlock Text="音量" Margin="12,0,6,0" />
                                     <Slider x:Name="MessageVolumeSlider" Value="80" ValueChanged="OnMessageVolumeChanged" />
                                     <TextBlock x:Name="MessageVolumeText" Margin="8,0,0,0" Width="34" Foreground="#8A8F98" Text="80%" />
-                                    <TextBlock Style="{StaticResource HintText}" Margin="10,0,0,0"
-                                               Text="仅放行的聊天消息播放，被过滤的消息不发声" />
+                                    <Button x:Name="MessageTestButton" Content="试听" MinWidth="52" Padding="10,3"
+                                            Margin="10,0,0,0" FontSize="11.5" Click="OnMessageSoundTestClick" />
                                 </StackPanel>
 
                                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="TaskSoundCheck" Content="任务完成提示音" Width="128" />
-                                    <TextBlock Text="音量" Margin="4,0,6,0" />
+                                    <TextBlock Text="音色" Margin="0,0,6,0" />
+                                    <ComboBox x:Name="TaskSoundCombo" Width="104" Height="26" FontSize="12.5" SelectedIndex="0">
+                                        <ComboBoxItem Content="上行三音" Tag="Ascend" />
+                                        <ComboBoxItem Content="成功双音" Tag="Success" />
+                                        <ComboBoxItem Content="铃声" Tag="Bell" />
+                                        <ComboBoxItem Content="和弦" Tag="Chord" />
+                                    </ComboBox>
+                                    <TextBlock Text="音量" Margin="12,0,6,0" />
                                     <Slider x:Name="TaskVolumeSlider" Value="80" ValueChanged="OnTaskVolumeChanged" />
                                     <TextBlock x:Name="TaskVolumeText" Margin="8,0,0,0" Width="34" Foreground="#8A8F98" Text="80%" />
-                                    <TextBlock Style="{StaticResource HintText}" Margin="10,0,0,0"
-                                               Text="WorkBuddy 任务完成态出现时播放，与消息提示音开关独立" />
+                                    <Button x:Name="TaskTestButton" Content="试听" MinWidth="52" Padding="10,3"
+                                            Margin="10,0,0,0" FontSize="11.5" Click="OnTaskSoundTestClick" />
                                 </StackPanel>
+
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <CheckBox x:Name="SuppressAppSoundsCheck" Content="自动静音微信/QQ 自带提示音" />
+                                    <TextBlock Style="{StaticResource HintText}"
+                                               Text="勾选后：本应用消息提示音开启时，自动静音微信与 QQ 自己的提示音，只保留本应用的音效（关闭恢复）" />
+                                </StackPanel>
+
+                                <TextBlock Grid.Row="3" Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="仅放行的聊天消息播放提示音，被过滤的消息不发声；任务完成提示音在 WorkBuddy 完成态出现时播放，与消息提示音互相独立。" />
                             </Grid>
                         </GroupBox>
 

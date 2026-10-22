@@ -50,18 +50,16 @@
       统一深色毛玻璃圆角长条：音乐信息 + 播放控件 + 单行任务状态共处一个面板。
       [♪] 歌名-歌手 | [⏮] [⏯] [⏭] | 一行实时动作
 
-      Margin 14 是"阴影留白"：DropShadowEffect 需要 blur(12)+depth(2) 的空间，
-      留白不足会被窗口矩形直接裁掉，视觉上就变成一圈灰白硬边方框。
-      透明留白区在 Win32 侧通过 WM_NCHITTEST = HTTRANSPARENT 放行鼠标，不会挡住下层窗口。
+      v0.2.2：去掉 DropShadowEffect——它会强制整个条体走软件渲染路径，
+      弹出动画掉帧、不跟手的元凶就是它。深度感由渐变底 + 1px 高光描边承担，
+      透明留白区保留（Win32 侧 HTTRANSPARENT 放行鼠标，不挡下层窗口）。
     -->
     <Border x:Name="Pill" Margin="14" CornerRadius="22" BorderBrush="#26FFFFFF" BorderThickness="1">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="12" ShadowDepth="2" Direction="270" Opacity="0.30" Color="#FF000000" />
-        </Border.Effect>
         <Border.Background>
             <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                <GradientStop Color="#F22C2C31" Offset="0" />
-                <GradientStop Color="#EE18181C" Offset="1" />
+                <GradientStop Color="#F23A3A40" Offset="0" />
+                <GradientStop Color="#F22C2C31" Offset="0.35" />
+                <GradientStop Color="#EE0F0F12" Offset="1" />
             </LinearGradientBrush>
         </Border.Background>
         <Border.RenderTransform>

@@ -13,11 +13,12 @@ using NotifyHub.Services;
 namespace NotifyHub.UI;
 
 /// <summary>
-/// 灵动岛 / 悬浮条：单一深色毛玻璃圆角长条，同一面板内横排展示
+/// 灵动岛 / 悬浮条：单一深色圆角长条，同一面板内横排展示
 ///   [♪] 歌名-歌手 | [上一首][播放/暂停][下一首] | 单行实时动作。
 /// 固定模式锁定屏幕顶部居中；自由模式下按住空白区可拖动（左键/右键都行），
-/// 10 秒无交互自动吸附到最近的一条屏幕边（四边都算），留出缝隙；
-/// 鼠标移入时自动滑出一小段，移出后重新计时。
+/// 10 秒无交互自动吸附到最近的一条屏幕边（四边都算）：
+/// 贴左右边收成竖细条、贴上/下边收成横细条（SnapStripWindow），
+/// 鼠标移入细条立即展开完整悬浮条，离开 1.4s 再收回细条。
 ///
 /// 动效参数（严格要求）：
 ///   展开 180ms ease-out｜状态文字切换 120ms 淡入｜完成停留 600ms｜收缩 220ms ease-in。
@@ -54,9 +55,6 @@ public partial class IslandWindow : Window
     /// <summary>吸附时条体与屏幕边之间的视觉缝隙。</summary>
     private const double EdgeGap = 8;
 
-    /// <summary>吸附后鼠标探入时滑出的距离。</summary>
-    private const double PeekDistance = 48;
-
     /// <summary>滑入/滑出动画时长。</summary>
     private const int SlideDurationMs = 240;
 
@@ -64,6 +62,7 @@ public partial class IslandWindow : Window
     private readonly DispatcherTimer _musicTimer = new();
     private readonly DispatcherTimer _idleTimer = new();
     private readonly DispatcherTimer _slideTimer = new() { Interval = TimeSpan.FromMilliseconds(15) };
+    private readonly DispatcherTimer _returnTimer = new();
 
     private bool _statusVisible;
     private bool _musicVisible;
@@ -82,6 +81,10 @@ public partial class IslandWindow : Window
     private bool _peeked;
     private bool _sliding;
     private Edge _snapEdge = Edge.None;
+
+    // 吸附后的「细条」形态：岛隐藏，只显示一条可点的细条（贴左右边 = 竖条）
+    private SnapStripWindow? _strip;
+    private bool _stripMode;
 
     // 滑动动画（SetWindowPos 逐帧，像素坐标）
     private readonly Stopwatch _slideWatch = new();
@@ -123,6 +126,18 @@ public partial class IslandWindow : Window
         _idleTimer.Interval = IdleSnapDelay;
         _idleTimer.Tick += (_, _) => OnIdleElapsed();
         _slideTimer.Tick += (_, _) => OnSlideTick();
+
+        // 从细条展开后，鼠标离开 1.4s 自动收回细条（比 10 秒无交互更快回到"条状"）
+        _returnTimer.Interval = TimeSpan.FromMilliseconds(1400);
+        _returnTimer.Tick += (_, _) =>
+        {
+            _returnTimer.Stop();
+
+            if (IsFreeMode() && !_hidden && !_dragging && !_sliding && _peeked && !_stripMode)
+            {
+                SnapToNearestEdge();
+            }
+        };
 
         Pill.MouseEnter += OnPillMouseEnter;
         Pill.MouseLeave += OnPillMouseLeave;
@@ -197,12 +212,14 @@ public partial class IslandWindow : Window
         try
         {
             PositionIsland();
-            Pill.Opacity = 0;
+            Opacity = 0;
             IslandShift.Y = -10;
 
             Show();
             UpdateLayout();
             Hide();
+
+            Opacity = 1;
         }
         catch
         {
@@ -268,11 +285,14 @@ public partial class IslandWindow : Window
 
         if (!free)
         {
-            // 切回固定模式：清掉吸附/探出状态，回到顶部居中
+            // 切回固定模式：清掉吸附/细条状态，回到顶部居中
             _snapped = false;
             _peeked = false;
+            _stripMode = false;
+            _strip?.Collapse();
             _snapEdge = Edge.None;
             _idleTimer.Stop();
+            _returnTimer.Stop();
         }
 
         if (!_hidden && IsVisible && !_dragging && !_sliding)
@@ -450,11 +470,25 @@ public partial class IslandWindow : Window
         {
             CollapseIsland();
         }
+        else if (_stripMode)
+        {
+            // 细条形态下内容全部消失（任务过期/音乐停止）：细条一并收掉
+            _stripMode = false;
+            _strip?.Collapse();
+            _returnTimer.Stop();
+        }
     }
 
     /// <summary>展开：180ms ease-out（淡入 + 自上而下落位）。已显示则只做内容更新。</summary>
     private void ShowIsland()
     {
+        // 吸附细条形态下来了新内容：先展开成完整岛
+        if (_stripMode)
+        {
+            ExpandFromStrip();
+            return;
+        }
+
         var token = ++_animToken;
         _collapsing = false;
 
@@ -478,11 +512,12 @@ public partial class IslandWindow : Window
 
         // 内容变化引起的宽度微调交给 SizeChanged 保持中心，这里不再干预
 
-        // 起手值只在真正从隐藏态出现时重置，避免把正在跑的动画拽回起点
-        Pill.BeginAnimation(OpacityProperty, null);
+        // 淡入走「窗口级 Opacity」（系统分层窗口 alpha，不重绘内容），
+        // 比动画 Pill 子树快得多——弹出掉帧就是子树透明度逐帧全量重排导致的
+        BeginAnimation(OpacityProperty, null);
         IslandShift.BeginAnimation(TranslateTransform.YProperty, null);
 
-        var startOpacity = wasHidden ? 0d : Pill.Opacity;
+        var startOpacity = wasHidden ? 0d : Opacity;
         // 从隐藏态出现时清掉残留位移；已显示时保持当前位置
         var startY = wasHidden ? -10d : IslandShift.Y;
 
@@ -491,7 +526,7 @@ public partial class IslandWindow : Window
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
             FillBehavior = FillBehavior.HoldEnd,
         };
-        Pill.BeginAnimation(OpacityProperty, fade);
+        BeginAnimation(OpacityProperty, fade);
 
         var drop = new DoubleAnimation(startY, 0, ExpandDuration)
         {
@@ -526,15 +561,18 @@ public partial class IslandWindow : Window
 
         _collapsing = true;
         _idleTimer.Stop();
+        _returnTimer.Stop();
+        _stripMode = false;
+        _strip?.Collapse();
         StopBreathing();
         StopSlide();
 
         var token = ++_animToken;
 
-        Pill.BeginAnimation(OpacityProperty, null);
+        BeginAnimation(OpacityProperty, null);
         IslandShift.BeginAnimation(TranslateTransform.YProperty, null);
 
-        var fade = new DoubleAnimation(Pill.Opacity, 0, CollapseDuration)
+        var fade = new DoubleAnimation(Opacity, 0, CollapseDuration)
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn },
             FillBehavior = FillBehavior.HoldEnd,
@@ -560,9 +598,9 @@ public partial class IslandWindow : Window
             _peeked = false;
             _snapEdge = Edge.None;
 
-            Pill.BeginAnimation(OpacityProperty, null);
+            BeginAnimation(OpacityProperty, null);
             IslandShift.BeginAnimation(TranslateTransform.YProperty, null);
-            Pill.Opacity = 1;
+            Opacity = 1;
             IslandShift.Y = -10;
 
             if (!_statusVisible)
@@ -579,7 +617,7 @@ public partial class IslandWindow : Window
             Hidden?.Invoke(this, EventArgs.Empty);
         };
 
-        Pill.BeginAnimation(OpacityProperty, fade);
+        BeginAnimation(OpacityProperty, fade);
         IslandShift.BeginAnimation(TranslateTransform.YProperty, lift);
     }
 
@@ -594,9 +632,9 @@ public partial class IslandWindow : Window
         _collapsing = false;
         _animToken++;
 
-        var opacity = Pill.Opacity;
-        Pill.BeginAnimation(OpacityProperty, null);
-        Pill.Opacity = Math.Max(opacity, 0.15);
+        var opacity = Opacity;
+        BeginAnimation(OpacityProperty, null);
+        Opacity = Math.Max(opacity, 0.15);
 
         IslandShift.BeginAnimation(TranslateTransform.YProperty, null);
     }
@@ -748,13 +786,14 @@ public partial class IslandWindow : Window
     private void OnPillMouseEnter(object sender, MouseEventArgs e)
     {
         _idleTimer.Stop();
+        _returnTimer.Stop();
 
-        if (!IsFreeMode() || !_snapped || _dragging || _sliding)
+        if (!IsFreeMode() || _dragging || _sliding)
         {
             return;
         }
 
-        PeekOut();
+        // 细条形态下鼠标其实落不到岛上（岛已隐藏），这里主要防滑动途中抖动
     }
 
     private void OnPillMouseLeave(object sender, MouseEventArgs e)
@@ -764,11 +803,19 @@ public partial class IslandWindow : Window
             return;
         }
 
+        if (_peeked && !_stripMode)
+        {
+            // 从细条展开出来的：离开后 1.4s 收回细条
+            _returnTimer.Stop();
+            _returnTimer.Start();
+            return;
+        }
+
         _peeked = false;
         RestartIdleTimer();
     }
 
-    /// <summary>吸附到距离最近的那条屏幕边（留 EdgeGap 视觉缝隙），平滑滑过去。</summary>
+    /// <summary>吸附到距离最近的那条屏幕边，贴边后整岛收成一条「细条」。</summary>
     private void SnapToNearestEdge()
     {
         var area = SystemParameters.WorkArea;
@@ -815,43 +862,127 @@ public partial class IslandWindow : Window
         _snapped = true;
         _peeked = false;
 
-        SlideTo(targetLeft, targetTop, SlideDurationMs, null);
+        // 先顺滑滑到边上，落定后整岛收成细条
+        SlideTo(targetLeft, targetTop, SlideDurationMs, SwitchToStrip);
     }
 
-    /// <summary>鼠标探入吸附中的岛：沿垂直于吸附边的方向滑出一小段。</summary>
-    private void PeekOut()
+    /// <summary>滑到边后：岛快速淡出，屏幕边只留一条细条（左右边 = 竖条）。</summary>
+    private void SwitchToStrip()
     {
-        if (!_snapped)
+        if (_stripMode || _dragging)
         {
             return;
         }
 
-        var left = Left;
-        var top = Top;
+        _stripMode = true;
+        EnsureStrip().ShowFor(_snapEdge.ToString(), IsDoneState);
+
+        var token = ++_animToken;
+        BeginAnimation(OpacityProperty, null);
+
+        var fade = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(140))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn },
+        };
+        fade.Completed += (_, _) =>
+        {
+            if (token != _animToken || !_stripMode)
+            {
+                return;
+            }
+
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 0;
+            Hide();
+            Opacity = 1; // 下次展开从 0 起手（窗口级淡入）
+        };
+        BeginAnimation(OpacityProperty, fade);
+    }
+
+    /// <summary>细条被移入/点击（或吸附期间来了新状态）：整岛重新展开，1.4s 无鼠标再收回。</summary>
+    private void ExpandFromStrip()
+    {
+        if (!_stripMode)
+        {
+            return;
+        }
+
+        var token = ++_animToken;
+        _stripMode = false;
+        _strip?.Collapse();
+        _snapped = false;
+        _peeked = true;
+
+        // 贴边全展开：留出与吸附同款缝隙
+        var area = SystemParameters.WorkArea;
+        var w = ActualWidth > 1 ? ActualWidth : 400;
+        var h = ActualHeight > 1 ? ActualHeight : 76;
+        var pad = PillPad;
 
         switch (_snapEdge)
         {
             case Edge.Left:
-                left += PeekDistance;
+                Left = area.Left + EdgeGap - pad;
                 break;
             case Edge.Right:
-                left -= PeekDistance;
+                Left = area.Right - w - EdgeGap + pad;
                 break;
             case Edge.Top:
-                top += PeekDistance;
+                Top = area.Top + EdgeGap - pad;
                 break;
             case Edge.Bottom:
-                top -= PeekDistance;
+                Top = area.Bottom - h - EdgeGap + pad;
                 break;
-            default:
-                return;
         }
 
-        _snapped = false;
-        _peeked = true;
+        Show();
+        UpdateLayout();
 
-        SlideTo(left, top, 180, null);
+        BeginAnimation(OpacityProperty, null);
+        Opacity = 0;
+        IslandShift.BeginAnimation(TranslateTransform.YProperty, null);
+        IslandShift.Y = 0;
+
+        var fade = new DoubleAnimation(0, 1, ExpandDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        BeginAnimation(OpacityProperty, fade);
+
+        // 执行中有实时状态 → 保持展开（10 秒无新状态由闲置计时器收条）；
+        // 只有"无状态/完成态"的展开（比如用户点开看音乐）才 1.4s 自动收回
+        _returnTimer.Stop();
+
+        if (!_statusVisible || IsDoneState)
+        {
+            _returnTimer.Start();
+        }
+        else
+        {
+            RestartIdleTimer();
+        }
     }
+
+    private SnapStripWindow EnsureStrip()
+    {
+        if (_strip is null)
+        {
+            _strip = new SnapStripWindow();
+            _strip.ExpandRequested += (_, _) =>
+            {
+                if (_stripMode && !_dragging && !_sliding)
+                {
+                    ExpandFromStrip();
+                }
+            };
+        }
+
+        return _strip;
+    }
+
+    /// <summary>细条上的状态点颜色：完成态绿点，其余黄点。</summary>
+    private bool IsDoneState
+        => _statusVisible && CheckGlyph.Visibility == Visibility.Visible;
 
     /// <summary>用 SetWindowPos 逐帧滑动（比动画 Window.Left 稳，不受 WPF 布局重算干扰）。</summary>
     private void SlideTo(double targetLeft, double targetTop, int durationMs, Action? done)
@@ -1070,10 +1201,13 @@ public partial class IslandWindow : Window
         _idleTimer.Stop();
         StopSlide();
 
-        // 吸附态直接拖：先清状态，落手位置由用户决定
+        // 吸附/细条态直接拖：先清状态，落手位置由用户决定
         _snapped = false;
         _peeked = false;
+        _stripMode = false;
+        _strip?.Collapse();
         _snapEdge = Edge.None;
+        _returnTimer.Stop();
 
         NativeMethods.SetCapture(hwnd);
     }
@@ -1226,6 +1360,9 @@ public partial class IslandWindow : Window
         _musicTimer.Stop();
         _idleTimer.Stop();
         _slideTimer.Stop();
+        _returnTimer.Stop();
+        _strip?.Close();
+        _strip = null;
 
         if (Current == this)
         {

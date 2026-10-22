@@ -73,10 +73,14 @@ public partial class SettingsWindow : Window
         MessageSoundCheck.IsChecked = config.MessageSoundEnabled;
         MessageVolumeSlider.Value = config.MessageSoundVolume;
         MessageVolumeText.Text = $"{config.MessageSoundVolume}%";
+        SelectComboByTag(MessageSoundCombo, config.MessageSoundStyle);
 
         TaskSoundCheck.IsChecked = config.TaskSoundEnabled;
         TaskVolumeSlider.Value = config.TaskSoundVolume;
         TaskVolumeText.Text = $"{config.TaskSoundVolume}%";
+        SelectComboByTag(TaskSoundCombo, config.TaskSoundStyle);
+
+        SuppressAppSoundsCheck.IsChecked = config.SuppressAppSounds;
 
         WeChatFilterCheck.IsChecked = config.WeChatFilterEnabled;
         FilterKeywordsBox.Text = config.WeChatBlockedKeywords;
@@ -98,6 +102,56 @@ public partial class SettingsWindow : Window
         if (TaskVolumeText is not null)
         {
             TaskVolumeText.Text = $"{(int)Math.Round(e.NewValue)}%";
+        }
+    }
+
+    // ---------------- 提示音音色 / 试听 ----------------
+
+    /// <summary>按 Tag 选中 ComboBox 项（找不到选第 0 项）。</summary>
+    private static void SelectComboByTag(ComboBox combo, string tag)
+    {
+        for (var i = 0; i < combo.Items.Count; i++)
+        {
+            if (combo.Items[i] is ComboBoxItem { Tag: string t } && string.Equals(t, tag, StringComparison.OrdinalIgnoreCase))
+            {
+                combo.SelectedIndex = i;
+                return;
+            }
+        }
+
+        combo.SelectedIndex = 0;
+    }
+
+    private static string ComboTag(ComboBox combo, string fallback)
+        => combo.SelectedItem is ComboBoxItem { Tag: string t } ? t : fallback;
+
+    private void OnMessageSoundTestClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            using var sound = new SoundService(_log);
+            sound.Preview(
+                SoundService.MessageTone(ComboTag(MessageSoundCombo, "DingDong")),
+                (int)Math.Round(MessageVolumeSlider.Value));
+        }
+        catch
+        {
+            // 试听失败不影响设置
+        }
+    }
+
+    private void OnTaskSoundTestClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            using var sound = new SoundService(_log);
+            sound.Preview(
+                SoundService.TaskTone(ComboTag(TaskSoundCombo, "Ascend")),
+                (int)Math.Round(TaskVolumeSlider.Value));
+        }
+        catch
+        {
+            // 试听失败不影响设置
         }
     }
 
@@ -147,8 +201,11 @@ public partial class SettingsWindow : Window
 
         next.MessageSoundEnabled = MessageSoundCheck.IsChecked == true;
         next.MessageSoundVolume = (int)Math.Round(MessageVolumeSlider.Value);
+        next.MessageSoundStyle = ComboTag(MessageSoundCombo, "DingDong");
         next.TaskSoundEnabled = TaskSoundCheck.IsChecked == true;
         next.TaskSoundVolume = (int)Math.Round(TaskVolumeSlider.Value);
+        next.TaskSoundStyle = ComboTag(TaskSoundCombo, "Ascend");
+        next.SuppressAppSounds = SuppressAppSoundsCheck.IsChecked == true;
 
         next.WeChatFilterEnabled = WeChatFilterCheck.IsChecked == true;
         next.WeChatBlockedKeywords = FilterKeywordsBox.Text.Trim();

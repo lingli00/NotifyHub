@@ -202,7 +202,7 @@ public sealed class WorkBuddyWatcher : IDisposable
         return CurrentState();
     }
 
-    /// <summary>根据最近事件决定当前显示：动作 &gt; 完成态（安静 8s）&gt; 不显示（过时）。</summary>
+    /// <summary>根据最近事件决定当前显示：AI 反馈文字 &gt; 动作兜底 &gt; 完成态（安静 8s）。</summary>
     private (string Text, bool Done) CurrentState()
     {
         if (_lastAnyTs == 0)
@@ -217,17 +217,22 @@ public sealed class WorkBuddyWatcher : IDisposable
             return ("", false); // 会话停了：不再显示，让岛上现有状态自然收起
         }
 
-        if (_lastActionTs >= _lastReplyTs && _lastAction.Length > 0)
+        // 用户要求：展示 AI 的「反馈文字」，而不是正在执行的代码。
+        // 只要有过 AI 文字回复，就以它为准；动作描述只在没有任何回复时兜底。
+        var text = _lastReply.Length > 0 ? _lastReply : _lastAction;
+        if (text.Length == 0)
         {
-            return (_lastAction, false);
+            return ("", false);
         }
 
-        if (_lastReply.Length > 0 && now - _lastAnyTs >= QuietMs)
+        // 回复后安静 8s 且最后事件不是动作 → 判定回合结束
+        var quiet = now - _lastAnyTs >= QuietMs;
+        if (quiet && _lastActionTs < _lastReplyTs)
         {
-            return (_lastReply, true);
+            return (text, true);
         }
 
-        return ("", false);
+        return (text, false);
     }
 
     private void Emit(string text, bool done)

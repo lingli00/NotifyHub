@@ -5,8 +5,8 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
-**下载**：[Release v0.2.1](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.1)
-→ `NotifyHub-v0.2.1-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.1-source.zip`（完整工程）。
+**下载**：[Release v0.2.2](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.2)
+→ `NotifyHub-v0.2.2-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.2-source.zip`（完整工程）。
 
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
@@ -23,9 +23,13 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 | --- | --- |
 | ![设置](docs/settings.png) | ![运行日志](docs/logs.png) |
 
-WorkBuddy 里跑任务时，灵动岛自动显示 AI 的每一步动作（自动读取，无需接线）：
+WorkBuddy 里跑任务时，灵动岛自动显示 **AI 的反馈文字**（自动读取，无需接线）：
 
 ![WorkBuddy 任务实时进度](docs/workbuddy-live.png)
+
+10 秒无交互后吸附收成细条（贴左右边为竖条），鼠标移上去即展开：
+
+![吸附细条](docs/snap-strip.png)
 
 ---
 
@@ -38,10 +42,10 @@ WorkBuddy 里跑任务时，灵动岛自动显示 AI 的每一步动作（自动
 | ntfy 订阅 | 订阅 ntfy 主题（SSE），断线自动重连并带 `since=` 续传，不丢消息 |
 | 微信消息过滤 | **只推好友私聊 + 未开免打扰的群**；公众号、服务通知、广告营销、免打扰会话全部在接收阶段拦截 |
 | macOS 风格通知 | 深色毛玻璃、圆角 20、四段式（图标+来源 / 会话名 / 预览 / 时间）、180ms 淡入淡出、四角可切换、新通知在最上 |
-| 消息提示音 | 程序内置独立提示音，仅放行消息播放；开关 + 音量独立控制，不依赖微信/QQ 铃声 |
+| 消息提示音 | 程序内置独立提示音（5 种音色可试听），仅放行消息播放；开关 + 音量独立控制；**开启时自动静音微信/QQ 自带提示音** |
 | 灵动岛 | 一行实时动作文字（超长省略，绝不换行撑高）；展开 180ms / 文字切换 120ms / 完成停留 600ms / 收缩 220ms |
 | 拖拽 | 自由模式下按住条体空白处拖动，**左键、右键都能拖**，按钮区域自动让位给点击 |
-| 四边吸附 | 自由模式 10 秒无交互 → 平滑吸附到最近的一条屏幕边（上下左右都算），贴边留 8px 缝隙；鼠标移入自动滑出 48px，移开重新计时 |
+| 四边吸附 | 自由模式 10 秒无交互 → 收成一条**细条**贴到最近的屏幕边：贴左/右边为竖条、贴上/下边为横条（约 110×8，带状态色点）；鼠标移入或点击立即展开完整悬浮条，离开 1.4s 收回 |
 | 状态通道 | 命名管道长连接 + `--island-stream`：**连续更新延迟 <100ms**（实测每行 0.12ms） |
 | WorkBuddy 任务监控 | **自动**读取 WorkBuddy 本地会话记录：AI 每一步动作实时上岛（运行/修改/检索/派出助手…），回合结束绿勾 + 完成提示音，无需任何手动接线 |
 | 任务完成提示音 | 与消息提示音完全独立的第二套音效，完成态出现时播放 |
@@ -145,6 +149,9 @@ $p = Start-Process -FilePath .\NotifyHub.exe -ArgumentList '--island-stream' -Re
 | `IslandLeft` / `IslandTop` | `null` | 自由模式保存的**拖拽落点**（DIP）；吸附位置不写盘，重启后从落点开始重新计时 |
 | `MusicEnabled` | `true` | 音乐控制模块 |
 | `MessageSoundEnabled` / `MessageSoundVolume` | `true` / `80` | 消息通知提示音开关与音量 |
+| `MessageSoundStyle` | `DingDong` | 消息音色：DingDong/Crystal/Bubble/Marimba/Digital |
+| `TaskSoundStyle` | `Ascend` | 完成音色：Ascend/Success/Bell/Chord |
+| `SuppressAppSounds` | `true` | 消息提示音开启时自动静音微信/QQ 自带提示音 |
 | `TaskSoundEnabled` / `TaskSoundVolume` | `true` / `80` | 任务完成提示音开关与音量 |
 | `WeChatFilterEnabled` | `true` | 微信过滤总开关 |
 | `WeChatBlockedKeywords` | 服务通知,公众号,… | 追加拦截关键词（逗号分隔，命中会话名或摘要即拦截） |
@@ -182,7 +189,8 @@ NotifyHub/
 │  │  ├─ SessionDiffTracker.cs  会话快照差分（含中断恢复补发，防丢包）
 │  │  ├─ DedupCache.cs          消息 ID 去重（落盘 24h，重启不重复）
 │  │  ├─ WeChatFilter.cs        微信过滤规则（免打扰信号 + 公众号/服务通知关键词）
-│  │  ├─ SoundService.cs        两套提示音（合成 WAV，MediaPlayer 播放，音量独立）
+│  │  ├─ SoundService.cs        两套提示音（多音色合成 WAV，MediaPlayer 播放，音量独立，可试听）
+│  │  ├─ AppSoundMuter.cs       Core Audio 会话级静音：消息音开启时静音微信/QQ 自带提示音
 │  │  ├─ MediaPlayerMonitor.cs  SMTC 媒体会话聚合与播放控制
 │  │  ├─ FullscreenWatcher.cs   全屏检测（前台窗口铺满显示器且无标题栏）
 │  │  ├─ StartupService.cs      开机自启注册表
@@ -199,7 +207,8 @@ NotifyHub/
 │  ├─ UI/
 │  │  ├─ NotificationWindow.xaml(.cs)     单条通知卡片（圆角 20、阴影留白 14px、180ms 动画）
 │  │  ├─ NotificationManager.cs           队列 + 堆叠 + 四角定位
-│  │  ├─ IslandWindow.xaml(.cs)           灵动岛：单行状态、Win32 拖拽、四边吸附、定参动效
+│  │  ├─ IslandWindow.xaml(.cs)           灵动岛：单行状态、Win32 拖拽、四边吸附、细条形态、定参动效
+│  │  ├─ SnapStripWindow.cs               吸附细条（左右竖条/上下横条，移入展开）
 │  │  ├─ IslandController.cs              灵动岛总控（音乐/全屏/提示音/位置/窗口预热）
 │  │  ├─ SettingsWindow.xaml(.cs)         「设置 + 运行日志」双标签页（原控制台已并入）
 │  │  ├─ DemoCapture.cs                   窗口自渲染抓图（验证用）
@@ -274,6 +283,15 @@ python tools\stream_latency.py         # 状态流延迟
 ---
 
 ## 八、版本
+
+**v0.2.2** — 上岛内容/吸附细条/动画帧率/音效增强
+
+* 灵动岛优先显示 **AI 的反馈文字**（不再显示"运行 xxx"命令；命令摘要仅兜底）
+* 吸附收成**细条**：贴左右边为竖条、贴上下边为横条，移入/点击展开，离开 1.4s 收回
+* 移除 `DropShadowEffect` + 淡入淡出改走窗口级 Opacity，**弹出动画不再掉帧**
+* 提示音音色可选（消息 5 种 / 完成 4 种，可试听），合成增益加大更响
+* 新增**自动静音微信/QQ 自带提示音**（Core Audio 会话级，关闭恢复）
+* 修复设置页灵动岛分组文字重叠
 
 **v0.2.1** — 修复「正式版读不到 WorkBuddy 任务进度」
 

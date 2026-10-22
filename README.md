@@ -1,4 +1,4 @@
-# NotifyHub v0.1
+# NotifyHub v0.2
 
 Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 把**微信 / QQ / ntfy** 三个来源的消息统一成 macOS 风格通知横幅，同时提供一个
@@ -12,13 +12,13 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 
 ## 界面预览
 
-| 通知横幅（深色毛玻璃四段式） | 灵动岛 / 悬浮条（横排三段） |
+| 通知横幅（深色毛玻璃四段式） | 灵动岛 / 悬浮条（横排 + 单行状态） |
 | --- | --- |
 | ![通知横幅](docs/notification.png) | ![灵动岛](docs/island.png) |
 
-| 控制台（紧凑深色 + 彩色日志） | 设置面板 |
+| 设置面板 | 运行日志（原独立控制台已并入） |
 | --- | --- |
-| ![控制台](docs/console.png) | ![设置](docs/settings.png) |
+| ![设置](docs/settings.png) | ![运行日志](docs/logs.png) |
 
 ---
 
@@ -32,11 +32,14 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 | 微信消息过滤 | **只推好友私聊 + 未开免打扰的群**；公众号、服务通知、广告营销、免打扰会话全部在接收阶段拦截 |
 | macOS 风格通知 | 深色毛玻璃、圆角 20、四段式（图标+来源 / 会话名 / 预览 / 时间）、180ms 淡入淡出、四角可切换、新通知在最上 |
 | 消息提示音 | 程序内置独立提示音，仅放行消息播放；开关 + 音量独立控制，不依赖微信/QQ 铃声 |
-| 灵动岛 | 屏幕顶部居中（可切自由拖动），单行实时动作文字；展开 180ms / 文字切换 120ms / 完成停留 600ms / 收缩 220ms |
+| 灵动岛 | 一行实时动作文字（超长省略，绝不换行撑高）；展开 180ms / 文字切换 120ms / 完成停留 600ms / 收缩 220ms |
+| 拖拽 | 自由模式下按住条体空白处拖动，**左键、右键都能拖**，按钮区域自动让位给点击 |
+| 四边吸附 | 自由模式 10 秒无交互 → 平滑吸附到最近的一条屏幕边（上下左右都算），贴边留 8px 缝隙；鼠标移入自动滑出 48px，移开重新计时 |
+| 状态通道 | 命名管道长连接 + `--island-stream`：**连续更新延迟 <100ms**（实测每行 0.12ms） |
 | 任务完成提示音 | 与消息提示音完全独立的第二套音效，完成态出现时播放 |
 | 音乐控制 | 系统 SMTC 聚合各播放器（Folia、网易云、QQ音乐、Spotify 等），同一悬浮条内显示「♪ 歌名-歌手 + 上一首/播放暂停/下一首」 |
 | 智能隐藏 | 无音频 → 音乐区隐藏；无任务 → 任务区隐藏；检测到全屏观影/游戏 → 整套灵动岛隐藏，退出后恢复 |
-| 控制台 | 紧凑深色窗口：等宽日志（按级别着色）、命令输入、清空日志、折叠、设置入口 |
+| 运行日志 | 设置页「运行日志」标签页：大号深色日志框（按级别着色、自动滚到底、可暂停）、最近 50 条事件。**独立控制台窗口已取消** |
 | 一键清除日志 | 设置页按钮 + 二次确认，只清日志，不动配置与去重记录 |
 | 便携绿色包 | 解压即用，不写系统注册表；配置文件跟随程序目录，换目录运行配置不丢 |
 
@@ -45,12 +48,16 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 ## 二、界面一览
 
 * **通知横幅**：屏幕四角（默认右上）纵向堆叠，最多 5 条，新通知在最上方；鼠标移入暂停倒计时，点击激活微信/QQ 并定位到对应聊天。
-* **灵动岛 / 音乐悬浮条**：一个深色毛玻璃长条，横排三段
-  `[♪] 歌名-歌手 | [上一首][播放/暂停][下一首] | 任务实时动作`。
-  固定模式锁定顶部居中；自由模式按住空白处拖动，贴边吸附、位置自动保存。
-* **控制台**：托盘双击或右键菜单「控制台」打开。
-  可用命令：`help`、`clear`、`island <文本>`、`done <文本>`、`media <prev|toggle|next>`、
-  `test <wechat|qq|ntfy|sound-message|sound-task>`、`stats`、`settings`、`pause`、`resume`。
+* **灵动岛 / 音乐悬浮条**：一个深色毛玻璃长条，横排
+  `[♪] 歌名-歌手 | [上一首][播放/暂停][下一首] | 一行任务动作`。
+
+  * 固定模式锁定顶部居中（不可拖动）。
+  * 自由模式按住空白处拖动（左键、右键均可），位置自动保存；10 秒无交互自动吸附到最近边。
+  * 条体现已按内容自适应，阴影留白足够，不再出现"比内容大一圈的灰白模糊方框"。
+  * 阴影留白区做鼠标穿透（`WM_NCHITTEST` → `HTTRANSPARENT`），不会挡住下层窗口的点击。
+* **设置 + 运行日志**：托盘双击或右键「设置 / 日志…」打开，两个标签页：
+  * **设置**：订阅、监听、灵动岛、两套提示音、微信过滤。
+  * **运行日志**：等宽字体详细日志（DBG/INF/SUC/WRN/ERR 着色）+ 最近 50 条事件。
 
 ---
 
@@ -58,22 +65,57 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 
 ```
 NotifyHub.exe                      托盘常驻运行
-NotifyHub.exe --selftest           无界面逻辑自检（退出码 0=通过）
+NotifyHub.exe --selftest           无界面逻辑自检（退出码 0=通过，20 项）
 NotifyHub.exe --selftest-ui        通知层自检（堆叠/位置/不抢焦点）
 NotifyHub.exe --demo               弹 6 条演示通知并生成抓图
 NotifyHub.exe --dump               导出微信/QQ 的 UIA 树（适配新版界面用）
 NotifyHub.exe --locate 名字        激活微信并搜索定位到该聊天
-NotifyHub.exe --island "文本"      唤起灵动岛（任务执行中）
-NotifyHub.exe --island-done "文本" 灵动岛完成态 + 完成提示音
+NotifyHub.exe --island "文本"      灵动岛：显示一行执行中动作
+NotifyHub.exe --island-done "文本" 灵动岛：完成态 + 完成提示音后收起
+NotifyHub.exe --island-stream      从标准输入逐行读状态（长连接，更新延迟 <100ms）
 NotifyHub.exe --media toggle       控制播放器（play/pause/toggle/next/prev）
 NotifyHub.exe --settings           只打开设置窗口（排版检查）
-NotifyHub.exe --console            只打开控制台（排版检查）
 NotifyHub.exe --help               参数帮助
 ```
 
-外部程序（如 WorkBuddy 后台任务）集成方式：任务开始 `--island "正在梳理需求文档结构"`，
-中途可反复调用刷新同一行文字，结束 `--island-done "任务完成"`。
-常驻实例通过命名管道接收，无需重复启动进程。
+### 外部程序（如 WorkBuddy 后台任务）怎么集成
+
+**方式一：单次命令（简单，但每次要付进程启动成本）**
+
+```
+NotifyHub.exe --island "正在梳理需求文档结构"
+NotifyHub.exe --island "已解析 8 个章节，开始拆分任务"
+NotifyHub.exe --island-done "任务完成"
+```
+
+单次命令的端到端延迟约 **270ms**，其中绝大部分是 exe 启动本身（约 250ms），
+状态通道只占 1~2ms。
+
+**方式二：常驻状态流（推荐，满足「更新延迟 <100ms」）**
+
+进程只启动一次，之后每行状态走同一条管道长连接：
+
+```powershell
+# 交互式
+$p = Start-Process -FilePath .\NotifyHub.exe -ArgumentList '--island-stream' -RedirectStandardInput stdin.txt
+
+# 或直接管道（每一行就是一次状态更新）
+@(
+  'RUN|正在读取需求文档…'
+  'RUN|任务 3/6：四边吸附与自动滑出'
+  'DONE|两份包已就绪'
+) | .\NotifyHub.exe --island-stream
+```
+
+协议（一行一条）：
+
+| 行格式 | 含义 |
+| --- | --- |
+| `RUN|文本` | 执行中，黄点 + 文本；直接写纯文本等价于 `RUN|纯文本` |
+| `DONE|文本` | 完成态，绿勾 + 文本，600ms 后收起并响完成提示音 |
+| `MEDIA|toggle` | 媒体控制（toggle/play/pause/next/prev） |
+
+实测：常驻流模式下每行状态写入 **0.12ms**，端到端（含 UI 上屏）远低于 100ms。
 
 ---
 
@@ -91,8 +133,8 @@ NotifyHub.exe --help               参数帮助
 | `NotificationDurationMs` | `4000` | 单条通知停留时长，范围 1000~30000ms |
 | `NotificationCorner` | `TopRight` | `TopRight` / `TopLeft` / `BottomRight` / `BottomLeft` |
 | `MaxStack` | `3` | 同屏堆叠上限（硬上限 5） |
-| `IslandMode` | `Fixed` | `Fixed` 顶部居中锁定 / `Free` 自由拖动 |
-| `IslandLeft` / `IslandTop` | `null` | 自由模式保存的位置（DIP） |
+| `IslandMode` | `Fixed` | `Fixed` 顶部居中锁定 / `Free` 自由拖动（含四边吸附） |
+| `IslandLeft` / `IslandTop` | `null` | 自由模式保存的**拖拽落点**（DIP）；吸附位置不写盘，重启后从落点开始重新计时 |
 | `MusicEnabled` | `true` | 音乐控制模块 |
 | `MessageSoundEnabled` / `MessageSoundVolume` | `true` / `80` | 消息通知提示音开关与音量 |
 | `TaskSoundEnabled` / `TaskSoundVolume` | `true` / `80` | 任务完成提示音开关与音量 |
@@ -110,9 +152,9 @@ NotifyHub.exe --help               参数帮助
 NotifyHub/
 ├─ src/NotifyHub/
 │  ├─ NotifyHub.csproj          项目文件：net8.0-windows10.0.19041（WinRT/SMTC）+ WPF，
-│  │                            自包含单文件发布参数、版本号 v0.1
+│  │                            自包含单文件发布参数、版本号 v0.2
 │  ├─ App.xaml / App.xaml.cs    应用入口：多模式分发（GUI/Demo/自检/Dump/Locate/Settings/
-│  │                            Console/Island/Media/Help）、托盘、单实例互斥、定时落盘
+│  │                            Island/IslandStream/Media/Help）、灵动岛快路径、托盘、单实例互斥
 │  ├─ Models/
 │  │  ├─ AppConfig.cs           配置模型 + Normalize 收敛（含通知位置、两套音效、过滤关键词）
 │  │  ├─ NotifyMessage.cs       一条待通知消息（来源/发送者/内容/时间/去重键）
@@ -122,6 +164,7 @@ NotifyHub/
 │  │  ├─ LogService.cs          日志文件 + 控制台环形缓冲 + 最近 50 条事件 + ClearAll
 │  │  ├─ AppPaths.cs            路径：便携模式（exe 旁 config.json）或 %AppData%
 │  │  ├─ CommandLineOptions.cs  命令行解析
+│  │  ├─ IslandIpc.cs           命名管道：长连接 + 多行读取 + --island-stream 流式转发
 │  │  ├─ MonitorController.cs   监听总控：三来源 → 去重 → 通知
 │  │  ├─ PollingWatcherBase.cs  轮询线程基类（扣耗时的间隔、异常不中断、日志节流）
 │  │  ├─ ChatAppWatcher.cs      聊天软件公共流程：找窗口 → 读列表 → 差分 → 过滤 → 派发
@@ -146,24 +189,24 @@ NotifyHub/
 │  │     ├─ SessionListReader.cs  读会话列表 + 免打扰/公众号信号采集
 │  │     └─ UiaDumper.cs          UIA 树诊断导出
 │  ├─ UI/
-│  │  ├─ NotificationWindow.xaml(.cs)     单条通知卡片（深色毛玻璃四段式、180ms 动画）
+│  │  ├─ NotificationWindow.xaml(.cs)     单条通知卡片（圆角 20、阴影留白 14px、180ms 动画）
 │  │  ├─ NotificationManager.cs           队列 + 堆叠 + 四角定位
-│  │  ├─ IslandWindow.xaml(.cs)           灵动岛/悬浮条（横排三段、拖拽、固定动效）
-│  │  ├─ IslandController.cs              灵动岛总控（音乐/全屏/提示音/位置）
-│  │  ├─ ConsoleWindow.xaml(.cs)          紧凑深色控制台（日志/命令/折叠）
-│  │  ├─ SettingsWindow.xaml(.cs)         设置面板（含两套音效、过滤、一键清日志）
+│  │  ├─ IslandWindow.xaml(.cs)           灵动岛：单行状态、Win32 拖拽、四边吸附、定参动效
+│  │  ├─ IslandController.cs              灵动岛总控（音乐/全屏/提示音/位置/窗口预热）
+│  │  ├─ SettingsWindow.xaml(.cs)         「设置 + 运行日志」双标签页（原控制台已并入）
 │  │  ├─ DemoCapture.cs                   窗口自渲染抓图（验证用）
 │  │  └─ IconFactory.cs                   托盘图标绘制
-│  ├─ Interop/NativeMethods.cs  Win32 互操作（窗口样式/激活/输入/全屏检测）
-│  ├─ Services/IslandIpc.cs     命名管道：转发 --island / --media 给常驻实例
+│  ├─ Interop/NativeMethods.cs  Win32 互操作（窗口样式/SetCapture/SetWindowPos/激活/输入）
 │  ├─ Assets/NotifyHub.ico      图标
 │  └─ app.manifest              应用清单（DPI 感知）
 ├─ tools/
 │  ├─ publish.ps1               一键发布单文件
-│  ├─ screenshot2.ps1           区域抓屏（BitBlt + CAPTUREBLT，能抓透明窗口）
-│  ├─ screenshot-full.ps1       全屏抓屏
-│  ├─ fullscreen-test.ps1       全屏隐藏自动验证用临时窗体
+│  ├─ pack.py                   打发布包（便携包 + 源码包）
+│  ├─ grab.py                   区域抓屏（BitBlt + CAPTUREBLT，能抓透明窗口）
+│  ├─ island_probe.py           灵动岛真机探测：读位置 / 真实鼠标拖拽（左键、右键）
+│  ├─ stream_latency.py         量 --island-stream 每行更新耗时
 │  └─ …                         微信窗口诊断脚本
+├─ docs/                        文档截图
 ├─ dist/                        发布产物（NotifyHub.exe）
 └─ README.md                    本文档
 ```
@@ -191,11 +234,15 @@ dotnet publish src/NotifyHub/NotifyHub.csproj -c Release -o dist
 
 产物是自包含单文件 `dist\NotifyHub.exe`（约 73MB，含 .NET 运行时与 WPF/WinRT，免安装）。
 
-自检与演示：
+自检与验证：
 
 ```powershell
-.\dist\NotifyHub.exe --selftest     # 20 项逻辑自检
-.\dist\NotifyHub.exe --demo         # 弹 6 条演示通知，抓图到 %AppData%\NotifyHub\demo-capture.png
+.\dist\NotifyHub.exe --selftest        # 20 项逻辑自检
+.\dist\NotifyHub.exe --selftest-ui     # 通知层自检（0=通过）
+.\dist\NotifyHub.exe --demo            # 弹 6 条演示通知并抓图
+python tools\island_probe.py info      # 读灵动岛位置/样式
+python tools\island_probe.py drag 160 130   # 真实鼠标拖拽验证
+python tools\stream_latency.py         # 状态流延迟
 ```
 
 ---
@@ -209,9 +256,28 @@ dotnet publish src/NotifyHub/NotifyHub.csproj -c Release -o dist
 * 音乐控制依赖播放器是否向 Windows 上报 SMTC（Folia、网易云、QQ音乐、Spotify 等主流播放器均支持）。
 * WPF 不支持 IL 裁剪，单文件体积主要由 .NET 运行时 + WPF + WinRT 组成，已开启单文件压缩。
 * 便携版不写注册表；「开机自启」是可选功能，默认关闭。
+* 单次 `--island` 命令仍有约 270ms 启动开销（.NET 运行时 + WPF 初始化），
+  这是"一次进程启动"的固有成本；需要 <100ms 时应改用 `--island-stream` 长连接。
+* 吸附位置不写盘：自由模式的吸附是**临时视觉状态**，配置里只保存用户亲手拖到的落点，
+  这样重启后不会"一开机就贴在边上"。
 
 ---
 
 ## 八、版本
+
+**v0.2** — 灵动岛重构 + 拖拽/吸附 + 日志合并
+
+* 灵动岛动效重做：弹出/收起改为「淡入 + 落位」单段动画，加动画令牌防止新旧动画互相拉扯（去粘连）
+* 灵动岛只保留**一行**状态文字，完成态显示绿勾 + 完成文案
+* **修复自由模式拖不动**：拖拽链路下沉到 Win32 消息（`WM_MOUSEACTIVATE` 回 `MA_NOACTIVATE`、
+  `WM_LBUTTONDOWN/RBUTTONDOWN` + `SetCapture` + `SetWindowPos`），左键/右键均可拖，按钮区域自动让位
+* 新增**四边吸附**：10 秒无交互滑到最近边（留 8px 缝），鼠标移入滑出 48px，移开重新计时（240ms ease-out）
+* 新增 `--island-stream`：命名管道长连接 + 多行读取，连续状态更新延迟 <100ms（实测 0.12ms/行）
+* 灵动岛快路径：`--island/--island-done/--media` 抢在日志/配置/声音初始化之前处理，单次命令 400ms → 270ms
+* 取消独立控制台窗口，日志并入设置页「运行日志」标签页（深色日志框 + 级别着色 + 自动滚动 + 事件列表）
+* 修复所有悬浮组件「阴影被窗口矩形裁成灰白硬边方框」：阴影收紧到 blur 12 / depth 2，留白加到 14px
+* 阴影留白区鼠标穿透（`WM_NCHITTEST` → `HTTRANSPARENT`），不再挡住下层窗口
+* 修复设置页「拦截关键词」与说明文字重叠
+* 设置页按钮行固定在底部，不再随内容滚出视野
 
 **v0.1** — 首个公开版本（通知聚合 + 深色通知 UI + 灵动岛/音乐栏 + 控制台 + 两套提示音 + 微信过滤 + 便携包）。

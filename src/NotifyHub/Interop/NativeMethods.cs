@@ -60,6 +60,40 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetCursorPos(out POINT point);
 
+    // ---- 悬浮窗口拖拽 / 吸附所需（分层窗口不能用 WPF 的 DragMove） ----
+
+    public const int WM_NCHITTEST = 0x0084;
+    public const int WM_MOUSEACTIVATE = 0x0021;
+    public const int WM_MOUSEMOVE = 0x0200;
+    public const int WM_LBUTTONDOWN = 0x0201;
+    public const int WM_LBUTTONUP = 0x0202;
+    public const int WM_RBUTTONDOWN = 0x0204;
+    public const int WM_RBUTTONUP = 0x0205;
+
+    public const int HTTRANSPARENT = -1;
+
+    /// <summary>WM_MOUSEACTIVATE 返回值：不激活窗口，且把这条点击继续投递给窗口。</summary>
+    public const int MA_NOACTIVATE = 3;
+
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOZORDER = 0x0004;
+    public const uint SWP_NOACTIVATE = 0x0010;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetCapture(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool ReleaseCapture();
+
+    /// <summary>把窗口移到屏幕坐标（像素），尺寸/层级不变且不激活。</summary>
+    public static void MoveWindowTo(IntPtr hWnd, int x, int y)
+        => SetWindowPos(hWnd, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
     public const int SW_RESTORE = 9;
     public const int SW_SHOWNOACTIVATE = 4;
 

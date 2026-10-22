@@ -27,7 +27,6 @@ public partial class App : Application
     private NotificationManager? _notifications;
     private IslandController? _islandController;
     private SoundService? _sound;
-    private ConsoleWindow? _console;
     private SettingsWindow? _settings;
     private MenuItem? _pauseMenuItem;
     private DispatcherTimer? _eventFlushTimer;
@@ -37,9 +36,19 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        var options = CommandLineOptions.Parse(e.Args);
+
+        // 灵动岛 / 媒体转发是最热的一条路径（AI 每推进一步都会调），
+        // 必须抢在日志初始化、配置读取、声音子系统之前处理掉：
+        // 这些初始化对"只发一行状态就退出"的进程纯属浪费，实测能省掉一大截启动时间。
+        if (options.Mode is AppMode.Island or AppMode.IslandDone or AppMode.Media or AppMode.IslandStream)
+        {
+            RunIslandFastPath(options);
+            return;
+        }
+
         base.OnStartup(e);
 
-        var options = CommandLineOptions.Parse(e.Args);
         var log = LogService.Shared;
         log.Initialize();
         _sound = new SoundService(log);
@@ -53,17 +62,19 @@ public partial class App : Application
         {
             case AppMode.Help:
                 ConsoleBridge.TryAttach();
-                ConsoleBridge.WriteLine("NotifyHub 0.1 — 桌面消息聚合通知 · 灵动岛 · 音乐控制");
+                ConsoleBridge.WriteLine("NotifyHub 0.2 — 桌面消息聚合通知 · 灵动岛 · 音乐控制");
                 ConsoleBridge.WriteLine("  NotifyHub.exe            托盘常驻运行");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --selftest 无界面逻辑自检（退出码 0=通过）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --selftest-ui 通知层自检（不抢焦点/堆叠/位置）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --demo     弹出 6 条演示通知（14 秒后退出）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --dump     导出微信/QQ 的 UIA 树后退出");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --locate 名字  激活微信并搜索定位到该聊天（验证定位链路）");
-                ConsoleBridge.WriteLine("  NotifyHub.exe --island 文本      唤起灵动岛任务状态条（执行中）");
-                ConsoleBridge.WriteLine("  NotifyHub.exe --island-done 文本 播放完成动画并响完成提示音");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --island 文本      灵动岛：显示一行执行中动作（转发给常驻实例）");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --island-done 文本 灵动岛：播放完成动画 + 完成提示音后收起");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --island-stream    从标准输入逐行读状态（长连接，更新延迟 <100ms）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --media toggle|play|pause|next|prev  控制当前播放器");
-                ConsoleBridge.WriteLine("  灵动岛：设置页可切换 固定顶部居中 / 自由拖动；播放音乐时显示快捷控制");
+                ConsoleBridge.WriteLine("  灵动岛：设置页可切换 固定顶部居中 / 自由拖动（左/右键拖空白区，10 秒无交互自动吸附四边）");
+                ConsoleBridge.WriteLine("  日志：设置页「运行日志」栏（原独立控制台已合并进来）");
                 Shutdown();
                 return;
 
@@ -101,25 +112,11 @@ public partial class App : Application
                 return;
             }
 
-            case AppMode.Media when options.MediaAction is not null:
-            {
-                // 媒体控制：转发给常驻实例（独立运行时无监控器可控制，报错退出）
-                if (IslandIpc.TryForwardMedia(options.MediaAction, log))
-                {
-                    Shutdown();
-                    return;
-                }
-
-                ConsoleBridge.TryAttach();
-                ConsoleBridge.WriteLine("MEDIA FAIL（NotifyHub 常驻实例未运行）");
-                Environment.Exit(1);
-                return;
-            }
-
             case AppMode.Settings:
             {
                 // 只开设置窗口（不启动监听、不留托盘），用于排版检查；
-                // 2 秒后用 RenderTargetBitmap 自渲染成 PNG——不依赖屏幕截屏，无遮挡问题
+                // 用 RenderTargetBitmap 自渲染成 PNG——不依赖屏幕截屏，也没遮挡问题。
+                // 两个 Tab 各截一张（设置 / 运行日志）。
                 var configService = new ConfigService(log);
                 configService.Load();
                 var notifications = new NotificationManager(log, () => configService.Current, _sound) { DemoMode = true };
@@ -131,121 +128,24 @@ public partial class App : Application
                 captureTimer.Tick += (_, _) =>
                 {
                     captureTimer.Stop();
-                    try
-                    {
-                        var dpi = PresentationSource.FromVisual(settings)?.CompositionTarget?.TransformFromDevice
-                                  ?? Matrix.Identity;
-                        var width = (int)Math.Ceiling(settings.ActualWidth * dpi.M11);
-                        var height = (int)Math.Ceiling(settings.ActualHeight * dpi.M22);
-                        var rtb = new RenderTargetBitmap(width, height, 96 * dpi.M11, 96 * dpi.M22, PixelFormats.Pbgra32);
-                        rtb.Render(settings);
+                    CaptureWindow(settings, "settings-capture.png", log);
 
-                        var encoder = new PngBitmapEncoder();
-                        encoder.Frames.Add(BitmapFrame.Create(rtb));
-                        var path = Path.Combine(AppPaths.Root, "settings-capture.png");
-                        using var stream = File.Create(path);
-                        encoder.Save(stream);
-                        log.Info("Settings", "设置窗口渲染完成", path);
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Error("Settings", "设置窗口渲染失败", $"{ex.GetType().Name}: {ex.Message}");
-                    }
+                    settings.Tabs.SelectedIndex = 1;
+                    settings.UpdateLayout();
 
-                    Shutdown();
+                    var second = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+                    second.Tick += (_, _) =>
+                    {
+                        second.Stop();
+                        CaptureWindow(settings, "settings-logs.png", log);
+                        Shutdown();
+                    };
+                    second.Start();
                 };
                 captureTimer.Start();
                 return;
             }
 
-            case AppMode.Console:
-            {
-                // 只开控制台窗口（不启动监听、不留托盘），2 秒后自渲染成 PNG 用于排版检查
-                var configService = new ConfigService(log);
-                configService.Load();
-                var notifications = new NotificationManager(log, () => configService.Current, _sound) { DemoMode = true };
-                var monitor = new MonitorController(log, configService);
-                var console = new ConsoleWindow(log, configService, monitor, notifications, _sound!, ShowSettings);
-                console.Show();
-
-                var captureTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
-                captureTimer.Tick += (_, _) =>
-                {
-                    captureTimer.Stop();
-                    try
-                    {
-                        var dpi = PresentationSource.FromVisual(console)?.CompositionTarget?.TransformFromDevice
-                                  ?? Matrix.Identity;
-                        var width = (int)Math.Ceiling(console.ActualWidth * dpi.M11);
-                        var height = (int)Math.Ceiling(console.ActualHeight * dpi.M22);
-                        var rtb = new RenderTargetBitmap(width, height, 96 * dpi.M11, 96 * dpi.M22, PixelFormats.Pbgra32);
-                        rtb.Render(console);
-
-                        var encoder = new PngBitmapEncoder();
-                        encoder.Frames.Add(BitmapFrame.Create(rtb));
-                        var path = Path.Combine(AppPaths.Root, "console-capture.png");
-                        using var stream = File.Create(path);
-                        encoder.Save(stream);
-                        log.Info("Console", "控制台渲染完成", path);
-                    }
-                    catch (Exception ex)
-                    {
-                        log.Error("Console", "控制台渲染失败", $"{ex.GetType().Name}: {ex.Message}");
-                    }
-
-                    Shutdown();
-                };
-                captureTimer.Start();
-                return;
-            }
-
-            case AppMode.Island:
-            case AppMode.IslandDone:
-            {
-                // 灵动岛：转发给常驻实例；没有常驻实例时独立弹出、播完即退
-                var done = options.Mode == AppMode.IslandDone;
-                var text = options.IslandText ?? (done ? "任务完成" : "正在执行任务…");
-
-                if (IslandIpc.TryForward(text, done, log))
-                {
-                    Shutdown();
-                    return;
-                }
-
-                var island = new IslandWindow();
-                if (done)
-                {
-                    island.ShowDone(text);
-
-                    // 独立模式也要有完成提示音（读用户配置里的开关与音量）
-                    try
-                    {
-                        var standaloneConfig = new ConfigService(log);
-                        standaloneConfig.Load();
-                        _sound?.PlayTaskDone(standaloneConfig.Current);
-                    }
-                    catch
-                    {
-                        // 提示音失败不影响展示
-                    }
-                }
-                else
-                {
-                    island.ShowRunning(text);
-                }
-
-                var standaloneTimer = new DispatcherTimer
-                {
-                    Interval = done ? TimeSpan.FromSeconds(4) : TimeSpan.FromSeconds(8),
-                };
-                standaloneTimer.Tick += (_, _) =>
-                {
-                    standaloneTimer.Stop();
-                    Shutdown();
-                };
-                standaloneTimer.Start();
-                return;
-            }
         }
 
         _mutex = new Mutex(true, @"Local\NotifyHub.SingleInstance", out var createdNew);
@@ -304,6 +204,131 @@ public partial class App : Application
         log.Info("App", "NotifyHub 已启动（托盘常驻）");
     }
 
+    /// <summary>把窗口当前外观自渲染成 PNG（排版验证用，不依赖屏幕截屏）。</summary>
+    private static void CaptureWindow(Window window, string fileName, LogService log)
+    {
+        try
+        {
+            var dpi = PresentationSource.FromVisual(window)?.CompositionTarget?.TransformFromDevice
+                      ?? Matrix.Identity;
+            var width = (int)Math.Ceiling(window.ActualWidth * dpi.M11);
+            var height = (int)Math.Ceiling(window.ActualHeight * dpi.M22);
+
+            var rtb = new RenderTargetBitmap(width, height, 96 * dpi.M11, 96 * dpi.M22, PixelFormats.Pbgra32);
+            rtb.Render(window);
+
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(rtb));
+
+            var path = Path.Combine(AppPaths.Root, fileName);
+            using var stream = File.Create(path);
+            encoder.Save(stream);
+            log.Info("Settings", "窗口渲染完成", path);
+        }
+        catch (Exception ex)
+        {
+            log.Error("Settings", "窗口渲染失败", $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 灵动岛快路径：抢在日志初始化 / 配置读取 / 声音子系统之前处理，
+    /// 只做"连管道 → 写一行 → 退出"，把单次命令的进程内开销压到最低。
+    /// 常驻实例没起来时退化成独立弹出（播完即退）。
+    /// </summary>
+    private void RunIslandFastPath(CommandLineOptions options)
+    {
+        var log = LogService.Shared;
+
+        try
+        {
+            switch (options.Mode)
+            {
+                case AppMode.IslandStream:
+                {
+                    // 常驻状态流：标准输入逐行读，复用同一条管道长连接
+                    var forwarded = IslandIpc.RunStreamForwarder(log);
+                    ConsoleBridge.TryAttach();
+                    ConsoleBridge.WriteLine($"STREAM END（已转发 {forwarded} 条）");
+                    Shutdown();
+                    return;
+                }
+
+                case AppMode.Media when options.MediaAction is not null:
+                {
+                    if (!IslandIpc.TryForwardMedia(options.MediaAction, log))
+                    {
+                        ConsoleBridge.TryAttach();
+                        ConsoleBridge.WriteLine("MEDIA FAIL（NotifyHub 常驻实例未运行）");
+                        Environment.Exit(1);
+                        return;
+                    }
+
+                    Shutdown();
+                    return;
+                }
+
+                case AppMode.Island:
+                case AppMode.IslandDone:
+                {
+                    var done = options.Mode == AppMode.IslandDone;
+                    var text = options.IslandText ?? (done ? "完成" : "正在执行任务…");
+
+                    if (IslandIpc.TryForward(text, done, log))
+                    {
+                        Shutdown();
+                        return;
+                    }
+
+                    var island = new IslandWindow();
+
+                    if (done)
+                    {
+                        island.ShowDone(text);
+                    }
+                    else
+                    {
+                        island.ShowRunning(text);
+                    }
+
+                    // 独立模式也要有完成提示音（读用户配置里的开关与音量）
+                    if (done)
+                    {
+                        try
+                        {
+                            var standalone = new ConfigService(log);
+                            standalone.Load();
+                            using var sound = new SoundService(log);
+                            sound.PlayTaskDone(standalone.Current);
+                        }
+                        catch
+                        {
+                            // 提示音失败不影响展示
+                        }
+                    }
+
+                    var timer = new DispatcherTimer
+                    {
+                        Interval = done ? TimeSpan.FromSeconds(4) : TimeSpan.FromSeconds(8),
+                    };
+                    timer.Tick += (_, _) =>
+                    {
+                        timer.Stop();
+                        Shutdown();
+                    };
+                    timer.Start();
+                    return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            log.Error("App", "灵动岛快路径失败", $"{ex.GetType().Name}: {ex.Message}");
+        }
+
+        Shutdown();
+    }
+
     protected override void OnExit(ExitEventArgs e)
     {
         _shuttingDown = true;
@@ -311,7 +336,6 @@ public partial class App : Application
         _notifications?.Clear();
         _monitor?.Dispose();
         _islandController?.Dispose();
-        _console?.Close();
         _sound?.Dispose();
         LogService.Shared.FlushIfDirty();
 
@@ -348,11 +372,8 @@ public partial class App : Application
         var log = LogService.Shared;
         var menu = new ContextMenu();
 
-        var settingsItem = new MenuItem { Header = "设置(_S)…" };
+        var settingsItem = new MenuItem { Header = "设置 / 日志(_S)…" };
         settingsItem.Click += (_, _) => ShowSettings();
-
-        var consoleItem = new MenuItem { Header = "控制台(_C)…" };
-        consoleItem.Click += (_, _) => ShowConsole();
 
         _pauseMenuItem = new MenuItem { Header = "暂停监听", IsCheckable = true };
         _pauseMenuItem.Click += (_, _) => TogglePause(_pauseMenuItem.IsChecked);
@@ -370,7 +391,6 @@ public partial class App : Application
         var exitItem = new MenuItem { Header = "退出" };
         exitItem.Click += (_, _) => Shutdown();
 
-        menu.Items.Add(consoleItem);
         menu.Items.Add(settingsItem);
         menu.Items.Add(_pauseMenuItem);
         menu.Items.Add(new Separator());
@@ -387,7 +407,8 @@ public partial class App : Application
             MenuActivation = PopupActivationMode.RightClick,
         };
 
-        _tray.TrayMouseDoubleClick += (_, _) => ShowConsole();
+        // 双击托盘直接开设置（日志也在这里），不再有独立控制台窗口
+        _tray.TrayMouseDoubleClick += (_, _) => ShowSettings();
 
         log.Info("App", "托盘图标已创建");
     }
@@ -408,26 +429,6 @@ public partial class App : Application
         {
             _pauseMenuItem.IsChecked = paused;
         }
-    }
-
-    /// <summary>打开紧凑控制台（托盘双击/菜单入口）。</summary>
-    private void ShowConsole()
-    {
-        if (_configService is null || _monitor is null || _notifications is null || _sound is null)
-        {
-            return;
-        }
-
-        if (_console is not null)
-        {
-            _console.Activate();
-            return;
-        }
-
-        _console = new ConsoleWindow(LogService.Shared, _configService, _monitor, _notifications, _sound, ShowSettings);
-
-        _console.Closed += (_, _) => _console = null;
-        _console.Show();
     }
 
     private void ShowSettings()

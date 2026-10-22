@@ -10,7 +10,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "release")
-VER = "v0.1"
+VER = "v0.2"
 
 
 def add_tree(zf, src_dir, arc_prefix, skip_dirs=()):

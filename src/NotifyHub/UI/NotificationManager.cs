@@ -12,11 +12,14 @@ namespace NotifyHub.UI;
 /// </summary>
 public sealed class NotificationManager
 {
-    public const double CardWidth = 380;
+    /// <summary>窗口宽度（含左右阴影留白 14+14，卡片本体 356）。</summary>
+    public const double CardWidth = 384;
+
+    /// <summary>卡片视觉高度（不含阴影留白），决定纵向堆叠步进。</summary>
     public const double CardHeight = 110;
 
     private const double Gap = 8;
-    private const double EdgeMargin = 12;
+    private const double EdgeMargin = 8;
     private static readonly TimeSpan PopInterval = TimeSpan.FromMilliseconds(320);
 
     private readonly List<NotificationWindow> _windows = new();

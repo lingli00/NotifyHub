@@ -12,7 +12,7 @@ public enum AppMode
     IslandDone,
     Media,
     Settings,
-    Console,
+    IslandStream,
     Help,
 }
 
@@ -59,9 +59,9 @@ public sealed record CommandLineOptions(
                 case "--settings":
                     // --settings：仅打开设置窗口（排版验证/人工检查用，不启动监听）
                     return new CommandLineOptions(AppMode.Settings, 0);
-                case "--console":
-                    // --console：仅打开控制台窗口并自渲染截图（排版验证用，不启动监听）
-                    return new CommandLineOptions(AppMode.Console, 0);
+                case "--island-stream":
+                    // --island-stream：从标准输入逐行读状态并转发（长连接，更新延迟 <100ms）
+                    return new CommandLineOptions(AppMode.IslandStream, 0);
                 case "--help":
                 case "-h":
                 case "/?":

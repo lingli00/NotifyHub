@@ -1,8 +1,8 @@
 <Window x:Class="NotifyHub.UI.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="NotifyHub 设置" Height="660" Width="880"
-        MinHeight="520" MinWidth="780"
+        Title="NotifyHub 设置" Height="760" Width="900"
+        MinHeight="620" MinWidth="820"
         WindowStartupLocation="CenterScreen"
         Background="#F5F6F8"
         FontFamily="Microsoft YaHei UI, Segoe UI"
@@ -54,6 +54,27 @@
             <Setter Property="SmallChange" Value="5" />
             <Setter Property="LargeChange" Value="10" />
         </Style>
+        <Style TargetType="TabItem">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="18,6" />
+        </Style>
+
+        <!--  日志行：零缩进、行高统一、去掉选中高亮（只读，不需要选择）  -->
+        <Style x:Key="LogItem" TargetType="ListBoxItem">
+            <Setter Property="Padding" Value="9,1" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="16,12,16,10">
@@ -61,212 +82,266 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,10">
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
             <TextBlock Text="NotifyHub" FontSize="19" FontWeight="SemiBold" Foreground="#1F2937" VerticalAlignment="Center" />
             <TextBlock Text="桌面消息聚合 · 微信 / QQ / ntfy · 灵动岛" FontSize="12" Foreground="#8A8F98"
                        VerticalAlignment="Center" Margin="10,2,0,0" />
         </StackPanel>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <StackPanel>
+        <TabControl Grid.Row="1" x:Name="Tabs" Background="Transparent" BorderThickness="0">
 
-                <!--  ntfy 订阅  -->
-                <GroupBox Header="ntfy 订阅">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
+            <!--  ================= 设置  =================  -->
+            <TabItem Header="设置">
+                <ScrollViewer x:Name="MainScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="0,8,0,0">
+
+                        <!--  ntfy 订阅  -->
+                        <GroupBox Header="ntfy 订阅">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="订阅地址" Margin="0,0,10,0" />
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="NtfyUrlBox" Height="28" />
+
+                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                            Orientation="Horizontal" Margin="0,8,0,0">
+                                    <CheckBox x:Name="NtfyEnabledCheck" Content="启用 ntfy 订阅" />
+                                    <TextBlock Style="{StaticResource HintText}"
+                                               Text="填 https://ntfy.sh/你的主题 即可，程序会自动补 /sse" />
+                                </StackPanel>
+                            </Grid>
+                        </GroupBox>
+
+                        <!--  监听与显示  -->
+                        <GroupBox Header="监听与显示">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                        <CheckBox x:Name="WeChatCheck" Content="监听微信" />
+                                        <CheckBox x:Name="QQCheck" Content="监听 QQ" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                HorizontalAlignment="Right" VerticalAlignment="Center">
+                                        <TextBlock Text="轮询间隔" Margin="0,0,6,0" />
+                                        <TextBox x:Name="IntervalBox" Width="64" Height="26" Margin="0,0,4,0" TextAlignment="Right" />
+                                        <TextBlock Text="ms" Margin="0,0,14,0" Foreground="#8A8F98" />
+                                        <TextBlock Text="通知时长" Margin="0,0,6,0" />
+                                        <TextBox x:Name="DurationBox" Width="64" Height="26" Margin="0,0,4,0" TextAlignment="Right" />
+                                        <TextBlock Text="ms" Foreground="#8A8F98" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid Grid.Row="1" Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="70" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Column="0" Text="通知位置" Margin="0,0,10,0" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                        <ComboBox x:Name="CornerCombo" Width="120" Height="26" FontSize="12.5" SelectedIndex="0">
+                                            <ComboBoxItem Content="右上角" />
+                                            <ComboBoxItem Content="左上角" />
+                                            <ComboBoxItem Content="右下角" />
+                                            <ComboBoxItem Content="左下角" />
+                                        </ComboBox>
+                                        <TextBlock Style="{StaticResource HintText}" Margin="12,0,0,0"
+                                                   Text="轮询间隔 300~2000ms，默认 300ms；通知时长 1000~30000ms" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <CheckBox x:Name="AutoStartCheck" Content="开机自启" />
+                                    <CheckBox x:Name="DumpOnStartCheck" Content="启动时导出 UIA 树（探测模式）" />
+                                    <TextBlock Style="{StaticResource HintText}"
+                                               Text="堆叠上限固定 5 条；鼠标悬停暂停倒计时；点击通知跳转聊天" />
+                                </StackPanel>
+                            </Grid>
+                        </GroupBox>
+
+                        <!--  灵动岛  -->
+                        <GroupBox Header="灵动岛">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="70" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <TextBlock Grid.Column="0" Text="位置模式" Margin="0,0,10,0" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                        <RadioButton x:Name="IslandFixedRadio" Content="固定在顶部居中（不可拖动）"
+                                                     GroupName="IslandMode" IsChecked="True" />
+                                        <RadioButton x:Name="IslandFreeRadio" Content="自由拖动（按住空白区拖动，左键/右键均可）"
+                                                     GroupName="IslandMode" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <CheckBox x:Name="MusicEnabledCheck" Content="音乐控制模块" />
+                                    <TextBlock Style="{StaticResource HintText}"
+                                               Text="播放音乐时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏；全屏观影/游戏时整岛隐藏" />
+                                </StackPanel>
+
+                                <TextBlock Grid.Row="2" Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="自由模式下 10 秒无交互会自动吸附到最近的一条屏幕边（上下左右都算），贴边留一条缝隙；鼠标移到条上会自动滑出，移开后重新计时。" />
+                            </Grid>
+                        </GroupBox>
+
+                        <!--  两套独立提示音  -->
+                        <GroupBox Header="提示音（两套互相独立）">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <StackPanel Grid.Row="0" Orientation="Horizontal">
+                                    <CheckBox x:Name="MessageSoundCheck" Content="消息通知提示音" Width="128" />
+                                    <TextBlock Text="音量" Margin="4,0,6,0" />
+                                    <Slider x:Name="MessageVolumeSlider" Value="80" ValueChanged="OnMessageVolumeChanged" />
+                                    <TextBlock x:Name="MessageVolumeText" Margin="8,0,0,0" Width="34" Foreground="#8A8F98" Text="80%" />
+                                    <TextBlock Style="{StaticResource HintText}" Margin="10,0,0,0"
+                                               Text="仅放行的聊天消息播放，被过滤的消息不发声" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <CheckBox x:Name="TaskSoundCheck" Content="任务完成提示音" Width="128" />
+                                    <TextBlock Text="音量" Margin="4,0,6,0" />
+                                    <Slider x:Name="TaskVolumeSlider" Value="80" ValueChanged="OnTaskVolumeChanged" />
+                                    <TextBlock x:Name="TaskVolumeText" Margin="8,0,0,0" Width="34" Foreground="#8A8F98" Text="80%" />
+                                    <TextBlock Style="{StaticResource HintText}" Margin="10,0,0,0"
+                                               Text="WorkBuddy 任务完成态出现时播放，与消息提示音开关独立" />
+                                </StackPanel>
+                            </Grid>
+                        </GroupBox>
+
+                        <!--  微信过滤  -->
+                        <GroupBox Header="微信通知过滤">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="70" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <CheckBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
+                                          x:Name="WeChatFilterCheck" Content="启用过滤（只推好友私聊与未免打扰群）" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="拦截关键词" Margin="0,8,10,0" />
+                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="FilterKeywordsBox" Height="28" Margin="0,8,0,0" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
+                                           Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="公众号、服务通知、广告营销、以及所有“消息免打扰”会话（含回看历史消息）全部拦截；关键词用逗号分隔，命中会话名或摘要即拦截。QQ 不过滤。" />
+                            </Grid>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!--  ================= 运行日志（原独立控制台已合并到这里）  =================  -->
+            <TabItem Header="运行日志">
+                <Grid Margin="0,10,0,4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="150" />
+                    </Grid.RowDefinitions>
+
+                    <!--  工具条  -->
+                    <Grid Grid.Row="0" Margin="0,0,0,7">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="70" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="订阅地址" Margin="0,0,10,0" />
-                        <TextBox Grid.Row="0" Grid.Column="1" x:Name="NtfyUrlBox" Height="28" />
-
-                        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
-                                    Orientation="Horizontal" Margin="0,8,0,0">
-                            <CheckBox x:Name="NtfyEnabledCheck" Content="启用 ntfy 订阅" />
-                            <TextBlock Style="{StaticResource HintText}"
-                                       Text="填 https://ntfy.sh/你的主题 即可，程序会自动补 /sse" />
+                        <TextBlock Grid.Column="0" x:Name="LogStatusText" Style="{StaticResource HintText}"
+                                   TextTrimming="CharacterEllipsis" Text="最近 600 行 · 自动滚到底" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <CheckBox x:Name="AutoScrollCheck" Content="自动滚动" IsChecked="True"
+                                      Margin="0,0,10,0" FontSize="11.5" />
+                            <Button Content="清空日志" Click="OnClearLogInlineClick" MinWidth="76"
+                                    Padding="10,3" FontSize="11.5" Margin="0"
+                                    Background="#FEE2E2" Foreground="#B91C1C" BorderBrush="#FCA5A5" />
                         </StackPanel>
                     </Grid>
-                </GroupBox>
 
-                <!--  监听与显示  -->
-                <GroupBox Header="监听与显示">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
+                    <!--  详细日志：等宽字体、按级别着色、只读  -->
+                    <Border Grid.Row="1" CornerRadius="8" Background="#FF121215"
+                            BorderBrush="#1EFFFFFF" BorderThickness="1">
+                        <ListBox x:Name="LogList" Background="Transparent" BorderThickness="0"
+                                 ItemContainerStyle="{StaticResource LogItem}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas, Cascadia Mono, Courier New"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling" />
+                    </Border>
 
-                        <Grid Grid.Row="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Row="2" Text="最近 50 条事件" FontWeight="SemiBold" Margin="2,10,0,5" />
 
-                            <StackPanel Grid.Column="0" Orientation="Horizontal">
-                                <CheckBox x:Name="WeChatCheck" Content="监听微信" />
-                                <CheckBox x:Name="QQCheck" Content="监听 QQ" />
-                            </StackPanel>
-
-                            <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                        HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <TextBlock Text="轮询间隔" Margin="0,0,6,0" />
-                                <TextBox x:Name="IntervalBox" Width="64" Height="26" Margin="0,0,4,0" TextAlignment="Right" />
-                                <TextBlock Text="ms" Margin="0,0,14,0" Foreground="#8A8F98" />
-                                <TextBlock Text="通知时长" Margin="0,0,6,0" />
-                                <TextBox x:Name="DurationBox" Width="64" Height="26" Margin="0,0,4,0" TextAlignment="Right" />
-                                <TextBlock Text="ms" Foreground="#8A8F98" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Grid Grid.Row="1" Margin="0,8,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="70" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0" Text="通知位置" Margin="0,0,10,0" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <ComboBox x:Name="CornerCombo" Width="120" Height="26" FontSize="12.5" SelectedIndex="0">
-                                    <ComboBoxItem Content="右上角" />
-                                    <ComboBoxItem Content="左上角" />
-                                    <ComboBoxItem Content="右下角" />
-                                    <ComboBoxItem Content="左下角" />
-                                </ComboBox>
-                                <TextBlock Style="{StaticResource HintText}" Margin="12,0,0,0"
-                                           Text="轮询间隔 300~2000ms，默认 300ms；通知时长 1000~30000ms" />
-                            </StackPanel>
-                        </Grid>
-
-                        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
-                            <CheckBox x:Name="AutoStartCheck" Content="开机自启" />
-                            <CheckBox x:Name="DumpOnStartCheck" Content="启动时导出 UIA 树（探测模式）" />
-                            <TextBlock Style="{StaticResource HintText}"
-                                       Text="堆叠上限固定 5 条；鼠标悬停暂停倒计时；点击通知跳转聊天" />
-                        </StackPanel>
-                    </Grid>
-                </GroupBox>
-
-                <!--  灵动岛  -->
-                <GroupBox Header="灵动岛">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-
-                        <Grid Grid.Row="0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="70" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <TextBlock Grid.Column="0" Text="位置模式" Margin="0,0,10,0" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                                <RadioButton x:Name="IslandFixedRadio" Content="固定在顶部居中（不可拖动）"
-                                             GroupName="IslandMode" IsChecked="True" />
-                                <RadioButton x:Name="IslandFreeRadio" Content="自由拖动（贴边吸附、位置自动保存）"
-                                             GroupName="IslandMode" />
-                            </StackPanel>
-                        </Grid>
-
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
-                            <CheckBox x:Name="MusicEnabledCheck" Content="音乐控制模块" />
-                            <TextBlock Style="{StaticResource HintText}"
-                                       Text="播放音乐时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏；全屏观影/游戏时整岛隐藏" />
-                        </StackPanel>
-                    </Grid>
-                </GroupBox>
-
-                <!--  两套独立提示音  -->
-                <GroupBox Header="提示音（两套互相独立）">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-
-                        <StackPanel Grid.Row="0" Orientation="Horizontal">
-                            <CheckBox x:Name="MessageSoundCheck" Content="消息通知提示音" Width="128" />
-                            <TextBlock Text="音量" Margin="4,0,6,0" />
-                            <Slider x:Name="MessageVolumeSlider" Value="80" ValueChanged="OnMessageVolumeChanged" />
-                            <TextBlock x:Name="MessageVolumeText" Margin="8,0,0,0" Width="34" Foreground="#8A8F98" Text="80%" />
-                            <TextBlock Style="{StaticResource HintText}" Margin="10,0,0,0"
-                                       Text="仅放行的聊天消息播放，被过滤的消息不发声" />
-                        </StackPanel>
-
-                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
-                            <CheckBox x:Name="TaskSoundCheck" Content="任务完成提示音" Width="128" />
-                            <TextBlock Text="音量" Margin="4,0,6,0" />
-                            <Slider x:Name="TaskVolumeSlider" Value="80" ValueChanged="OnTaskVolumeChanged" />
-                            <TextBlock x:Name="TaskVolumeText" Margin="8,0,0,0" Width="34" Foreground="#8A8F98" Text="80%" />
-                            <TextBlock Style="{StaticResource HintText}" Margin="10,0,0,0"
-                                       Text="WorkBuddy 任务完成态出现时播放，与消息提示音开关独立" />
-                        </StackPanel>
-                    </Grid>
-                </GroupBox>
-
-                <!--  微信过滤  -->
-                <GroupBox Header="微信通知过滤">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="70" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <CheckBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
-                                  x:Name="WeChatFilterCheck" Content="启用过滤（只推好友私聊与未免打扰群）" />
-
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="拦截关键词" Margin="0,8,10,0" />
-                        <TextBox Grid.Row="1" Grid.Column="1" x:Name="FilterKeywordsBox" Height="28" Margin="0,8,0,0" />
-
-                        <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
-                                   Margin="0,6,0,0" TextWrapping="Wrap"
-                                   Text="公众号、服务通知、广告营销、以及所有“消息免打扰”会话（含回看历史消息）全部拦截；关键词用逗号分隔，命中会话名或摘要即拦截。QQ 不过滤。" />
-                    </Grid>
-                </GroupBox>
-
-                <!--  事件列表  -->
-                <GroupBox Header="最近 50 条事件">
-                    <ListView x:Name="EventList" Height="150" BorderThickness="0" FontSize="12"
+                    <ListView Grid.Row="3" x:Name="EventList" BorderThickness="1" BorderBrush="#DDE1E6"
+                              Background="White" FontSize="12"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListView.View>
                             <GridView>
                                 <GridViewColumn Header="时间" Width="74" DisplayMemberBinding="{Binding TimeText}" />
                                 <GridViewColumn Header="来源" Width="52" DisplayMemberBinding="{Binding Source}" />
                                 <GridViewColumn Header="发件人" Width="140" DisplayMemberBinding="{Binding Sender}" />
-                                <GridViewColumn Header="内容" Width="360" DisplayMemberBinding="{Binding Content}" />
+                                <GridViewColumn Header="内容" Width="400" DisplayMemberBinding="{Binding Content}" />
                                 <GridViewColumn Header="状态" Width="56" DisplayMemberBinding="{Binding StatusText}" />
                             </GridView>
                         </ListView.View>
                     </ListView>
-                </GroupBox>
+                </Grid>
+            </TabItem>
+        </TabControl>
 
-                <!--  操作按钮  -->
-                <StackPanel Orientation="Horizontal" Margin="0,2,0,6">
-                    <Button x:Name="SaveButton" Content="保存并应用" Click="OnSaveClick" Background="#2563EB" Foreground="White" BorderBrush="#1D4ED8" />
-                    <Button Content="取消" Click="OnCancelClick" />
-                    <Button x:Name="TestButton" Content="测试通知" Click="OnTestClick" />
-                    <Button x:Name="DumpButton" Content="导出 UIA 树" Click="OnDumpClick" />
-                    <Button Content="打开日志目录" Click="OnOpenLogClick" />
-                    <Button x:Name="ClearLogsButton" Content="一键清除日志" Click="OnClearLogsClick"
-                            Background="#FEE2E2" Foreground="#B91C1C" BorderBrush="#FCA5A5" />
-                </StackPanel>
-            </StackPanel>
-        </ScrollViewer>
+        <!--  操作按钮固定在底部：内容区滚动时不会把"保存"滚出视野  -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,6,0,0">
+            <Button x:Name="SaveButton" Content="保存并应用" Click="OnSaveClick" Background="#2563EB" Foreground="White" BorderBrush="#1D4ED8" />
+            <Button Content="取消" Click="OnCancelClick" />
+            <Button x:Name="TestButton" Content="测试通知" Click="OnTestClick" />
+            <Button x:Name="DumpButton" Content="导出 UIA 树" Click="OnDumpClick" />
+            <Button Content="打开日志目录" Click="OnOpenLogClick" />
+            <Button x:Name="ClearLogsButton" Content="一键清除日志" Click="OnClearLogsClick"
+                    Background="#FEE2E2" Foreground="#B91C1C" BorderBrush="#FCA5A5" />
+        </StackPanel>
 
-        <TextBlock Grid.Row="2" x:Name="StatusText" Foreground="#6B7280" Margin="2,6,0,0" TextWrapping="Wrap" />
+        <TextBlock Grid.Row="3" x:Name="StatusText" Foreground="#6B7280" Margin="2,6,0,0" TextWrapping="Wrap" />
     </Grid>
 </Window>

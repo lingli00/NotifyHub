@@ -72,6 +72,24 @@ public sealed class IslandController : IDisposable
 
         _ = _media.StartAsync();
 
+        // 预热灵动岛窗口（离屏建 HWND + 首帧渲染），
+        // 让第一条状态更新也能在 100ms 内上屏，而不是被窗口创建时间吃掉。
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(2500).ConfigureAwait(false);
+            _ = _dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    Island().WarmUp();
+                }
+                catch (Exception ex)
+                {
+                    _log.Warn("Island", "预热灵动岛失败", ex.Message);
+                }
+            }));
+        });
+
         _log.Info("Island", "灵动岛总控已启动（音乐监控 + 全屏检测 + 任务完成提示音）");
     }
 

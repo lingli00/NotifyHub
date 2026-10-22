@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using NotifyHub.Models;
 using NotifyHub.Services;
@@ -9,7 +11,8 @@ namespace NotifyHub.UI;
 
 /// <summary>
 /// 设置窗口：ntfy 地址、微信/QQ 开关、轮询间隔、通知时长与位置、灵动岛模式、
-/// 两套提示音开关与音量、微信过滤、最近事件，以及一键清除日志。
+/// 两套提示音开关与音量、微信过滤、运行日志、最近事件，以及一键清除日志。
+/// 原独立的"控制台窗口"已取消，详细日志并入这里的「运行日志」栏。
 /// </summary>
 public partial class SettingsWindow : Window
 {
@@ -20,6 +23,9 @@ public partial class SettingsWindow : Window
     private readonly MonitorController _monitor;
     private readonly NotificationManager _notifications;
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+
+    // 日志增量渲染锚点：ConsoleSnapshot 每次返回新 List，但元素是同一批实例，用引用比较判断
+    private ConsoleLine? _lastLogLine;
 
     public SettingsWindow(ConfigService config, LogService log, MonitorController monitor, NotificationManager notifications)
     {
@@ -32,8 +38,10 @@ public partial class SettingsWindow : Window
 
         LoadFromConfig();
         RefreshEvents();
+        RefreshLogs();
 
         _log.RecentChanged += OnRecentChanged;
+        _log.ConsoleChanged += OnConsoleChanged;
         _statusTimer.Tick += (_, _) => UpdateStatus();
         _statusTimer.Start();
         UpdateStatus();
@@ -41,6 +49,7 @@ public partial class SettingsWindow : Window
         Closed += (_, _) =>
         {
             _log.RecentChanged -= OnRecentChanged;
+            _log.ConsoleChanged -= OnConsoleChanged;
             _statusTimer.Stop();
         };
     }
@@ -235,23 +244,19 @@ public partial class SettingsWindow : Window
     /// <summary>一键清除全部日志（二次确认，只清日志，不删配置与去重记录）。</summary>
     private void OnClearLogsClick(object sender, RoutedEventArgs e)
     {
-        var result = MessageBox.Show(
-            this,
-            "确定清空全部本地日志？清除后无法恢复。\n\n将清空：控制台展示日志、会话抓取日志、消息历史缓存日志。\n不会删除：配置文件、消息去重 ID 缓存、所有设置参数。",
-            "清空全部日志",
-            MessageBoxButton.OKCancel,
-            MessageBoxImage.Warning);
-
-        if (result != MessageBoxResult.OK)
+        if (!ConfirmClearLogs())
         {
             return;
         }
 
         var (deleted, success) = _log.ClearAll();
+        _lastLogLine = null;
+        LogList.Items.Clear();
         RefreshEvents();
+        RefreshLogs();
         StatusText.Text = success
             ? $"日志已清空（删除 {deleted} 个文件）；配置与去重记录已保留。"
-            : $"日志已清空，但有 {deleted} 个文件删除失败（可能被占用）。";
+            : $"日志已清空，但有部分文件删除失败（可能被占用）。";
     }
 
     private void OnRecentChanged(object? sender, EventArgs e)
@@ -264,6 +269,160 @@ public partial class SettingsWindow : Window
 
         RefreshEvents();
     }
+
+    // ---------------- 运行日志（原控制台已合并到这里） ----------------
+
+    private void OnConsoleChanged(object? sender, EventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(new Action(RefreshLogs));
+            return;
+        }
+
+        RefreshLogs();
+    }
+
+    /// <summary>增量追加日志：只补新行，不重建整表（日志可能每秒十几条）。</summary>
+    private void RefreshLogs()
+    {
+        var lines = _log.ConsoleSnapshot();
+        var start = 0;
+
+        if (_lastLogLine is not null)
+        {
+            start = -1;
+
+            for (var i = lines.Count - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(lines[i], _lastLogLine))
+                {
+                    start = i + 1;
+                    break;
+                }
+            }
+
+            // 找不到锚点（日志被清空或环形缓冲滚过去了）→ 全量重建
+            if (start < 0)
+            {
+                start = 0;
+                LogList.Items.Clear();
+            }
+        }
+
+        for (var i = start; i < lines.Count; i++)
+        {
+            AppendLogLine(lines[i]);
+        }
+
+        while (LogList.Items.Count > LogService.MaxConsoleLines)
+        {
+            LogList.Items.RemoveAt(0);
+        }
+
+        if (lines.Count > 0)
+        {
+            _lastLogLine = lines[^1];
+        }
+
+        LogStatusText.Text = $"最近 {lines.Count} 条 · 文件：{AppPaths.LogDir}";
+
+        if (AutoScrollCheck.IsChecked == true && LogList.Items.Count > 0)
+        {
+            // 只滚日志框自己的 ScrollViewer：
+            // 用 LogList.ScrollIntoView 会连带把外层整页滚到底，用户一打开设置页就看不到顶部了
+            FindScrollViewer(LogList)?.ScrollToEnd();
+        }
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        if (root is ScrollViewer viewer)
+        {
+            return viewer;
+        }
+
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var found = FindScrollViewer(VisualTreeHelper.GetChild(root, i));
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private void AppendLogLine(ConsoleLine line)
+    {
+        var tag = line.Level switch
+        {
+            LogLevel.Debug => "DBG",
+            LogLevel.Info => "INF",
+            LogLevel.Success => "SUC",
+            LogLevel.Warn => "WRN",
+            LogLevel.Error => "ERR",
+            _ => "???",
+        };
+
+        var text = new TextBlock
+        {
+            Text = $"{line.Time:HH:mm:ss}  {tag}  {line.Text}",
+            FontFamily = new FontFamily("Consolas, Cascadia Mono, Courier New"),
+            FontSize = 12,
+            LineHeight = 19,
+            LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
+            TextWrapping = TextWrapping.NoWrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = LogBrush(line.Level),
+        };
+
+        LogList.Items.Add(new ListBoxItem
+        {
+            Content = text,
+            Padding = new Thickness(9, 1, 9, 1),
+            Background = Brushes.Transparent,
+            Focusable = false,
+        });
+    }
+
+    private static Brush LogBrush(LogLevel level) => level switch
+    {
+        LogLevel.Success => new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59)),
+        LogLevel.Warn => new SolidColorBrush(Color.FromRgb(0xFF, 0xD6, 0x0A)),
+        LogLevel.Error => new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x3A)),
+        LogLevel.Debug => new SolidColorBrush(Color.FromRgb(0x7A, 0x7A, 0x85)),
+        _ => new SolidColorBrush(Color.FromRgb(0xC9, 0xC9, 0xD1)),
+    };
+
+    /// <summary>日志栏里的"清空日志"（同样二次确认）。</summary>
+    private void OnClearLogInlineClick(object sender, RoutedEventArgs e)
+    {
+        if (!ConfirmClearLogs())
+        {
+            return;
+        }
+
+        var (deleted, success) = _log.ClearAll();
+        _lastLogLine = null;
+        LogList.Items.Clear();
+        RefreshEvents();
+        RefreshLogs();
+
+        StatusText.Text = success
+            ? $"日志已清空（删除 {deleted} 个文件）；配置与去重记录已保留。"
+            : $"日志已清空，但有部分文件删除失败（可能被占用）。";
+    }
+
+    private bool ConfirmClearLogs()
+        => MessageBox.Show(
+            this,
+            "确定清空全部本地日志？清除后无法恢复。\n\n将清空：运行日志、会话抓取日志、消息历史缓存日志。\n不会删除：配置文件、消息去重 ID 缓存、所有设置参数。",
+            "清空全部日志",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning) == MessageBoxResult.OK;
 
     private void RefreshEvents()
     {

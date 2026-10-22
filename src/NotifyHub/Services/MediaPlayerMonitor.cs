@@ -18,13 +18,61 @@ public sealed record MediaInfo(
 
 /// <summary>
 /// 音乐播放器监控：基于 Windows 系统媒体传输控制（SMTC）聚合所有播放器，
-/// 但只响应 <see cref="MusicAppWhitelist"/> 白名单内的进程——
+/// 但只响应内置音乐 App 名单内的进程——
 /// 浏览器（chrome/edge/firefox/brave…）刷视频/直播同样会上报媒体会话，
-/// 不过白名单就会被忽略，不会再误弹音乐控制栏（需求 6）。
+/// 不在名单内就会被忽略，不会再误弹音乐控制栏（需求 6）。
+/// v0.2.4：名单改为内置固定（需求 6 删除用户可配白名单），不再暴露配置入口。
 /// 读取播放状态并暴露 播放/暂停/上一首/下一首 控制；断续器事件推送给灵动岛。
 /// </summary>
 public sealed class MediaPlayerMonitor : IDisposable
 {
+    /// <summary>
+    /// 内置音乐 App 名单（进程名关键词，小写包含匹配，不区分 .exe）。
+    /// 覆盖用户点名要求的：QQ音乐、酷狗、网易云、酷我、咪咕、foobar2000、FOLIA；
+    /// 另附常见播放器。用户机器上 FOLIA 的进程名已实测确认为 Folia.exe。
+    /// </summary>
+    public static readonly string[] MusicApps =
+    {
+        // 用户点名
+        "qqmusic",      // QQ音乐（QQMusic.exe）
+        "kugou",        // 酷狗音乐（KuGou.exe）
+        "cloudmusic",   // 网易云音乐（cloudmusic.exe）
+        "kuwo",         // 酷我音乐（kuwo.exe）
+        "migu",         // 咪咕音乐（MiguMusic.exe / migu.exe）
+        "foobar",       // foobar2000（foobar2000.exe）
+        "folia",        // FOLIA（Folia.exe，本机实测：AppData\Local\Programs\Folia\Folia.exe）
+
+        // 常见补充
+        "spotify",      // Spotify
+        "aimp",         // AIMP
+        "hiby",         // 海贝音乐（HiByMusic）
+        "soda",         // 汽水音乐
+        "musicplayer",  // 部分本地播放器进程名
+        "groove",       // Windows 媒体播放器（UWP AUMID 含 groove）
+        "zune",         // Windows 媒体播放器（旧 AUMID）
+        "itunes",       // iTunes
+        "applemusic",   // Apple Music（Win 版）
+    };
+
+    /// <summary>名单关键词 → 友好展示名（音乐行显示用）。</summary>
+    private static readonly (string Key, string Name)[] DisplayNames =
+    {
+        ("qqmusic", "QQ音乐"),
+        ("kugou", "酷狗音乐"),
+        ("cloudmusic", "网易云音乐"),
+        ("kuwo", "酷我音乐"),
+        ("migu", "咪咕音乐"),
+        ("foobar", "foobar2000"),
+        ("folia", "FOLIA"),
+        ("spotify", "Spotify"),
+        ("aimp", "AIMP"),
+        ("hiby", "海贝音乐"),
+        ("soda", "汽水音乐"),
+        ("groove", "媒体播放器"),
+        ("zune", "媒体播放器"),
+        ("itunes", "iTunes"),
+        ("applemusic", "Apple Music"),
+    };
     private readonly LogService _log;
     private readonly List<GlobalSystemMediaTransportControlsSession> _subscribed = new();
     private GlobalSystemMediaTransportControlsSessionManager? _manager;
@@ -33,11 +81,8 @@ public sealed class MediaPlayerMonitor : IDisposable
 
     public MediaPlayerMonitor(LogService log) => _log = log;
 
-    /// <summary>媒体状态变化（任意线程回调，订阅方负责切 UI 线程）。null=无白名单播放。</summary>
+    /// <summary>媒体状态变化（任意线程回调，订阅方负责切 UI 线程）。null=无音乐播放。</summary>
     public event Action<MediaInfo?>? MediaChanged;
-
-    /// <summary>生效的音乐 App 白名单（设置页可改，留空=内置默认名单）。</summary>
-    public Func<IReadOnlyList<string>>? WhitelistProvider { get; set; }
 
     /// <summary>SMTC 是否初始化成功。</summary>
     public bool IsAvailable => _manager is not null;
@@ -48,7 +93,7 @@ public sealed class MediaPlayerMonitor : IDisposable
         {
             _manager = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
             _manager.SessionsChanged += OnSessionsChanged;
-            _log.Info("Media", "SMTC 媒体监控已就绪（仅响应音乐 App 白名单）");
+            _log.Info("Media", "SMTC 媒体监控已就绪（仅响应内置音乐 App 名单）");
             ScheduleRefresh();
         }
         catch (Exception ex)
@@ -236,9 +281,9 @@ public sealed class MediaPlayerMonitor : IDisposable
             return null;
         }
 
-        var whitelist = WhitelistProvider?.Invoke() ?? MusicAppWhitelist.Defaults;
+        var whitelist = MusicApps;
         var sessions = manager.GetSessions()
-            .Where(s => MusicAppWhitelist.Matches(s.SourceAppUserModelId, whitelist))
+            .Where(s => Matches(s.SourceAppUserModelId, whitelist))
             .ToList();
 
         return sessions.FirstOrDefault(s =>
@@ -284,7 +329,7 @@ public sealed class MediaPlayerMonitor : IDisposable
             return "媒体播放器";
         }
 
-        var display = MusicAppWhitelist.DisplayName(aumid, MusicAppWhitelist.Defaults);
+        var display = DisplayNameOf(aumid);
         if (display is not null)
         {
             return display;
@@ -306,7 +351,7 @@ public sealed class MediaPlayerMonitor : IDisposable
         }
 
         var lowered = aumid.ToLowerInvariant();
-        foreach (var keyword in MusicAppWhitelist.Defaults)
+        foreach (var keyword in MusicApps)
         {
             if (lowered.Contains(keyword, StringComparison.Ordinal))
             {
@@ -315,5 +360,64 @@ public sealed class MediaPlayerMonitor : IDisposable
         }
 
         return string.Empty;
+    }
+
+    /// <summary>
+    /// SMTC 会话的 SourceAppUserModelId 是否命中音乐 App 名单。
+    /// Win32 程序的 AUMID 通常是 exe 路径（…\Folia\Folia.exe），
+    /// UWP 应用是包名（SpotifyAB.SpotifyMusic_zpdnejdrhbcvj），
+    /// 小写包含匹配两种都能覆盖。
+    /// </summary>
+    private static bool Matches(string? aumid, IReadOnlyList<string> whitelist)
+    {
+        if (string.IsNullOrWhiteSpace(aumid))
+        {
+            return false;
+        }
+
+        var lowered = aumid.ToLowerInvariant();
+        foreach (var keyword in whitelist)
+        {
+            if (lowered.Contains(keyword, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>命中名单时返回对应的展示名（取映射的第一个匹配项），否则 null。</summary>
+    private static string? DisplayNameOf(string? aumid)
+    {
+        if (string.IsNullOrWhiteSpace(aumid))
+        {
+            return null;
+        }
+
+        var lowered = aumid.ToLowerInvariant();
+        foreach (var keyword in MusicApps)
+        {
+            if (!lowered.Contains(keyword, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            foreach (var (map, name) in DisplayNames)
+            {
+                if (string.Equals(map, keyword, StringComparison.Ordinal))
+                {
+                    return name;
+                }
+            }
+
+            // 取 AUMID 末段作为展示名
+            var head = aumid.Split('!')[0];
+            var dot = head.LastIndexOf('.');
+            var tail = dot >= 0 && dot < head.Length - 1 ? head[(dot + 1)..] : head;
+            return string.IsNullOrWhiteSpace(tail) ? keyword : tail;
+        }
+
+        return null;
     }
 }

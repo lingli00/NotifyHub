@@ -165,7 +165,7 @@ public partial class NotificationWindow : Window
     private void Fill(NotifyMessage message)
     {
         // 深色四段式：顶部来源、中间会话名、主体预览、底部时间
-        AppNameText.Text = message.SourceText;
+        AppNameText.Text = message.SourceLabel is { Length: > 0 } label ? label : message.SourceText;
         TimeText.Text = message.Time.ToString("HH:mm");
         SenderText.Text = string.IsNullOrWhiteSpace(message.Sender) ? message.SourceText : message.Sender;
         ContentText.Text = string.IsNullOrWhiteSpace(message.Content) ? "（无内容）" : message.Content;
@@ -175,23 +175,35 @@ public partial class NotificationWindow : Window
         string glyph;
         double glyphSize;
 
-        switch (message.Source)
+        if (message.Source == MessageSource.Ntfy && message.AccentIndex >= 0
+            && message.AccentIndex < AppConfig.NtfyPalette.Count)
         {
-            case MessageSource.WeChat:
-                iconColor = Color.FromRgb(0x07, 0xC1, 0x60);
-                glyph = "微";
-                glyphSize = 10.5;
-                break;
-            case MessageSource.QQ:
-                iconColor = Color.FromRgb(0x12, 0xB7, 0xF5);
-                glyph = "Q";
-                glyphSize = 11;
-                break;
-            default:
-                iconColor = Color.FromRgb(0xF9, 0x73, 0x16);
-                glyph = "N";
-                glyphSize = 10;
-                break;
+            // 需求 2：多 ntfy 订阅按订阅取色板颜色（低饱和度微调，与微信/QQ/ntfy 同风格）
+            var rgb = AppConfig.NtfyPalette[message.AccentIndex];
+            iconColor = Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+            glyph = "N";
+            glyphSize = 10;
+        }
+        else
+        {
+            switch (message.Source)
+            {
+                case MessageSource.WeChat:
+                    iconColor = Color.FromRgb(0x07, 0xC1, 0x60);
+                    glyph = "微";
+                    glyphSize = 10.5;
+                    break;
+                case MessageSource.QQ:
+                    iconColor = Color.FromRgb(0x12, 0xB7, 0xF5);
+                    glyph = "Q";
+                    glyphSize = 11;
+                    break;
+                default:
+                    iconColor = Color.FromRgb(0xF9, 0x73, 0x16);
+                    glyph = "N";
+                    glyphSize = 10;
+                    break;
+            }
         }
 
         AppIcon.Background = new LinearGradientBrush(

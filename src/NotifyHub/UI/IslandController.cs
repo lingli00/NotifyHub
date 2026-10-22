@@ -20,6 +20,7 @@ public sealed class IslandController : IDisposable
     private readonly SoundService _sound;
     private readonly MediaPlayerMonitor _media;
     private readonly FullscreenWatcher _fullscreen;
+    private readonly NtfyPublisher _publisher;
     private WorkBuddyWatcher? _workbuddy;
     private long _manualUntilMs; // 手动 --island 推送后的 15 秒内，自动监视不覆盖
     private IslandWindow? _island;
@@ -31,10 +32,9 @@ public sealed class IslandController : IDisposable
         _config = config;
         _dispatcher = dispatcher;
         _sound = sound;
+        _publisher = new NtfyPublisher(log);
 
         _media = new MediaPlayerMonitor(log);
-        _media.WhitelistProvider = () =>
-            MusicAppWhitelist.Effective(_config.Current.MusicAppWhitelist);
         _fullscreen = new FullscreenWatcher(log);
     }
 
@@ -107,6 +107,9 @@ public sealed class IslandController : IDisposable
 
         var single = ToSingleLine(text, done ? "任务完成" : "正在执行任务…");
 
+        // 需求 3：灵动岛内显示的中文过程信息原样下行推送到手机端（内容与岛内完全一致）
+        PushDown(single);
+
         _dispatcher.BeginInvoke(new Action(() =>
         {
             try
@@ -125,6 +128,27 @@ public sealed class IslandController : IDisposable
                 _log.Error("Island", "显示任务状态失败", $"{ex.GetType().Name}: {ex.Message}");
             }
         }));
+    }
+
+    /// <summary>
+    /// 下行推送（v0.2.4 需求 3）：把灵动岛里 WorkBuddy 正在执行的中文过程信息
+    /// 原样推到手机端。未配置地址时静默跳过；失败只记日志不打扰。
+    /// </summary>
+    private void PushDown(string singleLineText)
+    {
+        try
+        {
+            if (!_config.Current.WorkBuddyWatchEnabled)
+            {
+                return;
+            }
+
+            _publisher.Send(_config.Current.NtfyPushUrl, singleLineText);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Island", "下行推送失败", ex.Message);
+        }
     }
 
     /// <summary>
@@ -152,13 +176,18 @@ public sealed class IslandController : IDisposable
                         return;
                     }
 
+                    var single = ToSingleLine(text, done ? "任务完成" : "正在执行任务…");
+
+                    // 需求 3：与岛内显示完全一致的中文过程信息，原样下行推送到手机端
+                    PushDown(single);
+
                     if (done)
                     {
-                        Island().ShowDone(ToSingleLine(text, "任务完成"));
+                        Island().ShowDone(single);
                     }
                     else
                     {
-                        Island().ShowRunning(ToSingleLine(text, "正在执行任务…"));
+                        Island().ShowRunning(single);
                     }
                 }
                 catch (Exception ex)
@@ -306,6 +335,7 @@ public sealed class IslandController : IDisposable
         _media.Dispose();
         _fullscreen.Dispose();
         _workbuddy?.Dispose();
+        _publisher.Dispose();
 
         if (Current == this)
         {

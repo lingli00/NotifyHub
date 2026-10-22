@@ -34,6 +34,8 @@ public sealed class LogService
     private readonly List<EventLogEntry> _recent = new(MaxRecentEvents + 1);
     private readonly List<ConsoleLine> _console = new(MaxConsoleLines + 1);
     private string _logFile = string.Empty;
+    private string _eventFile = AppPaths.EventFile;
+    private string _logDir = AppPaths.LogDir;
     private bool _initialized;
     private bool _dirty;
 
@@ -44,6 +46,12 @@ public sealed class LogService
 
     /// <summary>控制台日志变化（可能来自后台线程，订阅方需自行切到 UI 线程）。</summary>
     public event EventHandler? ConsoleChanged;
+
+    /// <summary>当前日志保存目录（默认 AppPaths.LogDir，可在设置页自定义）。</summary>
+    public string LogDir
+    {
+        get { lock (_gate) { return _logDir; } }
+    }
 
     public void Initialize()
     {
@@ -57,7 +65,9 @@ public sealed class LogService
             try
             {
                 AppPaths.EnsureCreated();
-                _logFile = Path.Combine(AppPaths.LogDir, $"NotifyHub-{DateTime.Now:yyyyMMdd}.log");
+                _logDir = AppPaths.LogDir;
+                _logFile = Path.Combine(_logDir, $"NotifyHub-{DateTime.Now:yyyyMMdd}.log");
+                _eventFile = AppPaths.EventFile;
                 LoadEventsLocked();
             }
             catch
@@ -68,7 +78,70 @@ public sealed class LogService
             _initialized = true;
         }
 
-        Write(LogLevel.Info, "App", $"日志初始化完成，目录={AppPaths.Root}");
+        Write(LogLevel.Info, "App", $"日志初始化完成，目录={_logDir}");
+    }
+
+    /// <summary>
+    /// 切换日志保存目录（v0.2.4 需求 8）：立即把后续日志写到新目录，
+    /// 事件列表文件（events.json）一并迁移到新目录。失败返回 false。
+    /// </summary>
+    public bool SetLogDir(string? dir)
+    {
+        var target = (dir ?? string.Empty).Trim();
+        if (target.Length == 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(target);
+        }
+        catch
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            _logDir = target;
+            _logFile = Path.Combine(target, $"NotifyHub-{DateTime.Now:yyyyMMdd}.log");
+
+            var newEventFile = Path.Combine(target, "events.json");
+            if (!string.Equals(newEventFile, _eventFile, StringComparison.OrdinalIgnoreCase))
+            {
+                // 旧事件文件搬过来（不覆盖已存在的目标），然后从新位置重新加载
+                try
+                {
+                    if (File.Exists(_eventFile) && !File.Exists(newEventFile))
+                    {
+                        File.Move(_eventFile, newEventFile);
+                    }
+                }
+                catch
+                {
+                    // 搬运失败不影响切换，事件从新目录重新开始
+                }
+
+                _eventFile = newEventFile;
+                _recent.Clear();
+                LoadEventsLocked();
+            }
+        }
+
+        Write(LogLevel.Info, "Log", "日志目录已切换", _logDir);
+
+        try
+        {
+            RecentChanged?.Invoke(this, EventArgs.Empty);
+            ConsoleChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch
+        {
+            // 忽略
+        }
+
+        return true;
     }
 
     public void Info(string module, string message, string? detail = null) => Write(LogLevel.Info, module, message, detail);
@@ -131,7 +204,7 @@ public sealed class LogService
     }
 
     /// <summary>
-    /// 一键清除全部日志：内存控制台缓冲、最近事件、logs 目录下的日志文件、events.json。
+    /// 一键清除全部日志：内存控制台缓冲、最近事件、日志目录下的日志文件、events.json。
     /// 【不】删除 config.json，【不】删除 dedup.json（去重记录必须保留）。
     /// </summary>
     public (int DeletedFiles, bool Success) ClearAll()
@@ -148,9 +221,9 @@ public sealed class LogService
 
         try
         {
-            if (Directory.Exists(AppPaths.LogDir))
+            if (Directory.Exists(_logDir))
             {
-                foreach (var file in Directory.GetFiles(AppPaths.LogDir, "*.log"))
+                foreach (var file in Directory.GetFiles(_logDir, "*.log"))
                 {
                     try
                     {
@@ -171,9 +244,9 @@ public sealed class LogService
 
         try
         {
-            if (File.Exists(AppPaths.EventFile))
+            if (File.Exists(_eventFile))
             {
-                File.Delete(AppPaths.EventFile);
+                File.Delete(_eventFile);
                 deleted++;
             }
         }
@@ -187,7 +260,7 @@ public sealed class LogService
         {
             try
             {
-                _logFile = Path.Combine(AppPaths.LogDir, $"NotifyHub-{DateTime.Now:yyyyMMdd}.log");
+                _logFile = Path.Combine(_logDir, $"NotifyHub-{DateTime.Now:yyyyMMdd}.log");
             }
             catch
             {
@@ -288,9 +361,9 @@ public sealed class LogService
 
         try
         {
-            var tmp = AppPaths.EventFile + ".tmp";
+            var tmp = _eventFile + ".tmp";
             File.WriteAllText(tmp, json, Encoding.UTF8);
-            File.Move(tmp, AppPaths.EventFile, overwrite: true);
+            File.Move(tmp, _eventFile, overwrite: true);
         }
         catch
         {
@@ -326,7 +399,7 @@ public sealed class LogService
             return;
         }
 
-        var backup = Path.Combine(AppPaths.LogDir, $"NotifyHub-{DateTime.Now:yyyyMMdd-HHmmss}.old.log");
+        var backup = Path.Combine(_logDir, $"NotifyHub-{DateTime.Now:yyyyMMdd-HHmmss}.old.log");
         try
         {
             File.Move(_logFile, backup, overwrite: true);
@@ -341,12 +414,12 @@ public sealed class LogService
     {
         try
         {
-            if (!File.Exists(AppPaths.EventFile))
+            if (!File.Exists(_eventFile))
             {
                 return;
             }
 
-            var list = JsonSerializer.Deserialize<List<EventLogEntry>>(File.ReadAllText(AppPaths.EventFile), JsonOptions);
+            var list = JsonSerializer.Deserialize<List<EventLogEntry>>(File.ReadAllText(_eventFile), JsonOptions);
             if (list is null)
             {
                 return;

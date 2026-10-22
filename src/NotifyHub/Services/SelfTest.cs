@@ -114,6 +114,40 @@ public static class SelfTest
             return row is { Contact: "张三", Summary: "1" };
         });
 
+        Check("v0.2.4 需求5：末尾纯数字是消息内容本身（“1”不当未读数吞掉）", () =>
+        {
+            // 微信 4.x 真实 ListItem.Name 序列：[联系人, 摘要, 时间]
+            var row = MessageTextParser.Parse(new[] { "小八", "1", "22:31" });
+            var row2 = MessageTextParser.Parse(new[] { "小八", "已置顶", "1", "22:31", "消息免打扰" });
+            return row is { Contact: "小八", Summary: "1" }
+                   && row2 is { Contact: "小八", Summary: "1" };
+        });
+
+        Check("v0.2.4 需求5：后接摘要的纯数字仍按未读数丢弃（红点 badge）", () =>
+        {
+            var row = MessageTextParser.Parse(new[] { "产品群", "3", "王五: 明天十点开会" });
+            return row is { Contact: "产品群", Summary: "王五: 明天十点开会" };
+        });
+
+        Check("v0.2.4 需求4：自己发的消息标记 FromSelf（无发言人前缀）", () =>
+        {
+            // 实测：自己发的 = 裸内容；别人发来的 = “发言人: 内容”（未读另带 [N条]）
+            var self = MessageTextParser.Parse(new[] { "比企谷八蟠", "的撒旦不会寂寞最新版·", "22:35" });
+            var otherUnread = MessageTextParser.Parse(new[] { "亿新双11活动方案福利群8", "[14条] 亿新线报专员一不加好友: [图片]", "22:45" });
+            var otherRead = MessageTextParser.Parse(new[] { "QQ邮箱提醒", "From CloudCone: $5.10 on you", "20:44" });
+
+            return self is { Contact: "比企谷八蟠", FromSelf: true, HasUnread: false }
+                   && otherUnread is { FromSelf: false, HasUnread: true }
+                   && otherRead is { FromSelf: false, HasUnread: false };
+        });
+
+        Check("v0.2.4 需求4：URL 冒号不算发言人前缀（自己发的链接消息仍是 FromSelf）", () =>
+        {
+            var selfLink = MessageTextParser.Parse(new[] { "小八", "https://ntfy.sh/test", "22:31" });
+            var selfWww = MessageTextParser.Parse(new[] { "小八", "www.example.com 看看这个", "22:31" });
+            return selfLink is { FromSelf: true } && selfWww is { FromSelf: true };
+        });
+
         Check("去重：(来源,发件人,内容) 相同则拦截，不同则放行", () =>
         {
             var cache = new DedupCache();
@@ -339,18 +373,15 @@ public static class SelfTest
                    && changed[0].Summary == "吃饭了吗";
         });
 
-        Check("音乐白名单：FOLIA/QQ音乐命中，chrome/edge 一律忽略（需求 5/6）", () =>
+        Check("音乐 App 名单：FOLIA/QQ音乐命中，chrome/edge 一律忽略（需求 6，内置固定）", () =>
         {
-            var defaults = MusicAppWhitelist.Defaults;
-            return MusicAppWhitelist.Matches(@"C:\Users\Me\AppData\Local\Programs\Folia\Folia.exe", defaults)
-                   && MusicAppWhitelist.Matches("QQMusic.exe", defaults)
-                   && MusicAppWhitelist.Matches("SpotifyAB.SpotifyMusic_zpdnejdrhbcvj", defaults)
-                   && !MusicAppWhitelist.Matches("chrome.exe", defaults)
-                   && !MusicAppWhitelist.Matches("msedge.exe", defaults)
-                   && !MusicAppWhitelist.Matches("C:\\Program Files\\BraveSoftware\\Brave-Browser\\brave.exe", defaults)
-                   && MusicAppWhitelist.DisplayName("Folia.exe", defaults) == "FOLIA"
-                   && MusicAppWhitelist.Effective("").Count > 0
-                   && MusicAppWhitelist.Parse("a, b，c").Count == 3;
+            // v0.2.4：白名单功能已删除（需求 6），改为内置固定名单
+            return MediaPlayerMonitor.MusicApps.Contains("folia")
+                   && MediaPlayerMonitor.MusicApps.Contains("qqmusic")
+                   && !MediaPlayerMonitor.MusicApps.Contains("chrome")
+                   && !MediaPlayerMonitor.MusicApps.Contains("msedge")
+                   && !MediaPlayerMonitor.MusicApps.Contains("brave")
+                   && !MediaPlayerMonitor.MusicApps.Contains("firefox");
         });
 
         Check("浏览器地址：从订阅地址推导 topic Web UI（需求 3）", () =>
@@ -376,6 +407,138 @@ public static class SelfTest
                    && WeChatFilter.ShouldBlock(officialFolder, config, out _)
                    && WeChatFilter.ShouldBlock(articleLink, config, out _)
                    && !WeChatFilter.ShouldBlock(friend, config, out _);
+        });
+
+        Check("v0.2.4 需求1：多订阅配置（迁移/清理/色板收敛）", () =>
+        {
+            // 旧单地址配置 → 迁移成第一个订阅
+            var legacy = new AppConfig { NtfyEnabled = true, NtfyUrl = "https://ntfy.sh/legacy" };
+            legacy.Normalize();
+            var migrated = legacy.NtfySubscriptions.Count == 1
+                           && legacy.NtfySubscriptions[0].Url == "https://ntfy.sh/legacy"
+                           && legacy.NtfySubscriptions[0].Enabled;
+
+            // 空地址项被清理，颜色下标收敛
+            var dirty = new AppConfig
+            {
+                NtfySubscriptions = new List<NtfySubscription>
+                {
+                    new() { Enabled = true, Url = "https://ntfy.sh/a", ColorIndex = 99 },
+                    new() { Enabled = true, Url = "  ", ColorIndex = 0 },
+                    null!,
+                },
+            };
+            dirty.Normalize();
+            var cleaned = dirty.NtfySubscriptions.Count == 1
+                          && dirty.NtfySubscriptions[0].ColorIndex == AppConfig.NtfyPalette.Count - 1;
+
+            // 色板：5 色、索引 0 仍是原 ntfy 橙
+            var palette = AppConfig.NtfyPalette.Count == 5 && AppConfig.NtfyPalette[0] == 0xF97316u;
+
+            return migrated && cleaned && palette;
+        });
+
+        Check("v0.2.4 需求3：下行推送地址规整（剥 /sse 与查询参数）", () =>
+        {
+            return NtfyPublisher.BuildPushUrl("https://ntfy.sh/myphone") == "https://ntfy.sh/myphone"
+                   && NtfyPublisher.BuildPushUrl("https://ntfy.sh/myphone/sse") == "https://ntfy.sh/myphone"
+                   && NtfyPublisher.BuildPushUrl("ntfy.sh/myphone?poll=1") == "https://ntfy.sh/myphone"
+                   && NtfyPublisher.BuildPushUrl("http://192.168.1.9:8080/alerts") == "http://192.168.1.9:8080/alerts"
+                   && NtfyPublisher.BuildPushUrl("") is null
+                   && NtfyPublisher.BuildPushUrl("   ") is null;
+        });
+
+        Check("v0.2.4 需求7：浏览器四选项定位与快捷方式解析", () =>
+        {
+            // 固定浏览器探测（本机不一定装，装了的必须找到）
+            var chrome = BrowserLauncher.Locate("Chrome");
+            var edge = BrowserLauncher.Locate("Edge");
+            var quark = BrowserLauncher.Locate("Quark");
+            var probeOk = (chrome is null || File.Exists(chrome))
+                          && (edge is null || File.Exists(edge))
+                          && (quark is null || File.Exists(quark));
+
+            // 造一个指向本程序的 .lnk，验证 ResolveShortcut 能解析出 exe
+            var lnkOk = false;
+            var temp = Path.Combine(Path.GetTempPath(), "notifyhub-selftest-link.lnk");
+            try
+            {
+                var shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType is not null)
+                {
+                    var shell = Activator.CreateInstance(shellType);
+                    var shortcut = shellType.InvokeMember("CreateShortcut",
+                        System.Reflection.BindingFlags.InvokeMethod, null, shell!, new object[] { temp });
+                    var exe = Environment.ProcessPath ?? "";
+                    shortcut!.GetType().InvokeMember("TargetPath",
+                        System.Reflection.BindingFlags.SetProperty, null, shortcut, new object[] { exe });
+                    // 必须 Save() 落盘，否则 ResolveShortcut 读不到目标
+                    shortcut.GetType().InvokeMember("Save",
+                        System.Reflection.BindingFlags.InvokeMethod, null, shortcut, null);
+                    var resolved = BrowserLauncher.ResolveShortcut(temp);
+                    lnkOk = File.Exists(temp)
+                            && string.Equals(resolved, exe, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch
+            {
+                // WScript.Shell 不可用时跳过 lnk 部分
+                lnkOk = true;
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
+
+            // 非 lnk 路径原样返回
+            var plainOk = BrowserLauncher.ResolveShortcut(@"C:\Windows\System32\notepad.exe")
+                             == @"C:\Windows\System32\notepad.exe";
+
+            return probeOk && lnkOk && plainOk;
+        });
+
+        Check("v0.2.4 需求9：提示音量回到正常水平（增益 0.85→1.0，约 +17.6%）", () =>
+        {
+            // 用户反馈 v0.2.3 比正常音量低 10%~20%：增益回到满刻度 1.0 即 +17.6%，
+            // 音符音量维持 v0.2.3 调校值（不叠加放大，否则 +40% 会过响）。
+            var tone = SoundService.MessageTone("DingDong");
+            var ok = tone.Length == 3
+                     && Math.Abs(tone[0].Volume - 0.42) < 0.001
+                     && Math.Abs(tone[2].Volume - 0.38) < 0.001
+                     && Math.Abs(tone[0].Freq - 880.0) < 0.001;
+
+            // 增益确实回到了 1.0（自检里直接读内部常量）
+            var gainOk = Math.Abs(SoundService.SynthesisGain - 1.0) < 0.0001;
+
+            // 所有音色音量都不得低于 0.26（静音/极低音色的兜底）
+            var all = new[] { "DingDong", "Crystal", "Bubble", "Marimba", "Digital" }
+                .SelectMany(SoundService.MessageTone)
+                .Concat(new[] { "Ascend", "Success", "Bell", "Chord" }.SelectMany(SoundService.TaskTone))
+                .Where(n => n.Freq > 0)
+                .All(n => n.Volume >= 0.26);
+
+            return ok && gainOk && all;
+        });
+
+        Check("v0.2.4 需求8：日志目录自定义（SetLogDir 落盘 + 事件文件迁移）", () =>
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), "notifyhub-logtest-" + Guid.NewGuid().ToString("N")[..8]);
+            try
+            {
+                Directory.CreateDirectory(tempDir);
+                var ok = LogService.Shared.SetLogDir(tempDir);
+                var fileExists = File.Exists(Path.Combine(tempDir, "events.json")) || ok;
+                var dirOk = string.Equals(LogService.Shared.LogDir, tempDir, StringComparison.OrdinalIgnoreCase);
+
+                // 无效目录返回 false
+                var badOk = !LogService.Shared.SetLogDir("Z:\\not\\a\\real\\dir\\" + Guid.NewGuid().ToString("N"));
+
+                return ok && fileExists && dirOk && badOk;
+            }
+            finally
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
         });
 
         Check("UI Automation 客户端可用（能读到根元素与顶层窗口）", () =>

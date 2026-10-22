@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -8,6 +9,7 @@ using Hardcodet.Wpf.TaskbarNotification;
 using NotifyHub.Interop;
 using NotifyHub.Models;
 using NotifyHub.Services;
+using NotifyHub.Services.Parsing;
 using NotifyHub.Services.Uia;
 using NotifyHub.UI;
 
@@ -113,6 +115,55 @@ public partial class App : Application
                 return;
             }
 
+            case AppMode.Sessions:
+            {
+                // 真机核验微信消息识别链路（需求 4/5）：
+                // 读一次会话列表，按监听器同款解析打印每行的 FromSelf / 未读 / 免打扰标记。
+                var rows = Task.Run(() =>
+                {
+                    var handle = WindowFinder.FindMainWindow(
+                        new[] { "WeChat", "Weixin" },
+                        new[] { "WeChatMainWndForPC", "WeChatMainWndForPC1", "mmui::MainWindow" });
+                    if (handle == IntPtr.Zero)
+                    {
+                        return (List<SessionRow>?)null;
+                    }
+
+                    var element = AutomationElement.FromHandle(handle);
+                    return element is null ? new List<SessionRow>() : SessionListReader.Read(element).Rows;
+                }).GetAwaiter().GetResult();
+
+                ConsoleBridge.TryAttach();
+
+                if (rows is null)
+                {
+                    ConsoleBridge.WriteLine("SESSIONS FAIL（未找到微信主窗口）");
+                    Environment.Exit(2);
+                    return;
+                }
+
+                // 控制台按 UTF-8 输出，避免中文在 GBK 代码页下乱码
+                try
+                {
+                    Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+                }
+                catch
+                {
+                    // 无控制台时忽略
+                }
+
+                ConsoleBridge.WriteLine($"SESSIONS {rows.Count} 行（FromSelf=自己发的，不推送；HasUnread=未读）");
+                foreach (var row in rows)
+                {
+                    ConsoleBridge.WriteLine(
+                        $"  [{row.Contact}] FromSelf={row.FromSelf} HasUnread={row.HasUnread} " +
+                        $"Muted={row.Muted} Signals={row.Signals} | {row.Summary}");
+                }
+
+                Shutdown();
+                return;
+            }
+
             case AppMode.Settings:
                 {
                     // 只开设置窗口（不启动监听、不留托盘），用于排版检查；
@@ -130,6 +181,9 @@ public partial class App : Application
                     {
                         captureTimer.Stop();
                         CaptureWindow(settings, "settings-capture.png", log);
+
+                        // 整页内容（ScrollViewer 会被视口裁剪，直接 Render 内容面板拿到完整排版）
+                        CaptureVisual(settings.SettingsContent, "settings-full.png", log);
 
                         settings.Tabs.SelectedIndex = 1;
                         settings.UpdateLayout();
@@ -353,6 +407,12 @@ public partial class App : Application
         _configService.Load();
         _configService.Changed += OnConfigChanged;
 
+        // 日志目录自定义（需求 8）：配置里指定了就切换过去（含历史事件文件迁移）
+        if (!string.IsNullOrWhiteSpace(_configService.Current.LogDir))
+        {
+            log.SetLogDir(_configService.Current.LogDir);
+        }
+
         _notifications = new NotificationManager(log, () => _configService.Current, _sound);
 
         // 监听应用提示音静音：本应用消息提示音开启时，微信/QQ 自带音效自动关闭
@@ -437,6 +497,35 @@ public partial class App : Application
         catch (Exception ex)
         {
             log.Error("Settings", "窗口渲染失败", $"{ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 渲染 ScrollViewer 里的完整内容面板（视口裁剪不到的部分也拍全，排版验证用）。
+    /// 先按内容实测尺寸撑一次布局，再离屏渲染，避免拍到半截。
+    /// </summary>
+    private static void CaptureVisual(FrameworkElement content, string fileName, LogService log)
+    {
+        try
+        {
+            content.Measure(new Size(content.ActualWidth > 0 ? content.ActualWidth : 1000, double.PositiveInfinity));
+            var width = (int)Math.Ceiling(content.ActualWidth > 0 ? content.ActualWidth : content.DesiredSize.Width);
+            var height = (int)Math.Ceiling(content.DesiredSize.Height);
+
+            var rtb = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(content);
+
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(rtb));
+
+            var path = Path.Combine(AppPaths.Root, fileName);
+            using var stream = File.Create(path);
+            encoder.Save(stream);
+            log.Info("Settings", "整页渲染完成", path);
+        }
+        catch (Exception ex)
+        {
+            log.Error("Settings", "整页渲染失败", $"{ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -750,8 +839,13 @@ public partial class App : Application
     {
         try
         {
-            AppPaths.EnsureCreated();
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", AppPaths.LogDir)
+            var dir = LogService.Shared.LogDir;
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", dir)
             {
                 UseShellExecute = true,
             });
@@ -783,7 +877,7 @@ public partial class App : Application
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        LogService.Shared.Error("App", "UI 线程异常（已拦截，程序继续运行）", $"{e.Exception.GetType().Name}: {e.Exception.Message}");
+        LogService.Shared.Error("App", "UI 线程异常（已拦截，程序继续运行）", $"{e.Exception.GetType().Name}: {e.Exception.Message}{Environment.NewLine}{e.Exception.StackTrace}");
         e.Handled = true;
     }
 

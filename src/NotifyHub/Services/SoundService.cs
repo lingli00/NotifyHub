@@ -128,8 +128,9 @@ public sealed class SoundService : IDisposable
             var dir = Path.Combine(AppPaths.Root, "sounds");
             Directory.CreateDirectory(dir);
 
-            // 文件名按音符序列指纹：换音色自动换文件，互不覆盖
-            var sig = string.Join("|", notes.Select(n => $"{n.Freq:0.##}-{n.Ms}-{n.Vol}"));
+            // 文件名按音符序列指纹：换音色自动换文件，互不覆盖。
+            // 指纹里带合成增益常量——v0.2.4 调大音量后旧缓存文件不能继续用。
+            var sig = string.Join("|", notes.Select(n => $"{n.Freq:0.##}-{n.Ms}-{n.Vol}")) + "|g" + WaveGain.ToString("0.##");
             var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sig)))[..12];
             path = Path.Combine(dir, $"tone-{hash}.wav");
 
@@ -152,6 +153,17 @@ public sealed class SoundService : IDisposable
             return path;
         }
     }
+
+    /// <summary>
+    /// 合成增益（v0.2.4 需求 9）：用户反馈提示音比正常音量低约 10%~20%——
+    /// v0.2.2 曾把增益从 0.55 调到 0.85，仍差一截；这里回到满刻度 1.0
+    /// （等效 +17.6%，正落在用户反馈的区间内），音符音量维持 v0.2.3 调校值不变，
+    /// 避免叠加放大过了头（叠起来会是 +40%）。旧指纹缓存的 WAV 自动作废。
+    /// </summary>
+    private const double WaveGain = 1.0;
+
+    /// <summary>合成增益（供自检断言用，运行时不可改）。</summary>
+    internal static double SynthesisGain => WaveGain;
 
     private static byte[] BuildWav((double Freq, int Ms, double Volume)[] notes, int sampleRate = 44100)
     {
@@ -179,8 +191,7 @@ public sealed class SoundService : IDisposable
                             + 0.16 * Math.Sin(2 * Math.PI * freq * 2 * t)
                             + 0.06 * Math.Sin(2 * Math.PI * freq * 3 * t);
 
-                // v0.2.2：合成增益 0.55 → 0.85，同样 80% 音量下明显更响
-                var scaled = value * volume * envelope * 0.85;
+                var scaled = value * volume * envelope * WaveGain;
                 samples.Add((short)(Math.Clamp(scaled, -1.0, 1.0) * short.MaxValue));
             }
         }

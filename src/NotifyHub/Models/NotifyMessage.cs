@@ -43,4 +43,16 @@ public sealed class NotifyMessage
 
     /// <summary>去重键：(来源, 发件人, 内容)。</summary>
     public string DedupKey => $"{Source}\u0001{Sender}\u0001{Content}";
+
+    /// <summary>
+    /// 来源展示名覆盖（v0.2.4 多 ntfy 订阅）：如“ntfy · 家庭”。
+    /// 空则用 <see cref="SourceText"/>。
+    /// </summary>
+    public string SourceLabel { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 强调色索引（v0.2.4 需求 2）：ntfy 订阅通知按订阅取色板颜色（低饱和度微调）。
+    /// -1 = 用来源默认色（微信绿/QQ蓝/ntfy橙）；≥0 时取 <see cref="AppConfig.NtfyPalette"/>。
+    /// </summary>
+    public int AccentIndex { get; init; } = -1;
 }

@@ -96,10 +96,37 @@
             <!--  ================= 设置  =================  -->
             <TabItem Header="设置">
                 <ScrollViewer x:Name="MainScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                    <StackPanel Margin="0,8,0,0">
+                    <StackPanel x:Name="SettingsContent" Margin="0,8,0,0">
 
-                        <!--  ntfy 订阅  -->
+                        <!--  ntfy 订阅（v0.2.4 多订阅）  -->
                         <GroupBox Header="ntfy 订阅">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Style="{StaticResource HintText}" Margin="0,0,0,6"
+                                           Text="每个订阅独立开关、名称与通知颜色；地址填 https://ntfy.sh/你的主题 即可，程序自动补 /sse。点击通知会用浏览器打开对应主题的网页。" />
+
+                                <!--  订阅列表（代码动态生成行）  -->
+                                <StackPanel Grid.Row="1" x:Name="NtfyListPanel" />
+
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <CheckBox x:Name="NtfyEnabledCheck" Content="启用 ntfy 订阅" MinWidth="118"
+                                              VerticalAlignment="Center" />
+                                    <Button x:Name="NtfyAddButton" Content="+ 添加订阅" MinWidth="96" Padding="10,3"
+                                            FontSize="11.5" Click="OnNtfyAddClick" />
+                                    <TextBlock Style="{StaticResource HintText}" Margin="12,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Text="名称会显示在通知卡顶部（如“ntfy · 家庭”），留空只显示 ntfy" />
+                                </StackPanel>
+                            </Grid>
+                        </GroupBox>
+
+                        <!--  ntfy 下行推送（v0.2.4 需求 3）  -->
+                        <GroupBox Header="ntfy 下行推送（WorkBuddy 任务进度 → 手机）">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -110,15 +137,13 @@
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="订阅地址" Margin="0,0,10,0" />
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="NtfyUrlBox" Height="28" />
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="推送地址" Margin="0,0,10,0" />
+                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="NtfyPushUrlBox" Height="28"
+                                         ToolTip="手机 ntfy App 订阅的同一个主题地址；留空 = 不下行推送" />
 
-                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
-                                            Orientation="Horizontal" Margin="0,8,0,0">
-                                    <CheckBox x:Name="NtfyEnabledCheck" Content="启用 ntfy 订阅" />
-                                    <TextBlock Style="{StaticResource HintText}"
-                                               Text="填 https://ntfy.sh/你的主题 即可，程序会自动补 /sse；点击通知会用浏览器打开该主题的网页" />
-                                </StackPanel>
+                                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
+                                           Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="开启后：灵动岛里显示的 WorkBuddy 任务过程信息（与岛内完全一致的中文文本）会原样推送到这个地址，手机 ntfy App 订阅同一主题即可实时收到。不需要就留空。" />
                             </Grid>
                         </GroupBox>
 
@@ -210,7 +235,7 @@
                                 <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="MusicEnabledCheck" Content="音乐控制模块" MinWidth="196" />
                                     <TextBlock Style="{StaticResource HintText}"
-                                               Text="播放白名单内的音乐 App 时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏" />
+                                               Text="播放内置支持的音乐 App（网易云/QQ音乐/Spotify 等）时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏" />
                                 </StackPanel>
 
                                 <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
@@ -237,8 +262,8 @@
                             </Grid>
                         </GroupBox>
 
-                        <!--  音乐 App 白名单 + 浏览器  -->
-                        <GroupBox Header="音乐 App 白名单与浏览器">
+                        <!--  浏览器选择（v0.2.4 需求 7：四选项）  -->
+                        <GroupBox Header="浏览器（点击 ntfy 通知时打开主题网页）">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -250,17 +275,38 @@
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="白名单" Margin="0,0,10,0" />
-                                <TextBox Grid.Row="0" Grid.Column="1" x:Name="MusicWhitelistBox" Height="28"
-                                         ToolTip="进程名关键词，逗号分隔；留空 = 内置默认名单" />
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="浏览器" Margin="0,0,10,0" />
+                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
+                                    <ComboBox x:Name="BrowserChoiceCombo" Width="150" Height="26" FontSize="12.5"
+                                              SelectedIndex="0">
+                                        <ComboBoxItem Content="系统默认浏览器" Tag="System" />
+                                        <ComboBoxItem Content="Google Chrome" Tag="Chrome" />
+                                        <ComboBoxItem Content="Microsoft Edge" Tag="Edge" />
+                                        <ComboBoxItem Content="夸克浏览器" Tag="Quark" />
+                                        <ComboBoxItem Content="其他（拖入快捷方式）" Tag="Other" />
+                                    </ComboBox>
+                                    <TextBlock x:Name="BrowserPathHint" Style="{StaticResource HintText}"
+                                               Margin="12,0,0,0" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               Text="点击 ntfy 通知时用系统默认浏览器打开主题网页" />
+                                </StackPanel>
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="浏览器" Margin="0,8,10,0" />
-                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="BrowserPathBox" Height="28" Margin="0,8,0,0"
-                                         ToolTip="点击 ntfy 通知时用这个浏览器打开；留空 = 系统默认浏览器" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="浏览器路径" Margin="0,8,10,0"
+                                           x:Name="BrowserPathLabel" />
+                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,8,0,0"
+                                            x:Name="BrowserPathRow">
+                                    <TextBox x:Name="BrowserPathBox" Width="320" Height="28"
+                                             AllowDrop="True"
+                                             PreviewDragOver="OnBrowserPathDragOver"
+                                             Drop="OnBrowserPathDrop"
+                                             ToolTip="把桌面浏览器快捷方式拖进来，或直接粘贴 .exe / .lnk 路径" />
+                                    <Button x:Name="BrowserBrowseButton" Content="浏览…" MinWidth="64" Padding="10,3"
+                                            FontSize="11.5" Click="OnBrowserBrowseClick" />
+                                </StackPanel>
 
                                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
                                            Margin="0,6,0,0" TextWrapping="Wrap"
-                                           Text="只有白名单内进程的媒体会话才会显示音乐控制栏与 App 图标——浏览器（chrome/edge/firefox/brave…）刷视频/直播一律忽略，不再误弹控制栏。内置名单含 QQ音乐/酷狗/网易云/酷我/咪咕/foobar2000/FOLIA 等。" />
+                                           Text="选前三项时程序自动在常见安装位置定位浏览器（未安装会提示并回退系统默认）；选“其他”可把桌面快捷方式直接拖入上方输入框，或粘贴快捷方式/程序路径，程序会调用它打开 ntfy 订阅地址。" />
                             </Grid>
                         </GroupBox>
 
@@ -358,19 +404,36 @@
 
                     <!--  工具条  -->
                     <Grid Grid.Row="0" Margin="0,0,0,7">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Column="0" x:Name="LogStatusText" Style="{StaticResource HintText}"
+                        <TextBlock Grid.Row="0" Grid.Column="0" x:Name="LogStatusText" Style="{StaticResource HintText}"
                                    TextTrimming="CharacterEllipsis" Text="最近 600 行 · 自动滚到底" />
-                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
                             <CheckBox x:Name="AutoScrollCheck" Content="自动滚动" IsChecked="True"
                                       Margin="0,0,10,0" FontSize="11.5" />
                             <Button Content="清空日志" Click="OnClearLogInlineClick" MinWidth="76"
                                     Padding="10,3" FontSize="11.5" Margin="0"
                                     Background="#FEE2E2" Foreground="#B91C1C" BorderBrush="#FCA5A5" />
+                        </StackPanel>
+
+                        <!--  日志目录（v0.2.4 需求 8：可自定义）  -->
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,5,0,0">
+                            <TextBlock Text="日志目录" FontSize="11.5" Foreground="#8A8F98"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock x:Name="LogDirText" FontSize="11.5" Foreground="#4B5563"
+                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                       MaxWidth="560" />
+                            <Button x:Name="LogDirEditButton" Content="更改目录…" MinWidth="76" Padding="10,3"
+                                    FontSize="11.5" Margin="10,0,0,0" Click="OnLogDirEditClick" />
+                            <Button x:Name="LogDirOpenButton" Content="打开目录" MinWidth="76" Padding="10,3"
+                                    FontSize="11.5" Margin="6,0,0,0" Click="OnOpenLogClick" />
                         </StackPanel>
                     </Grid>
 

@@ -27,6 +27,15 @@ public sealed class WeChatWatcher : ChatAppWatcher
 
     protected override bool ShouldEmit(SessionRow row, AppConfig config)
     {
+        // 需求 4：自己发的消息一律不推送。
+        // 微信 4.x 实测：别人发来的摘要带“发言人: ”前缀（未读另带“[N条]”），
+        // 自己发的只有裸内容（MessageTextParser.FromSelf 已判定）。
+        if (row.FromSelf)
+        {
+            LogThrottled(LogLevel.Debug, $"跳过自己发送的消息: {row.Contact} → {LogService.Truncate(row.Summary, 40)}", TimeSpan.FromSeconds(30));
+            return false;
+        }
+
         if (!WeChatFilter.ShouldBlock(row, config, out var reason))
         {
             return true;

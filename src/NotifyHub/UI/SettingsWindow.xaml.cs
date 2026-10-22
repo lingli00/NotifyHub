@@ -1,8 +1,10 @@
 using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
+using NotifyHub.Interop;
 using NotifyHub.Models;
 using NotifyHub.Services;
 using NotifyHub.Services.Uia;
@@ -10,19 +12,26 @@ using NotifyHub.Services.Uia;
 namespace NotifyHub.UI;
 
 /// <summary>
-/// 设置窗口：ntfy 地址、微信/QQ 开关、轮询间隔、通知时长与位置、灵动岛模式、
-/// 两套提示音开关与音量、微信过滤、运行日志、最近事件，以及一键清除日志。
+/// 设置窗口：ntfy 多订阅与下行推送、微信/QQ 开关、轮询间隔、通知时长与位置、灵动岛模式、
+/// 两套提示音开关与音量、微信过滤、浏览器选择、日志目录自定义、运行日志、最近事件，
+/// 以及一键清除日志。
 /// 原独立的"控制台窗口"已取消，详细日志并入这里的「运行日志」栏。
 /// </summary>
 public partial class SettingsWindow : Window
 {
     private static readonly string[] CornerValues = { "TopRight", "TopLeft", "BottomRight", "BottomLeft" };
 
+    /// <summary>ntfy 色板展示名（设置页下拉用）。</summary>
+    private static readonly string[] NtfyColorNames = { "默认橙", "雾蓝", "青绿", "薰衣草紫", "玫粉" };
+
     private readonly ConfigService _config;
     private readonly LogService _log;
     private readonly MonitorController _monitor;
     private readonly NotificationManager _notifications;
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+
+    /// <summary>ntfy 订阅编辑中的列表（保存时写回配置）。</summary>
+    private readonly List<NtfySubscription> _ntfyEditing = new();
 
     // 日志增量渲染锚点：ConsoleSnapshot 每次返回新 List，但元素是同一批实例，用引用比较判断
     private ConsoleLine? _lastLogLine;
@@ -35,6 +44,11 @@ public partial class SettingsWindow : Window
         _log = log;
         _monitor = monitor;
         _notifications = notifications;
+
+        // 浏览器下拉的变更事件必须在 InitializeComponent 之后挂：
+        // XAML 加载期（ItemsControl.EndInit → SelectedIndex 强制生效）也会派发
+        // SelectionChanged，那时后面声明的命名元素还没建出来，处理器会踩 NRE。
+        BrowserChoiceCombo.SelectionChanged += OnBrowserChoiceChanged;
 
         LoadFromConfig();
         RefreshEvents();
@@ -57,8 +71,30 @@ public partial class SettingsWindow : Window
     private void LoadFromConfig()
     {
         var config = _config.Current;
-        NtfyUrlBox.Text = config.NtfyUrl;
+
+        // ntfy 多订阅（v0.2.4）
         NtfyEnabledCheck.IsChecked = config.NtfyEnabled;
+        _ntfyEditing.Clear();
+        foreach (var sub in config.NtfySubscriptions)
+        {
+            _ntfyEditing.Add(sub.Clone());
+        }
+
+        if (_ntfyEditing.Count == 0)
+        {
+            // 旧配置单地址迁移兜底
+            _ntfyEditing.Add(new NtfySubscription
+            {
+                Enabled = true,
+                Name = string.Empty,
+                Url = config.NtfyUrl,
+                ColorIndex = 0,
+            });
+        }
+
+        RebuildNtfyListUI();
+        NtfyPushUrlBox.Text = config.NtfyPushUrl;
+
         WeChatCheck.IsChecked = config.WeChatEnabled;
         QQCheck.IsChecked = config.QQEnabled;
         IntervalBox.Text = config.PollIntervalMs.ToString();
@@ -87,11 +123,256 @@ public partial class SettingsWindow : Window
 
         MarqueeSpeedSlider.Value = Math.Clamp(config.MarqueeSpeed, 10, 120);
         MarqueeSpeedText.Text = $"{Math.Clamp(config.MarqueeSpeed, 10, 120)}";
-        MusicWhitelistBox.Text = config.MusicAppWhitelist;
+
+        // 浏览器四选项（v0.2.4 需求 7）
+        var choice = AppConfig.NormalizeBrowserChoice(config.BrowserChoice);
+        SelectComboByTag(BrowserChoiceCombo, choice);
         BrowserPathBox.Text = config.BrowserPath;
+        ApplyBrowserChoiceUI(choice);
+
+        // 日志目录（v0.2.4 需求 8）
+        LogDirText.Text = _log.LogDir;
+        LogDirText.ToolTip = _log.LogDir;
 
         var cornerIndex = Array.IndexOf(CornerValues, AppConfig.NormalizeCorner(config.NotificationCorner));
         CornerCombo.SelectedIndex = cornerIndex < 0 ? 0 : cornerIndex;
+    }
+
+    // ---------------- ntfy 多订阅（v0.2.4 需求 1/2） ----------------
+
+    /// <summary>把 <see cref="_ntfyEditing"/> 渲染成设置页里的订阅行。</summary>
+    private void RebuildNtfyListUI()
+    {
+        NtfyListPanel.Children.Clear();
+
+        for (var i = 0; i < _ntfyEditing.Count; i++)
+        {
+            NtfyListPanel.Children.Add(BuildNtfyRow(_ntfyEditing[i], i));
+        }
+    }
+
+    private UIElement BuildNtfyRow(NtfySubscription sub, int index)
+    {
+        var grid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });           // 启用
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });           // 名称
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 地址
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(104) });          // 颜色
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });           // 删除
+
+        var enabled = new CheckBox { IsChecked = sub.Enabled, VerticalAlignment = VerticalAlignment.Center };
+        Grid.SetColumn(enabled, 0);
+        grid.Children.Add(enabled);
+
+        var name = new TextBox
+        {
+            Text = sub.Name,
+            Height = 26,
+            Margin = new Thickness(4, 0, 4, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(name, 1);
+        grid.Children.Add(name);
+
+        var url = new TextBox
+        {
+            Text = sub.Url,
+            Height = 26,
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(url, 2);
+        grid.Children.Add(url);
+
+        var color = new ComboBox
+        {
+            Height = 26,
+            Width = 96,
+            Margin = new Thickness(0, 0, 4, 0),
+            FontSize = 12,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            ToolTip = "该订阅通知弹窗的强调色（低饱和度，与微信/QQ/ntfy 同风格）",
+        };
+        for (var c = 0; c < NtfyColorNames.Length; c++)
+        {
+            color.Items.Add(new ComboBoxItem { Content = NtfyColorNames[c], Tag = c });
+        }
+
+        color.SelectedIndex = Math.Clamp(sub.ColorIndex, 0, NtfyColorNames.Length - 1);
+        Grid.SetColumn(color, 3);
+        grid.Children.Add(color);
+
+        var remove = new Button
+        {
+            Content = "✕",
+            Height = 26,
+            Width = 24,
+            Padding = new Thickness(0),
+            FontSize = 11,
+            ToolTip = "删除这个订阅",
+            Tag = grid,
+        };
+        remove.Click += (_, _) =>
+        {
+            NtfyListPanel.Children.Remove(grid);
+            _ntfyEditing.Remove(sub);
+        };
+        Grid.SetColumn(remove, 4);
+        grid.Children.Add(remove);
+
+        // 保存时从控件读回最新值
+        grid.Tag = new NtfyRowBind(sub, enabled, name, url, color);
+        return grid;
+    }
+
+    private sealed record NtfyRowBind(NtfySubscription Sub, CheckBox Enabled, TextBox Name, TextBox Url, ComboBox Color);
+
+    /// <summary>从 UI 行读回编辑结果（丢弃空地址行）。</summary>
+    private List<NtfySubscription> CollectNtfyRows()
+    {
+        var result = new List<NtfySubscription>();
+
+        foreach (var child in NtfyListPanel.Children)
+        {
+            if (child is not Grid { Tag: NtfyRowBind bind })
+            {
+                continue;
+            }
+
+            var url = bind.Url.Text.Trim();
+            if (url.Length == 0)
+            {
+                continue; // 空地址行直接丢弃
+            }
+
+            result.Add(new NtfySubscription
+            {
+                Enabled = bind.Enabled.IsChecked == true,
+                Name = bind.Name.Text.Trim(),
+                Url = url,
+                ColorIndex = bind.Color.SelectedItem is ComboBoxItem { Tag: int c } ? c : 0,
+            });
+        }
+
+        return result;
+    }
+
+    private void OnNtfyAddClick(object sender, RoutedEventArgs e)
+    {
+        var sub = new NtfySubscription
+        {
+            Enabled = true,
+            Name = string.Empty,
+            Url = "https://ntfy.sh/",
+            ColorIndex = _ntfyEditing.Count % NtfyColorNames.Length,
+        };
+        _ntfyEditing.Add(sub);
+        NtfyListPanel.Children.Add(BuildNtfyRow(sub, _ntfyEditing.Count - 1));
+    }
+
+    // ---------------- 浏览器四选项（v0.2.4 需求 7） ----------------
+
+    private void OnBrowserChoiceChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var choice = ComboTag(BrowserChoiceCombo, "System");
+        ApplyBrowserChoiceUI(AppConfig.NormalizeBrowserChoice(choice));
+    }
+
+    private void ApplyBrowserChoiceUI(string choice)
+    {
+        // 防御：XAML 加载期可能提前派发（命名元素尚未建全），空元素直接跳过
+        if (BrowserPathRow is null || BrowserPathLabel is null || BrowserPathHint is null)
+        {
+            return;
+        }
+
+        var other = choice == "Other";
+
+        BrowserPathRow.Visibility = other ? Visibility.Visible : Visibility.Collapsed;
+        BrowserPathLabel.Visibility = other ? Visibility.Visible : Visibility.Collapsed;
+
+        if (!other)
+        {
+            var located = choice == "System" ? null : BrowserLauncher.Locate(choice);
+            BrowserPathHint.Text = choice switch
+            {
+                "Chrome" => located is null
+                    ? "未在常见位置找到 Chrome，将回退系统默认浏览器"
+                    : "已定位：" + located,
+                "Edge" => located is null
+                    ? "未在常见位置找到 Edge，将回退系统默认浏览器"
+                    : "已定位：" + located,
+                "Quark" => located is null
+                    ? "未在常见位置找到夸克，将回退系统默认浏览器"
+                    : "已定位：" + located,
+                _ => "点击 ntfy 通知时用系统默认浏览器打开主题网页",
+            };
+        }
+        else
+        {
+            BrowserPathHint.Text = "把桌面浏览器快捷方式拖入下方输入框，或粘贴 .exe / .lnk 路径";
+        }
+    }
+
+    private void OnBrowserBrowseClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择浏览器程序或快捷方式",
+            Filter = "程序或快捷方式 (*.exe;*.lnk)|*.exe;*.lnk|所有文件 (*.*)|*.*",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+        };
+
+        if (dialog.ShowDialog(this) == true)
+        {
+            BrowserPathBox.Text = dialog.FileName;
+        }
+    }
+
+    private void OnBrowserPathDragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = e.Data.GetDataPresent(DataFormats.FileDrop) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnBrowserPathDrop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files)
+        {
+            BrowserPathBox.Text = files[0];
+        }
+    }
+
+    // ---------------- 日志目录自定义（v0.2.4 需求 8） ----------------
+
+    private void OnLogDirEditClick(object sender, RoutedEventArgs e)
+    {
+        var picked = Interop.FolderPicker.Pick(_log.LogDir, "选择日志保存目录");
+        if (picked is null)
+        {
+            return;
+        }
+
+        if (_log.SetLogDir(picked))
+        {
+            // 立即写进配置，重启后仍生效
+            var next = _config.Current.Clone();
+            next.LogDir = picked;
+            if (_config.Save(next))
+            {
+                _monitor.ApplyConfig();
+            }
+
+            LogDirText.Text = _log.LogDir;
+            LogDirText.ToolTip = _log.LogDir;
+            RefreshLogs();
+            StatusText.Text = $"日志目录已切换到：{picked}";
+        }
+        else
+        {
+            MessageBox.Show(this, $"无法使用该目录：{picked}\n\n请选择有读写权限的位置。", "切换失败",
+                MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void OnMarqueeSpeedChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -199,8 +480,9 @@ public partial class SettingsWindow : Window
         }
 
         var next = _config.Current.Clone();
-        next.NtfyUrl = NtfyUrlBox.Text.Trim();
         next.NtfyEnabled = NtfyEnabledCheck.IsChecked == true;
+        next.NtfySubscriptions = CollectNtfyRows();
+        next.NtfyPushUrl = NtfyPushUrlBox.Text.Trim();
         next.WeChatEnabled = WeChatCheck.IsChecked == true;
         next.QQEnabled = QQCheck.IsChecked == true;
         next.PollIntervalMs = interval;
@@ -224,8 +506,46 @@ public partial class SettingsWindow : Window
         next.WeChatBlockedKeywords = FilterKeywordsBox.Text.Trim();
 
         next.MarqueeSpeed = (int)Math.Round(Math.Clamp(MarqueeSpeedSlider.Value, 10, 120));
-        next.MusicAppWhitelist = MusicWhitelistBox.Text.Trim();
-        next.BrowserPath = BrowserPathBox.Text.Trim();
+
+        // 浏览器四选项（v0.2.4 需求 7）：前三项自动定位，Other 用用户提供的路径
+        var browserChoice = AppConfig.NormalizeBrowserChoice(ComboTag(BrowserChoiceCombo, "System"));
+        next.BrowserChoice = browserChoice;
+        if (browserChoice == "Other")
+        {
+            var resolved = BrowserLauncher.ResolveShortcut(BrowserPathBox.Text);
+            next.BrowserPath = resolved;
+
+            if (resolved.Length == 0 || (!File.Exists(resolved) && !resolved.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)))
+            {
+                MessageBox.Show(this,
+                    "“其他”浏览器需要提供有效的程序路径：\n请把桌面快捷方式拖入输入框，或粘贴 .exe / .lnk 路径。",
+                    "路径无效", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+        }
+        else if (browserChoice == "System")
+        {
+            next.BrowserPath = string.Empty;
+        }
+        else
+        {
+            var located = BrowserLauncher.Locate(browserChoice);
+            if (located is null)
+            {
+                if (MessageBox.Show(this,
+                        $"未在常见安装位置找到所选浏览器，是否仍保存该选择？\n\n点击 ntfy 通知时会回退用系统默认浏览器打开。",
+                        "未找到浏览器", MessageBoxButton.OKCancel, MessageBoxImage.Question) != MessageBoxResult.OK)
+                {
+                    return;
+                }
+
+                next.BrowserPath = string.Empty;
+            }
+            else
+            {
+                next.BrowserPath = located;
+            }
+        }
 
         if (!_config.Save(next))
         {
@@ -308,8 +628,13 @@ public partial class SettingsWindow : Window
     {
         try
         {
-            AppPaths.EnsureCreated();
-            Process.Start(new ProcessStartInfo("explorer.exe", AppPaths.LogDir) { UseShellExecute = true });
+            var dir = _log.LogDir;
+            if (!Directory.Exists(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            Process.Start(new ProcessStartInfo("explorer.exe", dir) { UseShellExecute = true });
         }
         catch (Exception ex)
         {
@@ -401,7 +726,7 @@ public partial class SettingsWindow : Window
             _lastLogLine = lines[^1];
         }
 
-        LogStatusText.Text = $"最近 {lines.Count} 条 · 文件：{AppPaths.LogDir}";
+        LogStatusText.Text = $"最近 {lines.Count} 条 · 文件：{_log.LogDir}";
 
         if (AutoScrollCheck.IsChecked == true && LogList.Items.Count > 0)
         {
@@ -515,6 +840,6 @@ public partial class SettingsWindow : Window
     {
         StatusText.Text =
             $"微信: {_monitor.WeChatStatus}    QQ: {_monitor.QQStatus}    ntfy: {_monitor.NtfyStatus}    " +
-            $"{(_monitor.IsPaused ? "已暂停监听" : "监听中")}    配置: {_config.FilePath}";
+            $"{(_monitor.IsPaused ? "已暂停监听" : "监听中")}    配置: {_config.FilePath}    日志: {_log.LogDir}";
     }
 }

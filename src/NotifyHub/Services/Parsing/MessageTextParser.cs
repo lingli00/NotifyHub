@@ -8,8 +8,11 @@ namespace NotifyHub.Services.Parsing;
 /// <paramref name="Signals"/> 是该会话项里所有元素名称/说明的拼接，供过滤规则做关键词判定；
 /// <paramref name="HasUnread"/> 表示摘要里带未读证据（微信 4.x 的“[N条]”前缀或“有人@我”），
 /// 已读会话没有该前缀——需求 7 用它区分“用户已看过的老消息”与“真正的新消息”。
+/// <paramref name="FromSelf"/> 表示最后一条消息是**用户自己发的**（微信 4.x 实测：
+/// 别人发来的消息摘要带“发言人: ”前缀，未读的还带“[N条]”；自己发的只有裸内容）。
+/// 需求 4：自己发的消息一律不推送。
 /// </summary>
-public sealed record SessionRow(string Contact, string Summary, bool Muted = false, string Signals = "", bool HasUnread = false);
+public sealed record SessionRow(string Contact, string Summary, bool Muted = false, string Signals = "", bool HasUnread = false, bool FromSelf = false);
 
 /// <summary>
 /// 把 UIA 抓到的文本片段还原成 (联系人, 摘要)。
@@ -34,6 +37,25 @@ public static partial class MessageTextParser
     /// <summary>微信 4.x 摘要开头的未读数前缀，例如 "[63条] 软件室: 内容"。</summary>
     [GeneratedRegex(@"^\[\d+条\]\s*")]
     private static partial Regex UnreadPrefixRegex();
+
+    /// <summary>@我的前缀，例如 "[有人@我] 张三: 内容"。</summary>
+    [GeneratedRegex(@"^\[?有人@我\]?\s*")]
+    private static partial Regex AtMePrefixRegex();
+
+    /// <summary>
+    /// “发言人: 内容”结构：别人发来的消息摘要带头像/气泡里的发言人名。
+    /// 微信 4.x 实测（uia-sessions 探针）：
+    ///   [14条] 亿新线报专员一不加好友: [图片]    ← 别人发来的未读
+    ///   From CloudCone: $5.10 on you…            ← 别人发来的已读
+    ///   的撒旦不会寂寞最新版·                     ← 自己发的（无发言人结构）
+    /// 发言人名一般 ≤ 24 字符；含 URL 特征的冒号前导（http: //www. .com）不算发言人。
+    /// </summary>
+    [GeneratedRegex(@"^(?<who>[^:\n]{1,24}):[ \u3000]")]
+    private static partial Regex SpeakerPrefixRegex();
+
+    /// <summary>冒号前导带 URL 特征时不是发言人名（如 "https://xxx"、"www.a.com"）。</summary>
+    [GeneratedRegex(@"https?[:：]|www\.|\.(com|cn|net|org|io)", RegexOptions.IgnoreCase)]
+    private static partial Regex UrlLikeRegex();
 
     private static readonly string[] NoiseTexts =
     {
@@ -78,8 +100,13 @@ public static partial class MessageTextParser
                 continue;
             }
 
-            // 仅当还存在其他文本时才把纯数字当未读数丢掉，避免把“1”这种真实消息误删
-            if (BadgeLikeRegex().IsMatch(text) && texts.Count > 2)
+            // 纯数字既可能是“未读红点数字”，也可能是消息内容本身（“1”“666”）。
+            // 区分依据（v0.2.4 修正，实测 ListItem.Name 序列 [联系人, …, 摘要, 时间, 信号]）：
+            // 未读 badge 后面紧跟的是摘要行；消息内容后面紧跟的是时间行。
+            // 因此：纯数字不是最后一项、且下一项不是时间样文本时，才按未读数丢弃。
+            // （旧规则无条件丢纯数字，导致好友发来的“1”被吞掉——消息识别不到。）
+            var nextIsTime = i + 1 < texts.Count && TimeLikeRegex().IsMatch(texts[i + 1]);
+            if (BadgeLikeRegex().IsMatch(text) && texts.Count > 2 && i < texts.Count - 1 && !nextIsTime)
             {
                 continue;
             }
@@ -104,7 +131,27 @@ public static partial class MessageTextParser
         }
 
         var summary = string.Join(" ", Distinct(parts)).Trim();
-        return new SessionRow(contact, summary, HasUnread: hasUnread);
+        var fromSelf = summary.Length > 0 && !HasSpeakerPrefix(summary);
+        return new SessionRow(contact, summary, HasUnread: hasUnread, FromSelf: fromSelf);
+    }
+
+    /// <summary>
+    /// 摘要是否带“发言人: ”前缀（别人发来的消息特征）。
+    /// 先剥掉 [N条] / 有人@我 前缀再判定；URL 特征（http:、www.、.com）不算发言人。
+    /// </summary>
+    private static bool HasSpeakerPrefix(string summary)
+    {
+        var text = UnreadPrefixRegex().Replace(summary, string.Empty);
+        text = AtMePrefixRegex().Replace(text, string.Empty).Trim();
+
+        var match = SpeakerPrefixRegex().Match(text);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var who = match.Groups["who"].Value.Trim();
+        return who.Length > 0 && !UrlLikeRegex().IsMatch(who);
     }
 
     /// <summary>清洗：按行拆分、去零宽字符、去空行、去相邻重复。</summary>

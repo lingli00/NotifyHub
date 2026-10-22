@@ -1,5 +1,7 @@
 namespace NotifyHub.Models;
 
+using System.Text.Json.Serialization;
+
 /// <summary>
 /// 应用配置。字段允许缺省，读取后统一通过 <see cref="Normalize"/> 收敛到安全区间，
 /// 避免用户填 0 或负数把轮询线程打爆。
@@ -14,6 +16,18 @@ public sealed class AppConfig
 
     /// <summary>ntfy 订阅地址，支持 https://ntfy.sh/topic 或完整 .../sse。</summary>
     public string NtfyUrl { get; set; } = "https://ntfy.sh/notifyhub-test";
+
+    /// <summary>
+    /// ntfy 多订阅列表（v0.2.4，需求 1）：每个地址独立开关、独立展示名、独立通知颜色。
+    /// 加载旧配置时由 <see cref="ConfigService"/> 把单地址 <see cref="NtfyUrl"/> 迁移为第一项。
+    /// </summary>
+    public List<NtfySubscription> NtfySubscriptions { get; set; } = new();
+
+    /// <summary>
+    /// ntfy 下行推送地址（v0.2.4，需求 3）：把灵动岛里 WorkBuddy 正在执行的中文过程信息
+    /// 原样推送到手机端（手机 ntfy App 订阅同一 topic 即可收到）。空 = 关闭。
+    /// </summary>
+    public string NtfyPushUrl { get; set; } = string.Empty;
 
     public bool NtfyEnabled { get; set; }
 
@@ -95,17 +109,31 @@ public sealed class AppConfig
     public int MarqueeSpeed { get; set; } = 45;
 
     /// <summary>
-    /// 音乐 App 白名单（进程名关键词，逗号分隔，小写包含匹配）。
-    /// 只有名单内进程的媒体会话才会显示音乐控制栏与 App 图标——
-    /// 浏览器（chrome/edge/firefox/brave…）刷视频/直播一律忽略（需求 5/6 共用）。
-    /// 留空 = 用内置默认名单（含 QQ音乐/酷狗/网易云/酷我/咪咕/foobar2000/FOLIA 等）。
+    /// 音乐 App 白名单（v0.2.4 需求 6：功能已删除，用户不需要）。
+    /// 字段标记 <see cref="JsonIgnoreAttribute"/>——旧配置里的值直接忽略，
+    /// 音乐名单改为 <see cref="Services.MediaPlayerMonitor.MusicApps"/> 内置固定。
     /// </summary>
+    [JsonIgnore]
+    [Obsolete("v0.2.4 起音乐白名单功能已移除（需求 6），此字段不再序列化、不再生效。")]
     public string MusicAppWhitelist { get; set; } = string.Empty;
 
     /// <summary>
+    /// 浏览器选择（v0.2.4，需求 7）：Chrome / Edge / Quark / Other。
+    /// 前三项由程序自动定位安装路径写入 <see cref="BrowserPath"/>；Other 用
+    /// <see cref="BrowserPath"/> 指向用户拖入/粘贴的浏览器快捷方式或 exe。
+    /// </summary>
+    public string BrowserChoice { get; set; } = "System";
+
+    /// <summary>
     /// 浏览器可执行文件路径（点击 ntfy 通知时唤起）。留空 = 系统默认浏览器。
+    /// 选前三项固定浏览器时由程序写入探测到的路径；Other 时为用户提供的路径。
     /// </summary>
     public string BrowserPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 日志保存目录（v0.2.4，需求 8）。空 = 默认（便携模式为程序目录 logs，否则 %AppData%\NotifyHub\logs）。
+    /// </summary>
+    public string LogDir { get; set; } = string.Empty;
 
     public AppConfig Clone() => (AppConfig)MemberwiseClone();
 
@@ -125,10 +153,62 @@ public sealed class AppConfig
             "Ascend", "Success", "Bell", "Chord");
         DedupHours = Math.Clamp(DedupHours, 1, 168);
         MarqueeSpeed = Math.Clamp(MarqueeSpeed, 10, 120);
-        MusicAppWhitelist = (MusicAppWhitelist ?? string.Empty).Trim();
-        BrowserPath = (BrowserPath ?? string.Empty).Trim();
         WeChatBlockedKeywords = (WeChatBlockedKeywords ?? string.Empty).Trim();
+
+        // v0.2.4：多订阅列表清理（去空项、颜色下标收敛、旧单地址迁移兜底）
+        NtfySubscriptions ??= new List<NtfySubscription>();
+        NtfySubscriptions = NtfySubscriptions
+            .Where(s => s is not null)
+            .Select(s =>
+            {
+                s.Url = (s.Url ?? string.Empty).Trim();
+                s.Name = (s.Name ?? string.Empty).Trim();
+                s.ColorIndex = Math.Clamp(s.ColorIndex, 0, NtfyPalette.Count - 1);
+                return s;
+            })
+            .Where(s => s.Url.Length > 0)
+            .ToList();
+
+        if (NtfySubscriptions.Count == 0 && NtfyUrl.Length > 0)
+        {
+            // 旧配置只有单地址：迁移成第一个订阅（保持原行为）
+            NtfySubscriptions.Add(new NtfySubscription
+            {
+                Enabled = NtfyEnabled,
+                Name = string.Empty,
+                Url = NtfyUrl,
+                ColorIndex = 0,
+            });
+        }
+
+        NtfyPushUrl = (NtfyPushUrl ?? string.Empty).Trim();
+        BrowserChoice = NormalizeBrowserChoice(BrowserChoice);
+        BrowserPath = (BrowserPath ?? string.Empty).Trim();
+        LogDir = (LogDir ?? string.Empty).Trim();
     }
+
+    /// <summary>浏览器选择收敛到合法值。</summary>
+    public static string NormalizeBrowserChoice(string? choice) => choice switch
+    {
+        "Chrome" => "Chrome",
+        "Edge" => "Edge",
+        "Quark" => "Quark",
+        "Other" => "Other",
+        _ => "System",
+    };
+
+    /// <summary>
+    /// ntfy 订阅通知色板（需求 2：低饱和度微调，与微信绿 #07C160 / QQ蓝 #12B7F5 /
+    /// ntfy橙 #F97316 同一明亮但不刺眼的风格）。索引 0 保持原 ntfy 橙色。
+    /// </summary>
+    public static readonly IReadOnlyList<uint> NtfyPalette = new[]
+    {
+        0xF97316u, // 0 橙（默认，与原 ntfy 一致）
+        0x5B8DEFu, // 1 雾蓝
+        0x3FA96Bu, // 2 青绿
+        0x8E7BD8u, // 3 薰衣草紫
+        0xC96A8Eu, // 4 玫粉
+    };
 
     public static string NormalizeCorner(string? corner) => corner switch
     {

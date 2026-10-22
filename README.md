@@ -5,8 +5,8 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
-**下载**：[Release v0.2.3](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.3)
-→ `NotifyHub-v0.2.3-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.3-source.zip`（完整工程）。
+**下载**：[Release v0.2.4](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.4)
+→ `NotifyHub-v0.2.4-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.4-source.zip`（完整工程）。
 
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
@@ -19,9 +19,9 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 | --- | --- |
 | ![通知横幅](docs/notification.png) | ![灵动岛](docs/island.png) |
 
-| 设置面板 | 音乐 App 白名单与浏览器 |
+| 设置面板 | ntfy 多订阅与浏览器 |
 | --- | --- |
-| ![设置](docs/settings.png) | ![音乐白名单](docs/settings-music.png) |
+| ![设置](docs/settings.png) | ![浏览器与订阅](docs/settings-music.png) |
 
 | 运行日志（原独立控制台已并入） | AI 任务进度实时上岛 |
 | --- | --- |
@@ -50,7 +50,9 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 | 状态通道 | 命名管道长连接 + `--island-stream`：**连续更新延迟 <100ms**（实测每行 0.12ms） |
 | WorkBuddy 任务监控 | **自动**读取 WorkBuddy 本地会话记录：AI 每一步动作实时上岛（运行/修改/检索/派出助手…），回合结束绿勾 + 完成提示音，无需任何手动接线 |
 | 任务完成提示音 | 与消息提示音完全独立的第二套音效，完成态出现时播放 |
-| 音乐控制 | 系统 SMTC 聚合各播放器（Folia、网易云、QQ音乐、Spotify 等），同一悬浮条内显示「App 图标 + 歌名-歌手 + 上一首/播放暂停/下一首」；**只有白名单内进程才显示**（浏览器刷视频/直播一律忽略），无音频自动隐藏 |
+| 音乐控制 | 系统 SMTC 聚合各播放器（Folia、网易云、QQ音乐、Spotify 等），同一悬浮条内显示「App 图标 + 歌名-歌手 + 上一首/播放暂停/下一首」；**只有内置音乐名单内的进程才显示**（浏览器刷视频/直播一律忽略），无音频自动隐藏 |
+| ntfy 多订阅 | 每个订阅地址独立开关、名称与强调色（5 色低饱和色板），通知卡按订阅分色，来源标签「ntfy · 家庭」；旧单地址配置自动迁移 |
+| ntfy 下行推送 | 灵动岛里 WorkBuddy 任务过程的中文原文，原样推送到手机端（与岛内显示完全一致） |
 | 消息游标 | 各来源已读进度落盘（`cursor.json`），重启不补弹旧消息；首运行只建基线 |
 | 智能隐藏 | 无音频 → 音乐区隐藏；无任务 → 任务区隐藏；检测到全屏观影/游戏 → 整套灵动岛隐藏，退出后恢复 |
 | 运行日志 | 设置页「运行日志」标签页：大号深色日志框（按级别着色、自动滚到底、可暂停）、最近 50 条事件。**独立控制台窗口已取消** |
@@ -72,7 +74,7 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
   * 条体现已按内容自适应，阴影留白足够，不再出现"比内容大一圈的灰白模糊方框"。
   * 阴影留白区做鼠标穿透（`WM_NCHITTEST` → `HTTRANSPARENT`），不会挡住下层窗口的点击。
 * **设置 + 运行日志**：托盘双击或右键「设置 / 日志…」打开，两个标签页：
-  * **设置**：订阅、监听与显示、灵动岛（位置模式 / 音乐开关 / 滚动速度）、音乐 App 白名单与浏览器、两套提示音、微信过滤。
+  * **设置**：ntfy 订阅（多地址 + 分色）、ntfy 下行推送、监听与显示、灵动岛（位置模式 / 音乐开关 / 滚动速度）、浏览器四选一、两套提示音、微信过滤。
   * **运行日志**：等宽字体详细日志（DBG/INF/SUC/WRN/ERR 着色）+ 最近 50 条事件。
 
 ---
@@ -81,11 +83,12 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 
 ```
 NotifyHub.exe                      托盘常驻运行
-NotifyHub.exe --selftest           无界面逻辑自检（退出码 0=通过，20 项）
+NotifyHub.exe --selftest           无界面逻辑自检（退出码 0=通过，35 项）
 NotifyHub.exe --selftest-ui        通知层自检（堆叠/位置/不抢焦点）
 NotifyHub.exe --demo               弹 6 条演示通知并生成抓图
 NotifyHub.exe --dump               导出微信/QQ 的 UIA 树（适配新版界面用）
 NotifyHub.exe --locate 名字        激活微信并搜索定位到该聊天
+NotifyHub.exe --sessions           读一次微信会话列表，打印解析结果（自己发的/未读/免打扰）
 NotifyHub.exe --island "文本"      灵动岛：显示一行执行中动作
 NotifyHub.exe --island-done "文本" 灵动岛：完成态 + 完成提示音后收起
 NotifyHub.exe --island-stream      从标准输入逐行读状态（长连接，更新延迟 <100ms）
@@ -142,7 +145,7 @@ $p = Start-Process -FilePath .\NotifyHub.exe -ArgumentList '--island-stream' -Re
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `NtfyUrl` | `https://ntfy.sh/notifyhub-test` | 订阅地址，可只写 `ntfy.sh/主题`（自动补 https 与 /sse） |
+| `NtfyUrl` | `https://ntfy.sh/notifyhub-test` | 订阅地址（旧字段，保留用于迁移；新配置请用 `NtfySubscriptions`） |
 | `NtfyEnabled` | `false` | 是否启用 ntfy |
 | `WeChatEnabled` / `QQEnabled` | `true` | 监听开关 |
 | `PollIntervalMs` | `300` | 轮询间隔，范围 300~2000ms |
@@ -153,8 +156,11 @@ $p = Start-Process -FilePath .\NotifyHub.exe -ArgumentList '--island-stream' -Re
 | `IslandLeft` / `IslandTop` | `null` | 自由模式保存的**拖拽落点**（DIP）；吸附位置不写盘，重启后从落点开始重新计时 |
 | `MusicEnabled` | `true` | 音乐控制模块（勾选→显示、取消→隐藏，保存后立即生效） |
 | `MarqueeSpeed` | `45` | 长文本跑马灯滚动速度（DIP/秒，范围 10~120） |
-| `MusicAppWhitelist` | `""` | 音乐 App 进程名白名单（逗号分隔）；留空 = 内置默认名单（浏览器一律忽略） |
-| `BrowserPath` | `""` | 点击 ntfy 通知时唤起的浏览器；留空 = 系统默认 |
+| `NtfySubscriptions` | `[]` | ntfy 多订阅：每项含 `Enabled`/`Name`/`Url`/`ColorIndex`；旧 `NtfyUrl` 自动迁移为第一条 |
+| `NtfyPushUrl` | `""` | 下行推送地址（WorkBuddy 任务过程 → 手机）；留空 = 不推送 |
+| `BrowserChoice` | `System` | `System` / `Chrome` / `Edge` / `Quark` / `Other`；前三项自动定位，`Other` 用 `BrowserPath` |
+| `BrowserPath` | `""` | `Other` 时使用的浏览器程序或快捷方式（.exe / .lnk，可拖入） |
+| `LogDir` | `""` | 日志目录；留空 = 程序目录下 logs；设置页「更改目录…」可改并迁移历史事件 |
 | `MessageSoundEnabled` / `MessageSoundVolume` | `true` / `80` | 消息通知提示音开关与音量 |
 | `MessageSoundStyle` | `DingDong` | 消息音色：DingDong/Crystal/Bubble/Marimba/Digital |
 | `TaskSoundStyle` | `Ascend` | 完成音色：Ascend/Success/Bell/Chord |
@@ -178,12 +184,14 @@ NotifyHub/
 │  ├─ App.xaml / App.xaml.cs    应用入口：多模式分发（GUI/Demo/自检/Dump/Locate/Settings/
 │  │                            Island/IslandStream/Media/Help）、灵动岛快路径、托盘、单实例互斥
 │  ├─ Models/
-│  │  ├─ AppConfig.cs           配置模型 + Normalize 收敛（含通知位置、两套音效、过滤关键词）
-│  │  ├─ NotifyMessage.cs       一条待通知消息（来源/发送者/内容/时间/去重键）
+│  │  ├─ AppConfig.cs           配置模型 + Normalize 收敛（含通知位置、两套音效、过滤关键词、
+│  │  │                          ntfy 多订阅、浏览器四选一、日志目录）
+│  │  ├─ NtfySubscription.cs    一条 ntfy 订阅（启用/名称/地址/色板索引）
+│  │  ├─ NotifyMessage.cs       一条待通知消息（来源/发送者/内容/时间/去重键/来源标签/强调色）
 │  │  └─ EventLogEntry.cs       事件列表条目
 │  ├─ Services/
 │  │  ├─ ConfigService.cs       配置读写（原子替换、坏文件备份、变更事件）
-│  │  ├─ LogService.cs          日志文件 + 控制台环形缓冲 + 最近 50 条事件 + ClearAll
+│  │  ├─ LogService.cs          日志文件 + 控制台环形缓冲 + 最近 50 条事件 + ClearAll + 目录热切换
 │  │  ├─ AppPaths.cs            路径：便携模式（exe 旁 config.json）或 %AppData%
 │  │  ├─ CommandLineOptions.cs  命令行解析
 │  │  ├─ IslandIpc.cs           命名管道：长连接 + 多行读取 + --island-stream 流式转发
@@ -192,22 +200,22 @@ NotifyHub/
 │  │  ├─ ChatAppWatcher.cs      聊天软件公共流程：找窗口 → 读列表 → 差分 → 过滤 → 派发
 │  │  ├─ WeChatWatcher.cs       微信监听（含免打扰/公众号/服务号过滤）
 │  │  ├─ QQWatcher.cs           QQ 监听（可读则逐条，不可读降级）
-│  │  ├─ NtfySubscriber.cs      ntfy SSE 订阅与重连
+│  │  ├─ NtfySubscriber.cs      ntfy SSE 订阅与重连（按订阅实例化，含 Basic Auth）
 │  │  ├─ SessionDiffTracker.cs  会话快照差分（含中断恢复补发，防丢包）
 │  │  ├─ MessageCursorStore.cs  消息游标持久化（重启不补弹旧消息，首运行只建基线）
 │  │  ├─ DedupCache.cs          消息 ID 去重（落盘 24h，重启不重复）
 │  │  ├─ WeChatFilter.cs        微信过滤规则（免打扰信号 + 公众号/服务通知关键词）
 │  │  ├─ SoundService.cs        两套提示音（多音色合成 WAV，MediaPlayer 播放，音量独立，可试听）
 │  │  ├─ AppSoundMuter.cs       Core Audio 会话级静音：消息音开启时静音微信/QQ 自带提示音
-│  │  ├─ MediaPlayerMonitor.cs  SMTC 媒体会话聚合与播放控制（按白名单过滤）
-│  │  ├─ MusicAppWhitelist.cs   音乐 App 白名单（内置名单 + 用户追加，浏览器一律忽略）
+│  │  ├─ MediaPlayerMonitor.cs  SMTC 媒体会话聚合与播放控制（内置音乐名单，浏览器一律忽略）
 │  │  ├─ AppIconExtractor.cs    从进程提取 App 图标（音乐栏左侧透明圆角图标）
-│  │  ├─ BrowserLauncher.cs     ntfy 点击 → 浏览器打开 topic Web UI
+│  │  ├─ BrowserLauncher.cs     ntfy 点击 → 浏览器打开 topic Web UI（四选一定位 + .lnk 解析）
+│  │  ├─ NtfyPublisher.cs       ntfy 下行推送（灵动岛任务过程原文 → 手机，3 秒去重）
 │  │  ├─ FullscreenWatcher.cs   全屏检测（前台窗口铺满显示器且无标题栏）
 │  │  ├─ StartupService.cs      开机自启注册表
 │  │  ├─ WindowActivator.cs     点击通知 → 激活微信/QQ 并定位聊天
 │  │  ├─ ConsoleBridge.cs       无控制台进程的 stdout 输出
-│  │  ├─ SelfTest.cs            自检用例（解析/差分/去重/配置/过滤/持续化等 20 项）
+│  │  ├─ SelfTest.cs            自检用例（解析/差分/去重/配置/过滤/持续化等 35 项）
 │  │  ├─ Parsing/
 │  │  │  ├─ MessageTextParser.cs  UIA 文本 → (联系人, 摘要)，剥离置顶/未读前缀/噪声
 │  │  │  └─ NtfySseParser.cs      SSE 帧与 ntfy JSON 解析
@@ -226,6 +234,7 @@ NotifyHub/
 │  │  ├─ DemoCapture.cs                   窗口自渲染抓图（验证用）
 │  │  └─ IconFactory.cs                   托盘图标绘制
 │  ├─ Interop/NativeMethods.cs  Win32 互操作（窗口样式/SetCapture/SetWindowPos/激活/输入）
+│  ├─ Interop/FolderPicker.cs   系统文件夹选择框（IFileDialog + FOS_PICKFOLDERS）
 │  ├─ Assets/NotifyHub.ico      图标
 │  └─ app.manifest              应用清单（DPI 感知）
 ├─ tools/
@@ -295,6 +304,18 @@ python tools\stream_latency.py         # 状态流延迟
 ---
 
 ## 八、版本
+
+**v0.2.4** — ntfy 多订阅分色 / 下行推送手机 / 微信识别修复 / 删白名单 / 日志目录
+
+* **ntfy 多订阅**：每个地址独立开关、名称、强调色（5 色低饱和色板，与微信绿/QQ 蓝/ntfy 橙同风格），来源标签「ntfy · 家庭」；旧单地址自动迁移
+* **ntfy 下行推送**：灵动岛里 WorkBuddy 任务过程的中文原文原样推送到手机（`NtfyPushUrl`），与岛内显示完全一致，3 秒去重
+* **修复自己发的消息也被推送**：微信 4.x 自己发的摘要是裸内容（无「发言人: 」前缀），新增 `FromSelf` 判定直接拦截
+* **修复好友消息识别不到**：纯数字摘要（"1"）不再被当未读红点数吞掉，`[1条] 中国银行微银行: 交易成功提醒` 这类恢复正常识别（与上一条同源，一处修复双向解决）
+* **删除音乐 App 白名单**：只认内置音乐名单（浏览器一律忽略），设置页不再暴露白名单编辑
+* **浏览器四选一**：系统默认 / Chrome / Edge / 夸克 / 其他（拖入或粘贴 .exe/.lnk 快捷方式），点击 ntfy 通知时调用它打开主题网页
+* **日志目录自定义**：「更改目录…」弹系统文件夹选择框，选中即切换并迁移历史事件文件
+* **提示音响度**：合成增益 0.85 → 1.0（+17.6%），回到正常水平，无削波
+* 新增 `--sessions` 诊断模式（真机打印会话解析结果），未处理异常日志带堆栈
 
 **v0.2.3** — 长文本跑马灯 / 停靠收紧 / 音乐图标与白名单 / 旧消息不补弹
 

@@ -7,13 +7,15 @@ using NotifyHub.Services.Parsing;
 namespace NotifyHub.Services;
 
 /// <summary>
-/// ntfy 订阅：流式读取 /sse，断线按指数退避重连。
+/// ntfy 订阅（v0.2.4 多订阅，需求 1）：一个实例对应一个订阅地址，
+/// 流式读取 /sse，断线按指数退避重连。
 /// 关闭/改地址时由外部调用 <see cref="Stop"/>，读取中的 ReadLineAsync 会被取消。
 /// </summary>
 public sealed class NtfySubscriber : IDisposable
 {
     private readonly LogService _log;
     private readonly ConfigService _config;
+    private readonly NtfySubscription _subscription;
     private readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
     private readonly HashSet<string> _seenIds = new(StringComparer.Ordinal);
     private readonly Queue<string> _seenOrder = new();
@@ -24,16 +26,22 @@ public sealed class NtfySubscriber : IDisposable
     private long _lastEventUnix;
     private bool _everConnected;
 
-    public NtfySubscriber(LogService log, ConfigService config)
+    public NtfySubscriber(LogService log, ConfigService config, NtfySubscription subscription)
     {
         _log = log;
         _config = config;
+        _subscription = subscription;
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("NotifyHub/1.0");
     }
 
     public event EventHandler<NotifyMessage>? MessageReceived;
 
     public string Status => _status;
+
+    /// <summary>该订阅的展示名（设置页列表显示 + 日志用）。</summary>
+    public string Label => string.IsNullOrWhiteSpace(_subscription.Name)
+        ? _subscription.Url
+        : $"{_subscription.Name}（{_subscription.Url}）";
 
     public bool Paused { get; set; }
 
@@ -47,7 +55,7 @@ public sealed class NtfySubscriber : IDisposable
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
         _loop = Task.Run(() => LoopAsync(token), token);
-        _log.Info("ntfy", "订阅线程已启动");
+        _log.Info("ntfy", "订阅线程已启动", Label);
     }
 
     public void Stop()
@@ -64,7 +72,7 @@ public sealed class NtfySubscriber : IDisposable
         _cts?.Dispose();
         _cts = null;
         _status = "已停止";
-        _log.Info("ntfy", "订阅已停止");
+        _log.Info("ntfy", "订阅已停止", Label);
     }
 
     public void Dispose()
@@ -118,18 +126,18 @@ public sealed class NtfySubscriber : IDisposable
         {
             var config = _config.Current;
 
-            if (!config.NtfyEnabled)
+            if (!config.NtfyEnabled || !_subscription.Enabled)
             {
                 _status = "未启用";
                 await SafeDelay(TimeSpan.FromSeconds(2), token).ConfigureAwait(false);
                 continue;
             }
 
-            var url = BuildStreamUrl(config.NtfyUrl);
+            var url = BuildStreamUrl(_subscription.Url);
             if (url is null)
             {
                 _status = "地址无效";
-                _log.Warn("ntfy", "订阅地址无效", config.NtfyUrl);
+                _log.Warn("ntfy", "订阅地址无效", _subscription.Url);
                 await SafeDelay(TimeSpan.FromSeconds(10), token).ConfigureAwait(false);
                 continue;
             }
@@ -151,6 +159,7 @@ public sealed class NtfySubscriber : IDisposable
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, connectUrl);
                 request.Headers.Accept.ParseAdd("text/event-stream");
+                NtfyAuth.Apply(request, _subscription.Url);
 
                 using var response = await _http
                     .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token)
@@ -183,7 +192,7 @@ public sealed class NtfySubscriber : IDisposable
                 }
 
                 _status = "连接结束";
-                _log.Warn("ntfy", "服务端关闭了连接，准备重连");
+                _log.Warn("ntfy", "服务端关闭了连接，准备重连", Label);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -192,7 +201,7 @@ public sealed class NtfySubscriber : IDisposable
             catch (Exception ex)
             {
                 _status = "连接异常";
-                _log.Warn("ntfy", "订阅异常，稍后重连", $"{ex.GetType().Name}: {ex.Message}");
+                _log.Warn("ntfy", "订阅异常，稍后重连", $"{Label} | {ex.GetType().Name}: {ex.Message}");
             }
 
             if (token.IsCancellationRequested)
@@ -236,11 +245,11 @@ public sealed class NtfySubscriber : IDisposable
 
         if (Paused)
         {
-            _log.Info("ntfy", "监听已暂停，丢弃消息", message.Content);
+            _log.Info("ntfy", "监听已暂停，丢弃消息", $"{Label} | {message.Content}");
             return;
         }
 
-        _log.Info("ntfy", $"收到消息: {message.Sender} → {LogService.Truncate(message.Content, 60)}");
+        _log.Info("ntfy", $"收到消息: {message.Sender} → {LogService.Truncate(message.Content, 60)}", Label);
 
         MessageReceived?.Invoke(this, new NotifyMessage
         {
@@ -249,8 +258,14 @@ public sealed class NtfySubscriber : IDisposable
             Content = message.Content,
             Time = message.Time,
 
+            // 需求 2：多订阅分色 + 来源标签（如“ntfy · 家庭”）
+            AccentIndex = _subscription.ColorIndex,
+            SourceLabel = string.IsNullOrWhiteSpace(_subscription.Name)
+                ? string.Empty
+                : $"ntfy · {_subscription.Name}",
+
             // 点击通知 → 打开该 topic 的 Web UI 页面（需求 3，不是消息里的链接）
-            LinkUrl = BrowserLauncher.BuildTopicUrl(_config.Current.NtfyUrl) ?? string.Empty,
+            LinkUrl = BrowserLauncher.BuildTopicUrl(_subscription.Url) ?? string.Empty,
         });
     }
 
@@ -264,5 +279,38 @@ public sealed class NtfySubscriber : IDisposable
         {
             // 正常取消
         }
+    }
+}
+
+/// <summary>
+/// ntfy 认证（v0.2.4）：订阅地址里带 user:password@ 时转成 Basic Auth 头，
+/// 同时把地址还原成干净 URL 再发起连接。
+/// </summary>
+public static class NtfyAuth
+{
+    public static void Apply(HttpRequestMessage request, string rawUrl)
+    {
+        var text = (rawUrl ?? string.Empty).Trim();
+        if (!text.Contains("://", StringComparison.Ordinal))
+        {
+            text = "https://" + text;
+        }
+
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri))
+        {
+            return;
+        }
+
+        var userInfo = uri.UserInfo;
+        if (string.IsNullOrEmpty(userInfo) || !userInfo.Contains(':'))
+        {
+            return;
+        }
+
+        var colon = userInfo.IndexOf(':');
+        var user = Uri.UnescapeDataString(userInfo[..colon]);
+        var pass = Uri.UnescapeDataString(userInfo[(colon + 1)..]);
+        var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{user}:{pass}"));
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", basic);
     }
 }

@@ -24,7 +24,10 @@ public sealed class MonitorController : IDisposable
     private readonly MessageCursorStore _cursor;
     private readonly WeChatWatcher _wechat;
     private readonly QQWatcher _qq;
-    private readonly NtfySubscriber _ntfy;
+
+    /// <summary>ntfy 多订阅实例（v0.2.4 需求 1：每个启用的订阅一个连接）。</summary>
+    private readonly List<NtfySubscriber> _ntfySubs = new();
+    private readonly object _ntfyGate = new();
 
     private string _ntfyFingerprint = string.Empty;
     private bool _started;
@@ -45,11 +48,9 @@ public sealed class MonitorController : IDisposable
 
         _wechat = new WeChatWatcher(log, config, _cursor);
         _qq = new QQWatcher(log, config, _cursor);
-        _ntfy = new NtfySubscriber(log, config);
 
         _wechat.MessageDetected += OnMessage;
         _qq.MessageDetected += OnMessage;
-        _ntfy.MessageReceived += OnMessage;
     }
 
     /// <summary>需要弹通知（后台线程回调，订阅方负责切 UI 线程）。</summary>
@@ -57,7 +58,25 @@ public sealed class MonitorController : IDisposable
 
     public bool IsPaused { get; private set; }
 
-    public string NtfyStatus => _ntfy.Status;
+    /// <summary>ntfy 状态汇总（多订阅：已连接 N / 共 M）。</summary>
+    public string NtfyStatus
+    {
+        get
+        {
+            lock (_ntfyGate)
+            {
+                if (_ntfySubs.Count == 0)
+                {
+                    return "无订阅";
+                }
+
+                var connected = _ntfySubs.Count(s => s.Status == "已连接");
+                return connected == _ntfySubs.Count
+                    ? $"已连接 {connected} 个"
+                    : $"已连接 {connected}/{_ntfySubs.Count}";
+            }
+        }
+    }
 
     public string WeChatStatus => _wechat.IsRunning ? "运行中" : "已停止";
 
@@ -73,8 +92,7 @@ public sealed class MonitorController : IDisposable
         _started = true;
         _wechat.Start();
         _qq.Start();
-        _ntfyFingerprint = BuildNtfyFingerprint(_config.Current);
-        _ntfy.Start();
+        RebuildNtfySubscriptions();
         _log.Info("Monitor", "监听已启动");
     }
 
@@ -83,11 +101,19 @@ public sealed class MonitorController : IDisposable
         IsPaused = paused;
         _wechat.Paused = paused;
         _qq.Paused = paused;
-        _ntfy.Paused = paused;
+
+        lock (_ntfyGate)
+        {
+            foreach (var sub in _ntfySubs)
+            {
+                sub.Paused = paused;
+            }
+        }
+
         _log.Info("Monitor", paused ? "已暂停全部监听" : "已恢复监听");
     }
 
-    /// <summary>配置变更后调用：ntfy 地址/开关变化时重连，其余参数下一轮自动生效。</summary>
+    /// <summary>配置变更后调用：ntfy 订阅集合变化时重建连接，其余参数下一轮自动生效。</summary>
     public void ApplyConfig()
     {
         var config = _config.Current;
@@ -100,10 +126,39 @@ public sealed class MonitorController : IDisposable
             return;
         }
 
-        _ntfyFingerprint = fingerprint;
-        _log.Info("Monitor", "ntfy 配置变化，重建订阅");
-        _ntfy.Stop();
-        _ntfy.Start();
+        RebuildNtfySubscriptions();
+    }
+
+    /// <summary>按当前配置重建全部 ntfy 订阅连接（集合/开关/地址变化时调用）。</summary>
+    private void RebuildNtfySubscriptions()
+    {
+        var config = _config.Current;
+
+        lock (_ntfyGate)
+        {
+            foreach (var old in _ntfySubs)
+            {
+                old.MessageReceived -= OnMessage;
+                old.Stop();
+                old.Dispose();
+            }
+
+            _ntfySubs.Clear();
+
+            if (config.NtfyEnabled)
+            {
+                foreach (var subscription in config.NtfySubscriptions.Where(s => s.Enabled))
+                {
+                    var sub = new NtfySubscriber(_log, _config, subscription);
+                    sub.MessageReceived += OnMessage;
+                    sub.Start();
+                    _ntfySubs.Add(sub);
+                }
+            }
+
+            _ntfyFingerprint = BuildNtfyFingerprint(config);
+            _log.Info("Monitor", $"ntfy 订阅已重建：{_ntfySubs.Count} 个地址");
+        }
     }
 
     /// <summary>把去重/游标缓存落盘（由 UI 定时器周期调用）。</summary>
@@ -119,14 +174,37 @@ public sealed class MonitorController : IDisposable
         _cursor.Flush();
         _wechat.Stop();
         _qq.Stop();
-        _ntfy.Dispose();
+
+        lock (_ntfyGate)
+        {
+            foreach (var sub in _ntfySubs)
+            {
+                sub.MessageReceived -= OnMessage;
+                sub.Stop();
+                sub.Dispose();
+            }
+
+            _ntfySubs.Clear();
+        }
+
         _wechat.MessageDetected -= OnMessage;
         _qq.MessageDetected -= OnMessage;
-        _ntfy.MessageReceived -= OnMessage;
         _started = false;
     }
 
-    private static string BuildNtfyFingerprint(AppConfig config) => $"{config.NtfyEnabled}|{config.NtfyUrl}";
+    /// <summary>订阅集合签名：任一项的开关/名称/地址/颜色变化都要重建连接。</summary>
+    private static string BuildNtfyFingerprint(AppConfig config)
+    {
+        if (!config.NtfyEnabled)
+        {
+            return "off";
+        }
+
+        var parts = config.NtfySubscriptions
+            .Where(s => s.Enabled)
+            .Select(s => s.Fingerprint());
+        return string.Join(";;", parts);
+    }
 
     private void OnMessage(object? sender, NotifyMessage message)
     {

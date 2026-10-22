@@ -5,6 +5,9 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
+**下载**：[Release v0.2](https://github.com/lingli00/NotifyHub/releases/tag/v0.2)
+→ `NotifyHub-v0.2-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2-source.zip`（完整工程）。
+
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
 
@@ -205,6 +208,8 @@ NotifyHub/
 │  ├─ grab.py                   区域抓屏（BitBlt + CAPTUREBLT，能抓透明窗口）
 │  ├─ island_probe.py           灵动岛真机探测：读位置 / 真实鼠标拖拽（左键、右键）
 │  ├─ stream_latency.py         量 --island-stream 每行更新耗时
+│  ├─ push_api.py               走 GitHub Git Data API 推送提交（git 协议被墙时用）
+│  ├─ release_api.py            走 API 创建 Release 并上传两个 zip
 │  └─ …                         微信窗口诊断脚本
 ├─ docs/                        文档截图
 ├─ dist/                        发布产物（NotifyHub.exe）

@@ -20,6 +20,8 @@ public sealed class IslandController : IDisposable
     private readonly SoundService _sound;
     private readonly MediaPlayerMonitor _media;
     private readonly FullscreenWatcher _fullscreen;
+    private WorkBuddyWatcher? _workbuddy;
+    private long _manualUntilMs; // 手动 --island 推送后的 15 秒内，自动监视不覆盖
     private IslandWindow? _island;
     private bool _started;
 
@@ -72,6 +74,8 @@ public sealed class IslandController : IDisposable
 
         _ = _media.StartAsync();
 
+        StartWorkBuddyWatch();
+
         // 预热灵动岛窗口（离屏建 HWND + 首帧渲染），
         // 让第一条状态更新也能在 100ms 内上屏，而不是被窗口创建时间吃掉。
         _ = Task.Run(async () =>
@@ -96,6 +100,9 @@ public sealed class IslandController : IDisposable
     /// <summary>显示任务状态（任意线程调用）。只取首行、压平空白、超长截断。</summary>
     public void ShowTask(string text, bool done)
     {
+        // 手动/外部推送优先：15 秒内不被 WorkBuddy 自动监视的更新覆盖
+        Interlocked.Exchange(ref _manualUntilMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 15_000);
+
         var single = ToSingleLine(text, done ? "任务完成" : "正在执行任务…");
 
         _dispatcher.BeginInvoke(new Action(() =>
@@ -116,6 +123,53 @@ public sealed class IslandController : IDisposable
                 _log.Error("Island", "显示任务状态失败", $"{ex.GetType().Name}: {ex.Message}");
             }
         }));
+    }
+
+    /// <summary>
+    /// 自动读取 WorkBuddy 任务进度：监视本地会话记录（.workbuddy\projects\**\*.jsonl），
+    /// AI 每一步工具调用实时上岛；回合结束报完成态（绿勾 + 完成提示音）。
+    /// </summary>
+    private void StartWorkBuddyWatch()
+    {
+        if (!_config.Current.WorkBuddyWatchEnabled)
+        {
+            _log.Info("Island", "WorkBuddy 任务监视未启用（配置关闭）");
+            return;
+        }
+
+        try
+        {
+            _workbuddy = new WorkBuddyWatcher(_log);
+            _workbuddy.TaskChanged += (text, done) => _dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    // 手动推送优先窗口内不覆盖
+                    if (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < Volatile.Read(ref _manualUntilMs))
+                    {
+                        return;
+                    }
+
+                    if (done)
+                    {
+                        Island().ShowDone(ToSingleLine(text, "任务完成"));
+                    }
+                    else
+                    {
+                        Island().ShowRunning(ToSingleLine(text, "正在执行任务…"));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _log.Error("Island", "显示 WorkBuddy 自动状态失败", $"{ex.GetType().Name}: {ex.Message}");
+                }
+            }));
+            _workbuddy.Start();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Island", "启动 WorkBuddy 任务监视失败", ex.Message);
+        }
     }
 
     /// <summary>媒体快捷控制（来自岛内按钮或 --media 命令）。</summary>
@@ -243,6 +297,7 @@ public sealed class IslandController : IDisposable
         _config.Changed -= OnConfigChanged;
         _media.Dispose();
         _fullscreen.Dispose();
+        _workbuddy?.Dispose();
 
         if (Current == this)
         {

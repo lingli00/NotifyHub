@@ -68,6 +68,7 @@ public partial class SettingsWindow : Window
         IslandFixedRadio.IsChecked = config.IslandMode != "Free";
         IslandFreeRadio.IsChecked = config.IslandMode == "Free";
         MusicEnabledCheck.IsChecked = config.MusicEnabled;
+        WbWatchCheck.IsChecked = config.WorkBuddyWatchEnabled;
 
         MessageSoundCheck.IsChecked = config.MessageSoundEnabled;
         MessageVolumeSlider.Value = config.MessageSoundVolume;
@@ -141,6 +142,7 @@ public partial class SettingsWindow : Window
         next.DumpUiaOnStart = DumpOnStartCheck.IsChecked == true;
         next.IslandMode = IslandFreeRadio.IsChecked == true ? "Free" : "Fixed";
         next.MusicEnabled = MusicEnabledCheck.IsChecked == true;
+        next.WorkBuddyWatchEnabled = WbWatchCheck.IsChecked == true;
         next.NotificationCorner = CornerValues[Math.Clamp(CornerCombo.SelectedIndex, 0, CornerValues.Length - 1)];
 
         next.MessageSoundEnabled = MessageSoundCheck.IsChecked == true;

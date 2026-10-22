@@ -51,6 +51,9 @@ public sealed class AppConfig
     /// <summary>启用音乐控制模块：播放音乐时灵动岛显示播放器控件，无音频自动隐藏。</summary>
     public bool MusicEnabled { get; set; } = true;
 
+    /// <summary>自动读取 WorkBuddy 任务进度：监视本地会话记录，灵动岛实时显示 AI 正在执行的动作，回合结束报完成态。</summary>
+    public bool WorkBuddyWatchEnabled { get; set; } = true;
+
     /// <summary>【消息通知提示音】开关（仅放行的聊天消息播放）。</summary>
     public bool MessageSoundEnabled { get; set; } = true;
 

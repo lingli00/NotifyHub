@@ -211,6 +211,12 @@
                                                Text="播放音乐时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏；全屏观影/游戏时整岛隐藏" />
                                 </StackPanel>
 
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <CheckBox x:Name="WbWatchCheck" Content="自动读取 WorkBuddy 任务进度" />
+                                    <TextBlock Style="{StaticResource HintText}"
+                                               Text="监视 WorkBuddy 本地会话记录，AI 每一步动作实时上岛，回合结束报完成态并响完成音" />
+                                </StackPanel>
+
                                 <TextBlock Grid.Row="2" Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap"
                                            Text="自由模式下 10 秒无交互会自动吸附到最近的一条屏幕边（上下左右都算），贴边留一条缝隙；鼠标移到条上会自动滑出，移开后重新计时。" />
                             </Grid>

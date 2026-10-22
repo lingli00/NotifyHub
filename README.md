@@ -1,12 +1,12 @@
-# NotifyHub v0.2
+# NotifyHub
 
 Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 把**微信 / QQ / ntfy** 三个来源的消息统一成 macOS 风格通知横幅，同时提供一个
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
-**下载**：[Release v0.2](https://github.com/lingli00/NotifyHub/releases/tag/v0.2)
-→ `NotifyHub-v0.2-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2-source.zip`（完整工程）。
+**下载**：[Release v0.2.1](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.1)
+→ `NotifyHub-v0.2.1-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.1-source.zip`（完整工程）。
 
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
@@ -39,6 +39,7 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 | 拖拽 | 自由模式下按住条体空白处拖动，**左键、右键都能拖**，按钮区域自动让位给点击 |
 | 四边吸附 | 自由模式 10 秒无交互 → 平滑吸附到最近的一条屏幕边（上下左右都算），贴边留 8px 缝隙；鼠标移入自动滑出 48px，移开重新计时 |
 | 状态通道 | 命名管道长连接 + `--island-stream`：**连续更新延迟 <100ms**（实测每行 0.12ms） |
+| WorkBuddy 任务监控 | **自动**读取 WorkBuddy 本地会话记录：AI 每一步动作实时上岛（运行/修改/检索/派出助手…），回合结束绿勾 + 完成提示音，无需任何手动接线 |
 | 任务完成提示音 | 与消息提示音完全独立的第二套音效，完成态出现时播放 |
 | 音乐控制 | 系统 SMTC 聚合各播放器（Folia、网易云、QQ音乐、Spotify 等），同一悬浮条内显示「♪ 歌名-歌手 + 上一首/播放暂停/下一首」 |
 | 智能隐藏 | 无音频 → 音乐区隐藏；无任务 → 任务区隐藏；检测到全屏观影/游戏 → 整套灵动岛隐藏，退出后恢复 |
@@ -269,6 +270,13 @@ python tools\stream_latency.py         # 状态流延迟
 ---
 
 ## 八、版本
+
+**v0.2.1** — 修复「正式版读不到 WorkBuddy 任务进度」
+
+* 新模块 `WorkBuddyWatcher`：增量 tail WorkBuddy 本地会话记录（`~\.workbuddy\projects\**\*.jsonl`），
+  AI 每一步工具调用实时上岛；回合结束（回复后安静 8 秒）报绿勾完成态 + 完成提示音；3 分钟无事件自动收起。
+* 此前任务状态只有外部命令一条被动通道——在 WorkBuddy 里正常跑任务时没人调用它，岛上永远只有音乐。
+* 设置页新增开关「自动读取 WorkBuddy 任务进度」（默认开启）；外部命令推送后 15 秒内优先。
 
 **v0.2** — 灵动岛重构 + 拖拽/吸附 + 日志合并
 

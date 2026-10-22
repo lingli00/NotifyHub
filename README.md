@@ -23,6 +23,10 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 | --- | --- |
 | ![设置](docs/settings.png) | ![运行日志](docs/logs.png) |
 
+WorkBuddy 里跑任务时，灵动岛自动显示 AI 的每一步动作（自动读取，无需接线）：
+
+![WorkBuddy 任务实时进度](docs/workbuddy-live.png)
+
 ---
 
 ## 一、它能做什么

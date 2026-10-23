@@ -28,10 +28,10 @@ namespace NotifyHub.UI;
 /// </summary>
 public sealed class NotificationManager
 {
-    /// <summary>窗口宽度（含左右阴影留白）。</summary>
+    /// <summary>窗口宽度（基准 1080p，含左右阴影留白）。实际尺寸见 <see cref="CurrentScale"/>。</summary>
     public const double CardWidth = NotificationLayout.WindowWidth;
 
-    /// <summary>卡片本体高度，决定纵向堆叠步进。</summary>
+    /// <summary>卡片本体高度（基准 1080p），决定纵向堆叠步进。</summary>
     public const double CardHeight = NotificationLayout.CardBodyHeight;
 
     private static readonly TimeSpan PopInterval = TimeSpan.FromMilliseconds(320);
@@ -47,6 +47,9 @@ public sealed class NotificationManager
     // ---- 帧驱动重排 ----
     private readonly Dictionary<NotificationWindow, MoveState> _moves = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
+
+    /// <summary>上一帧的合成时间戳（FrameClock 去重用，v0.2.9 需求 1）。</summary>
+    private TimeSpan _lastFrameTime = TimeSpan.MinValue;
     private bool _ticking;
 
     private sealed class MoveState
@@ -118,13 +121,17 @@ public sealed class NotificationManager
 
         var work = CurrentWorkArea();
         var corner = NotificationLayout.Parse(_configProvider().NotificationCorner);
+        var scale = ScreenMetrics.UiScale(work);
 
         for (var i = 0; i < _windows.Count; i++)
         {
-            var (left, top) = NotificationLayout.WindowOrigin(work, corner, i);
+            var (left, top) = NotificationLayout.WindowOrigin(work, corner, i, scale);
             MoveTo(_windows[i], left, top, animate);
         }
     }
+
+    /// <summary>当前所有卡片使用的界面缩放（诊断用）。</summary>
+    public double CurrentScale => ScreenMetrics.UiScale(CurrentWorkArea());
 
     /// <summary>当前主屏工作区（DIP，实时 DPI）。</summary>
     private Rect CurrentWorkArea()
@@ -193,6 +200,12 @@ public sealed class NotificationManager
             return;
         }
 
+        // 一帧只推一次（v0.2.9 需求 1）：重排滑动在多窗口场景下会被同帧派发多次
+        if (!FrameClock.ShouldTick(ref _lastFrameTime, e))
+        {
+            return;
+        }
+
         var now = _clock.Elapsed.TotalMilliseconds;
         var duration = MoveDuration.TotalMilliseconds;
         List<NotificationWindow>? finished = null;
@@ -238,7 +251,8 @@ public sealed class NotificationManager
         var config = _configProvider();
         var max = Math.Clamp(config.MaxStack, 1, AppConfig.MaxStackLimit);
         var work = CurrentWorkArea();
-        max = Math.Min(max, NotificationLayout.MaxFit(work));
+        var scale = ScreenMetrics.UiScale(work);
+        max = Math.Min(max, NotificationLayout.MaxFit(work, scale));
 
         if (_windows.Count >= max)
         {
@@ -251,7 +265,8 @@ public sealed class NotificationManager
             message,
             config.NotificationDurationMs,
             config.MarqueeSpeed,
-            config);
+            config,
+            scale);
         window.Dismissed += OnWindowDismissed;
         window.Clicked += OnWindowClicked;
         window.DisplayChanged += OnWindowDisplayChanged;
@@ -262,11 +277,12 @@ public sealed class NotificationManager
         _windows.Insert(0, window);
         Relayout(animate: true);
 
-        var (left, top) = NotificationLayout.WindowOrigin(work, corner, 0);
+        var (left, top) = NotificationLayout.WindowOrigin(work, corner, 0, scale);
         window.ShowAt(left, top, animate: true, fromLeft: NotificationLayout.IsLeftAligned(corner));
 
         _log.Info("通知", $"弹出第 {_windows.Count} 张卡",
-            $"corner={corner} pos={left:F0},{top:F0} stack={(NotificationLayout.StacksUpward(corner) ? "向上" : "向下")}");
+            $"corner={corner} pos={left:F0},{top:F0} scale={scale:F2} " +
+            $"stack={(NotificationLayout.StacksUpward(corner) ? "向上" : "向下")}");
 
         // 消息通知提示音：真正上屏时才响，被过滤的消息不会走到这里
         _sound?.PlayMessage(config);

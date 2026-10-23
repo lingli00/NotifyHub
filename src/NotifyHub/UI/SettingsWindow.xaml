@@ -1,29 +1,83 @@
 <Window x:Class="NotifyHub.UI.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="NotifyHub 设置" Height="760" Width="900"
-        MinHeight="620" MinWidth="820"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="NotifyHub 设置" Height="780" Width="920"
+        MinHeight="620" MinWidth="840"
         WindowStartupLocation="CenterScreen"
-        Background="#F5F6F8"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="CanResize"
         FontFamily="Microsoft YaHei UI, Segoe UI"
         TextOptions.TextFormattingMode="Display">
 
+    <!--
+      v0.2.9 需求 6：设置界面改为毛玻璃。
+        · 去掉系统标题栏（WindowStyle=None + AllowsTransparency），自绘一条可拖拽的标题栏；
+        · 背景用高透明多层渐变 + 1px 高光描边（和通知卡/灵动岛同一套视觉，
+          Win10 分层窗口拿不到 DWM 真模糊，这是等效实现）；
+        · 所有前景/背景都走 DynamicResource，由代码按「系统深浅主题 + 背景实测亮度」注入，
+          因此深色系统下不会再出现"白卡片配黑字"的割裂。
+        · WindowChrome 保留边缘拖拽缩放，不然 AllowsTransparency 会让窗口变成不可调整大小。
+    -->
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="6"
+                            CornerRadius="0" GlassFrameThickness="0"
+                            UseAeroCaptionButtons="False" />
+    </shell:WindowChrome.WindowChrome>
+
     <Window.Resources>
+        <!--  外观画刷：默认浅色兜底，运行时由 ApplyGlassChrome() 覆盖  -->
+        <SolidColorBrush x:Key="AppFg" Color="#1C1C1E" />
+        <SolidColorBrush x:Key="AppSubFg" Color="#7A7F88" />
+        <SolidColorBrush x:Key="AppCard" Color="#B8FFFFFF" />
+        <SolidColorBrush x:Key="AppInput" Color="#C6FFFFFF" />
+        <SolidColorBrush x:Key="AppBorder" Color="#33000000" />
+        <SolidColorBrush x:Key="AppHover" Color="#22000000" />
+
         <Style TargetType="GroupBox">
             <Setter Property="Margin" Value="0,0,0,10" />
             <Setter Property="Padding" Value="14,8,14,10" />
-            <Setter Property="BorderBrush" Value="#DDE1E6" />
-            <Setter Property="Background" Value="#FFFFFF" />
+            <Setter Property="BorderBrush" Value="{DynamicResource AppBorder}" />
+            <Setter Property="Background" Value="{DynamicResource AppCard}" />
+            <Setter Property="Foreground" Value="{DynamicResource AppFg}" />
             <Setter Property="FontSize" Value="13" />
         </Style>
         <Style TargetType="TextBlock">
             <Setter Property="FontSize" Value="12.5" />
-            <Setter Property="Foreground" Value="#333333" />
+            <Setter Property="Foreground" Value="{DynamicResource AppFg}" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style x:Key="HintText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11.5" />
-            <Setter Property="Foreground" Value="#8A8F98" />
+            <Setter Property="Foreground" Value="{DynamicResource AppSubFg}" />
+        </Style>
+
+        <!--  自绘标题栏按钮（最小化 / 关闭）：无边框方形，悬停微亮  -->
+        <Style x:Key="CaptionButton" TargetType="Button">
+            <Setter Property="Width" Value="42" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{DynamicResource AppFg}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" CornerRadius="6" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource AppHover}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style TargetType="TextBox">
             <Setter Property="Padding" Value="6,3" />
@@ -77,19 +131,43 @@
         </Style>
     </Window.Resources>
 
-    <Grid Margin="16,12,16,10">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
+    <!--  毛玻璃外壳：圆角 + 1px 高光描边，背景由 ApplyGlassChrome() 按系统深浅注入  -->
+    <Border x:Name="Shell" Margin="8" CornerRadius="12" BorderThickness="1"
+            BorderBrush="{DynamicResource AppBorder}">
+        <Border.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#F5F7F9FB" Offset="0" />
+                <GradientStop Color="#EDEEF1F5" Offset="0.5" />
+                <GradientStop Color="#E6E8ECF1" Offset="1" />
+            </LinearGradientBrush>
+        </Border.Background>
 
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-            <TextBlock Text="NotifyHub" FontSize="19" FontWeight="SemiBold" Foreground="#1F2937" VerticalAlignment="Center" />
-            <TextBlock Text="桌面消息聚合 · 微信 / QQ / ntfy · 灵动岛" FontSize="12" Foreground="#8A8F98"
-                       VerticalAlignment="Center" Margin="10,2,0,0" />
-        </StackPanel>
+        <Grid Margin="16,10,16,10">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!--  自绘标题栏（可拖拽 + 最小化/关闭）：WindowStyle=None 后系统标题栏不可用  -->
+            <Grid Grid.Row="0" Margin="0,0,0,10" Background="Transparent"
+                  MouseLeftButtonDown="OnTitleBarMouseDown">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="NotifyHub" FontSize="19" FontWeight="SemiBold"
+                               Foreground="{DynamicResource AppFg}" VerticalAlignment="Center" />
+                    <TextBlock Text="桌面消息聚合 · 微信 / QQ / ntfy · 灵动岛" FontSize="12"
+                               Foreground="{DynamicResource AppSubFg}"
+                               VerticalAlignment="Center" Margin="10,2,0,0" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button x:Name="MinimizeButton" Content="—" Style="{StaticResource CaptionButton}"
+                            Click="OnMinimizeClick" ToolTip="最小化" />
+                    <Button x:Name="CloseButton" Content="✕" Style="{StaticResource CaptionButton}"
+                            Click="OnCloseClick" ToolTip="关闭" />
+                </StackPanel>
+            </Grid>
 
         <TabControl Grid.Row="1" x:Name="Tabs" Background="Transparent" BorderThickness="0">
 
@@ -171,10 +249,10 @@
                                                 HorizontalAlignment="Right" VerticalAlignment="Center">
                                         <TextBlock Text="轮询间隔" Margin="0,0,6,0" />
                                         <TextBox x:Name="IntervalBox" Width="64" Height="26" Margin="0,0,4,0" TextAlignment="Right" />
-                                        <TextBlock Text="ms" Margin="0,0,14,0" Foreground="#8A8F98" />
+                                        <TextBlock Text="ms" Margin="0,0,14,0" Foreground="{DynamicResource AppSubFg}" />
                                         <TextBlock Text="通知时长" Margin="0,0,6,0" />
                                         <TextBox x:Name="DurationBox" Width="64" Height="26" Margin="0,0,4,0" TextAlignment="Right" />
-                                        <TextBlock Text="ms" Foreground="#8A8F98" />
+                                        <TextBlock Text="ms" Foreground="{DynamicResource AppSubFg}" />
                                     </StackPanel>
                                 </Grid>
 
@@ -255,7 +333,7 @@
                                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                                         <Slider x:Name="MarqueeSpeedSlider" Width="150" Minimum="10" Maximum="120"
                                                 SmallChange="5" LargeChange="10" ValueChanged="OnMarqueeSpeedChanged" />
-                                        <TextBlock x:Name="MarqueeSpeedText" Margin="8,0,0,0" Width="70" Foreground="#8A8F98" Text="45" />
+                                        <TextBlock x:Name="MarqueeSpeedText" Margin="8,0,0,0" Width="70" Foreground="{DynamicResource AppSubFg}" Text="45" />
                                     </StackPanel>
                                 </Grid>
 
@@ -268,7 +346,7 @@
                                     <Slider x:Name="AutoCollapseSlider" Width="120" Minimum="1" Maximum="60"
                                             IsSnapToTickEnabled="True" TickFrequency="1" />
                                     <TextBlock x:Name="AutoCollapseText" Width="52" Margin="8,0,0,0"
-                                               Foreground="#8A8F98" Text="3 秒" />
+                                               Foreground="{DynamicResource AppSubFg}" Text="3 秒" />
                                     <CheckBox x:Name="KeepOpenWhilePlayingCheck" Content="音乐播放时保持展开" />
                                 </StackPanel>
 
@@ -280,11 +358,10 @@
                             </Grid>
                         </GroupBox>
 
-                        <!--  外观主题（v0.2.6 需求 3/4/5；v0.2.7 需求 1 增加歌词字号）  -->
-                        <GroupBox Header="外观（通知弹窗 + 灵动岛）">
+                        <!--  灵动岛外观（v0.2.9 需求 6：删掉主题/文字配色，改为毛玻璃跟随系统 + 两个实时滑块）  -->
+                        <GroupBox Header="灵动岛外观">
                             <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
@@ -295,45 +372,48 @@
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="主题" Margin="0,0,10,0" VerticalAlignment="Center" />
-                                <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ThemeCombo" Width="200" Height="26"
-                                          FontSize="12.5" HorizontalAlignment="Left">
-                                    <ComboBoxItem Content="纯色暗黑" Tag="SolidDark" />
-                                    <ComboBoxItem Content="毛玻璃 · 深色" Tag="GlassDark" />
-                                    <ComboBoxItem Content="毛玻璃 · 浅色" Tag="GlassLight" />
-                                    <ComboBoxItem Content="毛玻璃 · 跟随系统" Tag="GlassAuto" />
-                                </ComboBox>
-
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="文字配色" Margin="0,10,10,0" VerticalAlignment="Center" />
-                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
-                                    <ComboBox x:Name="TextToneCombo" Width="140" Height="26" FontSize="12.5">
-                                        <ComboBoxItem Content="自动（按背景对比度）" Tag="Auto" />
-                                        <ComboBoxItem Content="强制白色" Tag="White" />
-                                        <ComboBoxItem Content="强制黑色" Tag="Black" />
-                                    </ComboBox>
-                                    <Button Content="预览" Height="26" MinWidth="0" Padding="12,2" Margin="8,0,0,0"
-                                            Click="OnThemePreviewClick" />
+                                <!--  滑块 1：岛总长度  -->
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="总长度" Margin="0,0,10,0" />
+                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
+                                    <Slider x:Name="IslandWidthSlider" Width="220" Height="24"
+                                            Minimum="60" Maximum="160" IsSnapToTickEnabled="True"
+                                            TickFrequency="5" VerticalAlignment="Center"
+                                            ToolTip="向左更短、向右更长（100% = 默认自适应宽度）" />
+                                    <TextBlock x:Name="IslandWidthText" Width="64" Margin="10,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="100%" />
+                                    <TextBlock Style="{StaticResource HintText}"
+                                               Text="只调上限，内容短时岛仍会自动收窄" />
                                 </StackPanel>
 
-                                <!--  v0.2.7 需求 1：歌词总开关 + 字号  -->
+                                <!--  滑块 2：左右区域分配比例  -->
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="区域比例" Margin="0,10,10,0" />
+                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                                    <TextBlock Text="播放器" Style="{StaticResource HintText}" />
+                                    <Slider x:Name="IslandSplitSlider" Width="180" Height="24" Margin="8,0"
+                                            Minimum="25" Maximum="75" IsSnapToTickEnabled="True"
+                                            TickFrequency="1" VerticalAlignment="Center"
+                                            ToolTip="向左：播放器变窄、右侧变宽；向右：播放器变宽、右侧变窄" />
+                                    <TextBlock Text="任务/通知" Style="{StaticResource HintText}" />
+                                    <TextBlock x:Name="IslandSplitText" Width="76" Margin="10,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="50 : 50" />
+                                </StackPanel>
+
+                                <!--  歌词总开关 + 字号（与"音乐播放时保持展开"互相独立）  -->
                                 <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
-                                            Orientation="Horizontal" Margin="0,10,0,0">
+                                            Orientation="Horizontal" Margin="0,12,0,0">
                                     <CheckBox x:Name="LyricsEnabledCheck" Content="显示歌词" MinWidth="92" />
                                     <TextBlock Text="歌词字号" Margin="0,0,8,0" />
                                     <Slider x:Name="LyricsFontSizeSlider" Width="120" Minimum="10" Maximum="22"
                                             IsSnapToTickEnabled="True" TickFrequency="1" />
                                     <TextBlock x:Name="LyricsFontSizeText" Width="48" Margin="8,0,0,0"
-                                               Foreground="#8A8F98" Text="13" />
+                                               Foreground="{DynamicResource AppSubFg}" Text="13" />
                                     <TextBlock Style="{StaticResource HintText}" Text="关掉后即使保持展开也不显示歌词（与上面的保持展开互相独立）" />
                                 </StackPanel>
 
+                                <!--  外观说明：主题固定为毛玻璃，跟随系统深浅，文字自动保证对比度  -->
                                 <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
-                                           Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap"
-                                           Text="毛玻璃为半透明效果，能看到下层内容（Win10 分层窗口不支持 DWM 真模糊，因此用高透明渐变+高光描边等效实现）。文字配色「自动」会按背景亮度选对比度更高的颜色，保证深/浅玻璃下都清晰。" />
-
-                                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
-                                           Style="{StaticResource HintText}" Margin="0,4,0,0" TextWrapping="Wrap"
-                                           Text="通知弹窗支持按住拖动（上滑/左右滑超过阈值松手即带惯性收起），不用等倒计时。固定模式下灵动岛只有三个播放键可点，其余区域点按穿透到下层窗口。" />
+                                           Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap"
+                                           Text="外观固定为毛玻璃：半透明可见下层内容，深浅跟随 Windows 应用主题，文字颜色按背景实测亮度自动选对比度更高的一侧（不再提供手动配色与透明度调节）。两个滑块拖动时岛会立即变化，无需保存。" />
                             </Grid>
                         </GroupBox>
 
@@ -407,7 +487,7 @@
                                     </ComboBox>
                                     <TextBlock Text="音量" Margin="12,0,6,0" />
                                     <Slider x:Name="MessageVolumeSlider" Value="80" ValueChanged="OnMessageVolumeChanged" />
-                                    <TextBlock x:Name="MessageVolumeText" Margin="8,0,0,0" Width="34" Foreground="#8A8F98" Text="80%" />
+                                    <TextBlock x:Name="MessageVolumeText" Margin="8,0,0,0" Width="34" Foreground="{DynamicResource AppSubFg}" Text="80%" />
                                     <Button x:Name="MessageTestButton" Content="试听" MinWidth="52" Padding="10,3"
                                             Margin="10,0,0,0" FontSize="11.5" Click="OnMessageSoundTestClick" />
                                 </StackPanel>
@@ -423,7 +503,7 @@
                                     </ComboBox>
                                     <TextBlock Text="音量" Margin="12,0,6,0" />
                                     <Slider x:Name="TaskVolumeSlider" Value="80" ValueChanged="OnTaskVolumeChanged" />
-                                    <TextBlock x:Name="TaskVolumeText" Margin="8,0,0,0" Width="34" Foreground="#8A8F98" Text="80%" />
+                                    <TextBlock x:Name="TaskVolumeText" Margin="8,0,0,0" Width="34" Foreground="{DynamicResource AppSubFg}" Text="80%" />
                                     <Button x:Name="TaskTestButton" Content="试听" MinWidth="52" Padding="10,3"
                                             Margin="10,0,0,0" FontSize="11.5" Click="OnTaskSoundTestClick" />
                                 </StackPanel>
@@ -500,9 +580,9 @@
 
                         <!--  日志目录（v0.2.4 需求 8：可自定义）  -->
                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,5,0,0">
-                            <TextBlock Text="日志目录" FontSize="11.5" Foreground="#8A8F98"
+                            <TextBlock Text="日志目录" FontSize="11.5" Foreground="{DynamicResource AppSubFg}"
                                        VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock x:Name="LogDirText" FontSize="11.5" Foreground="#4B5563"
+                            <TextBlock x:Name="LogDirText" FontSize="11.5" Foreground="{DynamicResource AppFg}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                        MaxWidth="560" />
                             <Button x:Name="LogDirEditButton" Content="更改目录…" MinWidth="76" Padding="10,3"
@@ -526,8 +606,8 @@
 
                     <TextBlock Grid.Row="2" Text="最近 50 条事件" FontWeight="SemiBold" Margin="2,10,0,5" />
 
-                    <ListView Grid.Row="3" x:Name="EventList" BorderThickness="1" BorderBrush="#DDE1E6"
-                              Background="White" FontSize="12"
+                    <ListView Grid.Row="3" x:Name="EventList" BorderThickness="1" BorderBrush="{DynamicResource AppBorder}"
+                              Background="{DynamicResource AppInput}" FontSize="12"
                               ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                         <ListView.View>
                             <GridView>
@@ -554,6 +634,8 @@
                     Background="#FEE2E2" Foreground="#B91C1C" BorderBrush="#FCA5A5" />
         </StackPanel>
 
-        <TextBlock Grid.Row="3" x:Name="StatusText" Foreground="#6B7280" Margin="2,6,0,0" TextWrapping="Wrap" />
-    </Grid>
+        <TextBlock Grid.Row="3" x:Name="StatusText" Foreground="{DynamicResource AppSubFg}"
+                   Margin="2,6,0,0" TextWrapping="Wrap" />
+        </Grid>
+    </Border>
 </Window>

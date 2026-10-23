@@ -50,6 +50,9 @@ public sealed class MarqueeText : Control
     private bool _hovering;
     private DateTime _lastTick = DateTime.MinValue;
 
+    /// <summary>上一帧的合成时间戳（FrameClock 去重用，v0.2.9 需求 1）。</summary>
+    private TimeSpan _lastFrameTime = TimeSpan.MinValue;
+
     static MarqueeText()
     {
         // 无模板：样式查找指向自身（不提供模板资源 → 不渲染模板子树），
@@ -261,6 +264,12 @@ public sealed class MarqueeText : Control
     /// <summary>渲染帧回调：帧率无关推进，悬停/离屏时暂停推进（内容保持）。</summary>
     private void OnRendering(object? sender, EventArgs e)
     {
+        // 一帧只推进一次（v0.2.9 需求 1）：同一帧的多趟派发会让位移被切成不等距的小步
+        if (!FrameClock.ShouldTick(ref _lastFrameTime, e))
+        {
+            return;
+        }
+
         var now = DateTime.UtcNow;
 
         // 截屏挂起：不推进、不重绘（保留最后一帧供抓拍）

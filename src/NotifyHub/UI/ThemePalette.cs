@@ -73,19 +73,15 @@ public sealed class ThemePalette
     /// 按配置 + 实际背景亮度解析调色板。
     /// <paramref name="backdropLuminance"/> 是窗口背后内容的平均相对亮度（0~1）；
     /// 传 null 表示不取样（回退到调色板自身的深/浅假设）。
+    ///
+    /// v0.2.9 需求 6：外观**固定为毛玻璃**，深浅跟随 Windows 应用主题，文字一律走自动对比度。
+    /// 用户侧的「主题 / 文字配色」选项已删除，所以这里不再读取
+    /// <c>config.ThemeMode</c> / <c>config.TextTone</c>（旧配置里即使还留着值也不生效）。
     /// </summary>
     public static ThemePalette Create(AppConfig config, double? backdropLuminance)
     {
-        var mode = NormalizeMode(config.ThemeMode);
-        var palette = mode switch
-        {
-            "GlassLight" => Glass(isLight: true, mode),
-            "GlassAuto" => Glass(isLight: SystemPrefersLight(), mode),
-            "GlassDark" => Glass(isLight: false, mode),
-            _ => Solid(),
-        };
-
-        return ApplyTextTone(palette, config.TextTone, backdropLuminance);
+        var palette = Glass(isLight: SystemPrefersLight(), "GlassAuto");
+        return ApplyTextTone(palette, "Auto", backdropLuminance);
     }
 
     /// <summary>主题模式收敛（非法值 → 纯色暗黑）。</summary>

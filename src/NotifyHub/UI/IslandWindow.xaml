@@ -54,6 +54,34 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!--  岛内信息行按钮（通知行）：整行可点、透明底、悬停微亮，命中判定走 Button  -->
+        <Style x:Key="IslandRowButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="RowBd" CornerRadius="7" Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="RowBd" Property="Background" Value="{DynamicResource IslandHover}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="RowBd" Property="Background" Value="{DynamicResource IslandPress}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <!--
@@ -189,43 +217,79 @@
                         Background="{DynamicResource IslandDivider}"
                         Margin="12,0,12,0" VerticalAlignment="Center" Visibility="Collapsed" />
 
-                <!--  ============ 右栏：WorkBuddy 任务（标签 + 正文）  ============  -->
-                <StackPanel x:Name="StatusGroup" Grid.Column="2" Orientation="Vertical"
+                <!--  ============ 右栏：WorkBuddy 任务 + 通知（v0.2.9 需求 3）  ============  -->
+                <StackPanel x:Name="RightPane" Grid.Column="2" Orientation="Vertical"
                             VerticalAlignment="Center" Margin="0,1,0,1">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
 
-                        <!--  标签行：状态点 / 完成对勾 + 来源标签  -->
-                        <Grid Grid.Row="0" Grid.Column="0" Width="13" Height="13" VerticalAlignment="Center">
-                            <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="#FFB020"
-                                     RenderTransformOrigin="0.5,0.5">
-                                <Ellipse.RenderTransform>
-                                    <ScaleTransform x:Name="DotScale" ScaleX="1" ScaleY="1" />
-                                </Ellipse.RenderTransform>
-                            </Ellipse>
-                            <Path x:Name="CheckGlyph" Data="M1,6.6 L4.6,10.4 L11,1.8" Stroke="#34C759"
-                                  StrokeThickness="2.2" Width="12" Height="12" Stretch="Uniform"
-                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                  StrokeLineJoin="Round" Visibility="Collapsed"
-                                  HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    <!--  任务行（琥珀状态点 + 来源标签 + 一行实时动作）  -->
+                    <StackPanel x:Name="StatusGroup" Orientation="Vertical">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <!--  标签行：状态点 / 完成对勾 + 来源标签  -->
+                            <Grid Grid.Row="0" Grid.Column="0" Width="13" Height="13" VerticalAlignment="Center">
+                                <Ellipse x:Name="StatusDot" Width="7" Height="7" Fill="#FFB020"
+                                         RenderTransformOrigin="0.5,0.5">
+                                    <Ellipse.RenderTransform>
+                                        <ScaleTransform x:Name="DotScale" ScaleX="1" ScaleY="1" />
+                                    </Ellipse.RenderTransform>
+                                </Ellipse>
+                                <Path x:Name="CheckGlyph" Data="M1,6.6 L4.6,10.4 L11,1.8" Stroke="#34C759"
+                                      StrokeThickness="2.2" Width="12" Height="12" Stretch="Uniform"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      StrokeLineJoin="Round" Visibility="Collapsed"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Grid>
+
+                            <TextBlock x:Name="StatusTag" Grid.Row="0" Grid.Column="1" Text="WorkBuddy"
+                                       FontSize="10" Margin="6,0,0,0" Foreground="{DynamicResource IslandSubFg}"
+                                       Opacity="0.85" VerticalAlignment="Center" />
+
+                            <!--  正文：一行实时动作（跑马灯，超宽横滚、悬停暂停、短文本左对齐）  -->
+                            <local:MarqueeText x:Name="StatusText" Grid.Row="1" Grid.Column="1" Width="262"
+                                               FontSize="12.5" Foreground="{DynamicResource IslandFg}"
+                                               Margin="6,2,0,0" VerticalAlignment="Center" Text="正在执行任务…" />
                         </Grid>
+                    </StackPanel>
 
-                        <TextBlock x:Name="StatusTag" Grid.Row="0" Grid.Column="1" Text="WorkBuddy"
-                                   FontSize="10" Margin="6,0,0,0" Foreground="{DynamicResource IslandSubFg}"
-                                   Opacity="0.85" VerticalAlignment="Center" />
+                    <!--
+                      通知行（v0.2.9 需求 3）：微信 / QQ / ntfy 消息在岛内展示时用各自主题色。
+                      整行是一个透明 Button —— 固定模式下岛只放行 Button 的点按（其余穿透），
+                      做成 Button 才能"点得到"，同时点击直接打开这条消息。
+                    -->
+                    <Button x:Name="NoticeButton" Style="{StaticResource IslandRowButton}"
+                            Visibility="Collapsed" Click="OnNoticeClick"
+                            ToolTip="点击打开这条消息">
+                        <Grid Margin="0,2,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
 
-                        <!--  正文：一行实时动作（跑马灯，超宽横滚、悬停暂停、短文本左对齐）  -->
-                        <local:MarqueeText x:Name="StatusText" Grid.Row="1" Grid.Column="1" Width="262"
-                                           FontSize="12.5" Foreground="{DynamicResource IslandFg}"
-                                           Margin="6,2,0,0" VerticalAlignment="Center" Text="正在执行任务…" />
-                    </Grid>
+                            <Grid Grid.Row="0" Grid.Column="0" Width="13" Height="13" VerticalAlignment="Center">
+                                <Ellipse x:Name="NoticeDot" Width="7" Height="7" Fill="#07C160" />
+                            </Grid>
+
+                            <TextBlock x:Name="NoticeTag" Grid.Row="0" Grid.Column="1" Text="微信"
+                                       FontSize="10" Margin="6,0,0,0" Foreground="#07C160"
+                                       Opacity="0.95" VerticalAlignment="Center" />
+
+                            <local:MarqueeText x:Name="NoticeText" Grid.Row="1" Grid.Column="1" Width="262"
+                                               FontSize="12.5" Foreground="{DynamicResource IslandFg}"
+                                               Margin="6,1,0,0" VerticalAlignment="Center" Text="" />
+                        </Grid>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Grid>

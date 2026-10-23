@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Automation;
@@ -78,8 +79,115 @@ public partial class App : Application
                 ConsoleBridge.WriteLine("  NotifyHub.exe --media toggle|play|pause|next|prev  控制当前播放器");
                 ConsoleBridge.WriteLine("  灵动岛：设置页可切换 固定顶部居中 / 自由拖动（左/右键拖空白区，10 秒无交互自动吸附四边）");
                 ConsoleBridge.WriteLine("  日志：设置页「运行日志」栏（原独立控制台已合并进来）");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --env-report  打印系统版本/DPI/缩放/刷新率/能力探测（兼容性核对）");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --fps-test    实测 5 秒渲染帧率与卡顿（高刷屏验证）");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --notice-shot 离屏渲染岛内通知三种来源配色（验收用）");
                 Shutdown();
                 return;
+
+            case AppMode.EnvReport:
+            {
+                // 需求 7：把"这台机器到底长什么样"一次性列清楚。
+                // 用户反馈"某个功能在我这儿不对"时，第一件事就是要这份报告。
+                var caps = SystemCapabilities.Refresh();
+                ConsoleBridge.TryAttach();
+                ConsoleBridge.WriteLine("NotifyHub 环境报告");
+                ConsoleBridge.WriteLine(new string('-', 52));
+                ConsoleBridge.WriteLine(caps.ToReport());
+                ConsoleBridge.WriteLine(new string('-', 52));
+                ConsoleBridge.WriteLine("降级策略：");
+                ConsoleBridge.WriteLine("  毛玻璃  自绘（渐变+半透明+背景亮度采样），不调用系统模糊 API");
+                ConsoleBridge.WriteLine("          → Win10/Win11 像素一致；系统关掉「透明效果」时自动加深底色");
+                ConsoleBridge.WriteLine("  圆角    自绘 Border 圆角（不用 Win11 的 DWMWA_WINDOW_CORNER_PREFERENCE）");
+                ConsoleBridge.WriteLine("  动画    仅用 CompositionTarget.Rendering + 帧去重，不依赖 DWM 材质动画");
+                ConsoleBridge.WriteLine("          → 系统关掉「动画效果」时滑动降级为直接落位");
+                ConsoleBridge.WriteLine("  定位    一律 MonitorFromPoint/GetMonitorInfo 实时读取，不缓存 SystemParameters");
+                log.Info("EnvReport", "环境报告", caps.ToLogLine());
+                Shutdown();
+                return;
+            }
+
+            case AppMode.FpsTest:
+            {
+                // 需求 1：验证"动画跟随刷新率、高刷能跑满"。
+                // 摆一条真实在动的元素，让合成器每帧都要提交，测出来的才是真实帧率。
+                ConsoleBridge.TryAttach();
+                var caps = SystemCapabilities.Current;
+                var seconds = Math.Clamp(options.Seconds <= 0 ? 5 : options.Seconds, 2, 30);
+                var meter = new UI.FpsMeter();
+                var startWatch = Stopwatch.StartNew();
+
+                var bar = new System.Windows.Shapes.Rectangle
+                {
+                    Width = 42,
+                    Height = 6,
+                    RadiusX = 3,
+                    RadiusY = 3,
+                    Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0xD6, 0x0A)),
+                };
+
+                var track = new Canvas { Width = 288, Height = 10, Background = Brushes.Transparent };
+                track.Children.Add(bar);
+
+                var shell = new Border
+                {
+                    Background = new SolidColorBrush(Color.FromArgb(0xF0, 0x11, 0x12, 0x14)),
+                    CornerRadius = new CornerRadius(7),
+                    Padding = new Thickness(6),
+                    Child = track,
+                };
+
+                var probe = new Window
+                {
+                    WindowStyle = WindowStyle.None,
+                    AllowsTransparency = true,
+                    Background = Brushes.Transparent,
+                    ShowInTaskbar = false,
+                    Topmost = true,
+                    ResizeMode = ResizeMode.NoResize,
+                    Width = 300,
+                    Height = 22,
+                    Content = shell,
+                };
+
+                var work = ScreenMetrics.PrimaryWorkAreaDip();
+                probe.Left = work.Left + ((work.Width - 300) / 2);
+                probe.Top = work.Bottom - 40;
+
+                EventHandler? onFrame = null;
+                onFrame = (_, frameArgs) =>
+                {
+                    meter.Tick(frameArgs);
+
+                    var t = startWatch.Elapsed.TotalSeconds;
+                    Canvas.SetLeft(bar, (Math.Sin(t * 2.4) + 1) / 2 * 246);
+
+                    if (t < seconds)
+                    {
+                        return;
+                    }
+
+                    CompositionTarget.Rendering -= onFrame;
+                    var report = meter.Finish(caps.RefreshHz);
+                    ConsoleBridge.WriteLine("NotifyHub 帧率实测");
+                    ConsoleBridge.WriteLine(new string('-', 52));
+                    ConsoleBridge.WriteLine($"环境          {caps.OsName} Build {caps.Build} · UI 缩放 {caps.UiScale:F2}×");
+                    ConsoleBridge.WriteLine(report.ToReport());
+                    log.Info("FpsTest", "帧率实测", report.ToReport().Replace(Environment.NewLine, " | "));
+                    probe.Close();
+                    Shutdown();
+                };
+
+                probe.Loaded += (_, _) =>
+                {
+                    meter.Start();
+                    startWatch.Restart();
+                    CompositionTarget.Rendering += onFrame;
+                };
+
+                probe.Show();
+                return;
+            }
 
             case AppMode.SelfTest:
             {
@@ -199,6 +307,116 @@ public partial class App : Application
                         second.Start();
                     };
                     captureTimer.Start();
+                    return;
+                }
+
+            case AppMode.NoticeShot:
+                {
+                    // 岛内通知离屏渲染（v0.2.9 需求 3 验收）：三种来源各自的主题色 + 与音乐/任务并存。
+                    // 桌面上直接截图会被 hover、全屏检测、常驻实例干扰，所以同 --island-shot 走离屏。
+                    var configService = new ConfigService(log);
+                    configService.Load();
+                    var config = configService.Current;
+
+                    void CaptureNotice(
+                        string fileName,
+                        MessageSource source,
+                        int accentIndex,
+                        string sender,
+                        string content,
+                        bool withMusic,
+                        bool withTask)
+                    {
+                        var island = new IslandWindow
+                        {
+                            ModeProvider = () => "Fixed",
+                            MusicEnabledProvider = () => true,
+                            MarqueeSpeedProvider = () => 45,
+                            LyricsEnabledProvider = () => true,
+                            LyricsFontSizeProvider = () => 13,
+                            AutoCollapseEnabledProvider = () => false,
+                            IslandWidthPercentProvider = () => config.IslandWidthPercent,
+                            IslandSplitRatioProvider = () => config.IslandSplitRatio,
+                            SavedPositionProvider = () => null,
+                        };
+
+                        island.ApplyLyricsTypography();
+                        island.ApplyTheme(ThemePalette.Create(config));
+
+                        if (withMusic)
+                        {
+                            island.SetMedia(new MediaInfo(
+                                "侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 72, 214));
+                            island.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+                        }
+
+                        if (withTask)
+                        {
+                            island.ShowRunning("正在整理通知模块的配色与跳转逻辑", "WorkBuddy");
+                        }
+
+                        var message = new NotifyMessage
+                        {
+                            Source = source,
+                            Sender = sender,
+                            Content = content,
+                            Time = DateTime.Now,
+                            AccentIndex = accentIndex,
+                            SourceLabel = source == MessageSource.Ntfy && accentIndex >= 0
+                                ? "ntfy · 构建"
+                                : string.Empty,
+                        };
+
+                        island.ShowNotice(message);
+
+                        Interop.NativeMethods.SetCursorPos(1880, 8);
+                        island.Left = 260;
+                        island.Top = 220;
+                        island.Show();
+                        island.UpdateLayout();
+                        log.Info("NoticeShot", fileName, island.LayoutDebug);
+
+                        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+                        timer.Tick += (_, _) =>
+                        {
+                            timer.Stop();
+                            log.Info("NoticeShot", fileName + " @capture", island.LayoutDebug);
+                            CaptureWindow(island, fileName, log);
+                            island.Close();
+                        };
+                        timer.Start();
+                    }
+
+                    var noticeJobs = new (string File, Action Run)[]
+                    {
+                        ("island-notice-wechat.png", () => CaptureNotice(
+                            "island-notice-wechat.png", MessageSource.WeChat, -1, "张三",
+                            "在吗？刚才那个需求文档我改了一版，你看下。", withMusic: false, withTask: false)),
+                        ("island-notice-music.png", () => CaptureNotice(
+                            "island-notice-music.png", MessageSource.QQ, -1, "产品讨论组",
+                            "评审材料已经发到群里了，麻烦看一下。", withMusic: true, withTask: false)),
+                        ("island-notice-task.png", () => CaptureNotice(
+                            "island-notice-task.png", MessageSource.Ntfy, 1, "CI 构建",
+                            "notifyhub #128 构建成功，用时 2m14s。", withMusic: false, withTask: true)),
+                    };
+
+                    var noticeIndex = 0;
+                    var noticeStep = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
+                    noticeStep.Tick += (_, _) =>
+                    {
+                        if (noticeIndex >= noticeJobs.Length)
+                        {
+                            noticeStep.Stop();
+                            Shutdown();
+                            return;
+                        }
+
+                        noticeJobs[noticeIndex].Run();
+                        noticeIndex++;
+                    };
+                    noticeJobs[0].Run();
+                    noticeIndex = 1;
+                    noticeStep.Start();
                     return;
                 }
 
@@ -974,7 +1192,16 @@ public partial class App : Application
         }
 
         _settings = new SettingsWindow(_configService, LogService.Shared, _monitor, _notifications);
-        _settings.Closed += (_, _) => _settings = null;
+
+        // v0.2.9 需求 6：滑块拖动 → 岛立即重排（不落盘）
+        _settings.LivePreview = preview => _islandController?.PreviewLayout(preview);
+
+        _settings.Closed += (_, _) =>
+        {
+            // 关窗时清掉预览态，岛回到真实配置（用户没点保存就该恢复原样）
+            _islandController?.ClearPreview();
+            _settings = null;
+        };
         _settings.Show();
     }
 
@@ -1027,10 +1254,15 @@ public partial class App : Application
 
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            _notifications?.Show(message);
+            // v0.2.9 需求 3 展示策略：
+            //   · 音乐 + WorkBuddy 任务同时存在 → 通知照旧在设置的四角弹出；
+            //   · 只有一项（或都没有）→ 直接进灵动岛，不再弹卡片。
+            var shownOnIsland = _islandController?.TryShowNoticeOnIsland(message) ?? false;
 
-            // v0.2.7 需求 2：有新消息时把灵动岛弹出来，并按用户设定的时长自动收纳
-            _islandController?.PokeMessage(message);
+            if (!shownOnIsland)
+            {
+                _notifications?.Show(message);
+            }
         }));
     }
 

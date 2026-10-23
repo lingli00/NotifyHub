@@ -24,6 +24,20 @@ internal static class ConsoleBridge
         {
             // 忽略：没有控制台不影响功能
         }
+
+        // 被重定向（管道 / 文件 / 别的程序读）时用 UTF-8，否则中文会按当前代码页（936）写出去，
+        // Git Bash、日志采集器一律读成乱码。挂在真实控制台上则沿用系统代码页，cmd 里才正常。
+        try
+        {
+            if (Console.IsOutputRedirected)
+            {
+                Console.OutputEncoding = System.Text.Encoding.UTF8;
+            }
+        }
+        catch
+        {
+            // 忽略
+        }
     }
 
     public static void WriteLine(string text)

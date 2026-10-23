@@ -84,6 +84,12 @@ public sealed class MediaPlayerMonitor : IDisposable
     private int _refreshing;
     private string _trackKey = string.Empty;
 
+    /// <summary>
+    /// 本次连续播放的起点（<see cref="Stopwatch.GetTimestamp"/>）。
+    /// 仅用于"播放器不提供 timeline"时的位置兜底，暂停/停止归零。
+    /// </summary>
+    private long _playingSinceTicks;
+
     public MediaPlayerMonitor(LogService log) => _log = log;
 
     /// <summary>媒体状态变化（任意线程回调，订阅方负责切 UI 线程）。null=无音乐播放。</summary>
@@ -287,8 +293,17 @@ public sealed class MediaPlayerMonitor : IDisposable
         => TryGetPlayback(out var position, out _, out _) ? position : -1;
 
     /// <summary>
-    /// 一次性读取播放进度 / 播放态 / 总时长（v0.2.7 歌词同步用）。
+    /// 一次性读取播放进度 / 播放态 / 总时长（歌词同步用）。
     /// 三个值来自同一次会话读取，避免上层分三次调用读到互相矛盾的快照。
+    ///
+    /// v0.2.9 修掉两个导致「歌词空白 / 歌词滞后一秒」的问题：
+    ///   1) 旧版把 <c>GetTimelineProperties</c> 和整体包在同一个 try 里。某些播放器
+    ///      （精简版 UWP、部分国产播放器的 SMTC 实现）**不支持 timeline，直接抛异常**，
+    ///      于是整个方法返回 false → 上层每秒都拿不到位置 → 歌词永远不显示。
+    ///      现在 timeline 读取单独 try，失败也能用墙钟兜底推进，至少让歌词按时间走。
+    ///   2) 旧版把 <c>TimelineProperties.Position</c> 当"此刻位置"，但它其实是
+    ///      <c>LastUpdatedTime</c> 那一刻的快照，天然落后一个上报周期（常见 0.5~1.5s）。
+    ///      现在把「上报年龄」一起交给 <see cref="PlaybackClock"/> 做锚点补偿。
     /// </summary>
     public bool TryGetPlayback(out double positionSeconds, out bool playing, out double durationSeconds)
     {
@@ -296,31 +311,84 @@ public sealed class MediaPlayerMonitor : IDisposable
         playing = false;
         durationSeconds = 0;
 
+        GlobalSystemMediaTransportControlsSession? session;
         try
         {
-            var session = PickSession();
-            if (session is null)
-            {
-                _clock.Reset();
-                _trackKey = string.Empty;
-                return false;
-            }
-
-            playing = session.GetPlaybackInfo().PlaybackStatus
-                == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
-
-            var timeline = session.GetTimelineProperties();
-            var reported = Math.Max(0, (timeline.Position - timeline.StartTime).TotalSeconds);
-            durationSeconds = Math.Max(0, (timeline.EndTime - timeline.StartTime).TotalSeconds);
-
-            positionSeconds = _clock.Update(reported, playing, Stopwatch.GetTimestamp());
-            return true;
+            session = PickSession();
         }
         catch
         {
-            // 会话已失效（播放器退出）/ 该播放器不提供 timeline：上层按"取不到"处理
+            session = null;
+        }
+
+        if (session is null)
+        {
+            _clock.Reset();
+            _trackKey = string.Empty;
+            _playingSinceTicks = 0;
             return false;
         }
+
+        try
+        {
+            playing = session.GetPlaybackInfo().PlaybackStatus
+                == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+        }
+        catch
+        {
+            // 会话刚好失效（播放器退出）：当作暂停处理，不要整条链路返回失败
+            playing = false;
+        }
+
+        var nowTicks = Stopwatch.GetTimestamp();
+
+        // 播放起点兜底：timeline 完全不可用时，用"本次开始播放的墙钟时刻"外推
+        if (playing)
+        {
+            if (_playingSinceTicks == 0)
+            {
+                _playingSinceTicks = nowTicks;
+            }
+        }
+        else
+        {
+            _playingSinceTicks = 0;
+        }
+
+        var reported = 0.0;
+        var reportAge = 0.0;
+        var hasTimeline = false;
+
+        try
+        {
+            var timeline = session.GetTimelineProperties();
+            reported = Math.Max(0, (timeline.Position - timeline.StartTime).TotalSeconds);
+            durationSeconds = Math.Max(0, (timeline.EndTime - timeline.StartTime).TotalSeconds);
+
+            // 这个位置是"多久以前"的快照（播放中才有意义）
+            reportAge = (DateTimeOffset.Now - timeline.LastUpdatedTime).TotalSeconds;
+            hasTimeline = true;
+        }
+        catch
+        {
+            // 该播放器不提供 timeline：走下面的墙钟兜底，绝不因此让歌词整段失效
+        }
+
+        if (!hasTimeline)
+        {
+            // 没有任何时间轴信息：按"从开始播放到现在"估算。
+            // 用户中途拖动进度会不准，但总比位置恒为 0（歌词卡在第一行）好，
+            // 而且这是极少见的播放器，属于兜底路径。
+            var fallback = playing && _playingSinceTicks > 0
+                ? (nowTicks - _playingSinceTicks) / (double)Stopwatch.Frequency
+                : _clock.Position;
+
+            positionSeconds = _clock.Update(fallback, playing, nowTicks, reportAgeSeconds: 0);
+            return true;
+        }
+
+        positionSeconds = _clock.Update(reported, playing, nowTicks, reportAge);
+        return true;
     }
 
     private void Subscribe(GlobalSystemMediaTransportControlsSession session)

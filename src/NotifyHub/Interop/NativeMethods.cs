@@ -381,4 +381,87 @@ internal static class NativeMethods
             },
         },
     };
+
+    // ── 系统能力探测（v0.2.9 需求 7）──────────────────────────────────────────
+    // 这几个 API 在 Win10 / Win11 上都存在，但为了"探测本身不能崩"，
+    // 调用点（SystemCapabilities）全部包了 try/catch，这里只负责声明。
+
+    /// <summary>EnumDisplaySettings 的当前模式（-1）。</summary>
+    public const int ENUM_CURRENT_SETTINGS = -1;
+
+    /// <summary>
+    /// RtlGetVersion：唯一不说谎的版本号来源。Environment.OSVersion 在进程没声明
+    /// 支持 Win10/11 时会返回 6.2；Win11 的 ProductName 注册表值还写着 "Windows 10"。
+    /// </summary>
+    [DllImport("ntdll.dll", EntryPoint = "RtlGetVersion", CharSet = CharSet.Unicode)]
+    public static extern int RtlGetVersionX(ref OSVERSIONINFOEXW info);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct OSVERSIONINFOEXW
+    {
+        public int dwOSVersionInfoSize;
+        public uint dwMajorVersion;
+        public uint dwMinorVersion;
+        public uint dwBuildNumber;
+        public uint dwPlatformId;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string szCSDVersion;
+
+        public ushort wServicePackMajor;
+        public ushort wServicePackMinor;
+        public ushort wSuiteMask;
+        public byte wProductType;
+        public byte wReserved;
+        public uint dwRevision;
+    }
+
+    /// <summary>读主屏当前显示模式（分辨率 / 刷新率）。</summary>
+    [DllImport("user32.dll", EntryPoint = "EnumDisplaySettingsW", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool EnumDisplaySettingsW(string? deviceName, int modeNum, ref DEVMODE_EXW devMode);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DEVMODE_EXW
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmDeviceName;
+
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmFormName;
+
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
+    }
+
+    /// <summary>DWM 合成是否开启（关掉基本等于远程桌面/极简环境，动画要降级）。</summary>
+    [DllImport("dwmapi.dll", EntryPoint = "DwmIsCompositionEnabled")]
+    public static extern int DwmIsCompositionEnabledNative([MarshalAs(UnmanagedType.Bool)] out bool enabled);
 }

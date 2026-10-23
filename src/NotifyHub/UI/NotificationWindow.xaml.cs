@@ -56,7 +56,7 @@ public partial class NotificationWindow : Window
     private double _velocityY;
 
     public NotificationWindow(NotifyMessage message, int durationMs, double marqueeSpeed = MarqueeText.DefaultSpeed,
-        AppConfig? config = null)
+        AppConfig? config = null, double uiScale = 1.0)
     {
         InitializeComponent();
 
@@ -64,6 +64,15 @@ public partial class NotificationWindow : Window
         _durationMs = Math.Clamp(durationMs, AppConfig.MinDurationMs, AppConfig.MaxDurationMs);
         _marqueeSpeed = marqueeSpeed;
         _config = config ?? new AppConfig();
+
+        // v0.2.9 需求 1：整张卡片按屏幕比例等比缩放（字号/圆角/图标/间距一起变），
+        // 窗口尺寸同步放大，阴影留白保持固定。这样 1080p / 2.5K / 4K 上
+        // 卡片的"占屏比例"一致，不会出现某块屏幕小到看不清。
+        UiScale = Math.Clamp(uiScale, 0.5, 3.0);
+        Width = NotificationLayout.WindowWidthFor(UiScale);
+        Height = NotificationLayout.WindowHeightFor(UiScale);
+        Card.LayoutTransform = new ScaleTransform(UiScale, UiScale);
+        _entryOffset = EntrySlide * UiScale;
 
         ApplyTheme(ThemePalette.Create(_config));
         Fill(message);
@@ -96,6 +105,9 @@ public partial class NotificationWindow : Window
     }
 
     public NotifyMessage Message { get; }
+
+    /// <summary>本卡使用的界面缩放（v0.2.9 需求 1，诊断/自检用）。</summary>
+    public double UiScale { get; }
 
     /// <summary>卡片当前不透明度（诊断用）。</summary>
     public double CardOpacity => Card.Opacity;

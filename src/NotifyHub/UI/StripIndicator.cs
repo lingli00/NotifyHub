@@ -18,6 +18,9 @@ public enum StripMode
 
     /// <summary>音乐 + 任务同时：黄色来回 + 琥珀单向，两条同时在轨道里跑。</summary>
     Both,
+
+    /// <summary>岛内有新通知：用该来源的主题色（微信绿 / QQ 蓝 / ntfy 橙）单向巡游。</summary>
+    Notice,
 }
 
 /// <summary>
@@ -49,6 +52,31 @@ public sealed class StripIndicator : FrameworkElement
 
     private StripMode _mode = StripMode.None;
     private bool _done;
+
+    /// <summary>
+    /// 通知来源色（v0.2.9 需求 3）：<see cref="StripMode.Notice"/> 时用它画光块，
+    /// 让收纳态也能一眼分辨"是微信、QQ 还是 ntfy 来的消息"。
+    /// </summary>
+    private Color? _accent;
+
+    /// <summary>设置来源强调色（null = 用内置色）。</summary>
+    public Color? AccentColor
+    {
+        get => _accent;
+        set
+        {
+            if (Nullable.Equals(_accent, value))
+            {
+                return;
+            }
+
+            _accent = value;
+            InvalidateVisual();
+        }
+    }
+
+    /// <summary>当前实际使用的强调色（诊断用）。</summary>
+    public Color EffectiveAccent => _accent ?? MusicColor;
 
     public StripIndicator()
     {
@@ -125,6 +153,12 @@ public sealed class StripIndicator : FrameworkElement
 
     private void OnFrame(object? sender, EventArgs e)
     {
+        // 一帧只推进一次（v0.2.9 需求 1）：细条动画靠相位推进，重复派发会让彗星抖动
+        if (!FrameClock.ShouldTick(ref _lastFrameTime, e))
+        {
+            return;
+        }
+
         var now = _clock.Elapsed.TotalSeconds;
         var dt = now - _lastSeconds;
         _lastSeconds = now;
@@ -145,6 +179,9 @@ public sealed class StripIndicator : FrameworkElement
     }
 
     private double _phase;
+
+    /// <summary>上一帧的合成时间戳（FrameClock 去重用，v0.2.9 需求 1）。</summary>
+    private TimeSpan _lastFrameTime = TimeSpan.MinValue;
 
     /// <summary>动画相位（秒，诊断/自检用：连续两次采样应该变大说明在动）。</summary>
     public double Phase => _phase;
@@ -211,11 +248,19 @@ public sealed class StripIndicator : FrameworkElement
                     MusicColor, speed: 0.62, reverse: true);
                 break;
 
+            case StripMode.Notice:
+                // 通知：来源色单向巡游，节奏比任务略快（"有事发生"的观感）
+                DrawComet(dc, trackLeft, trackWidth, segY, segH, _accent ?? MusicColor, speed: 0.58);
+                break;
+
             default:
-                // 空态：中间一段静止光块（正常不会看到，兜底用）
-                var idleWidth = Math.Min(trackWidth, 26);
+                // 待命（v0.2.9 需求 2：岛常驻，无内容时细条也一直在）：
+                // 一段很淡的居中光块，靠外层呼吸提醒"程序在跑"，不喧宾夺主。
+                // 用中性白而不是音乐黄：黄色半透明压在深底上会变成脏橄榄色，看着像"发霉"；
+                // 中性色也避免用户误以为"有音乐在放"。
+                var idleWidth = Math.Min(trackWidth, 22);
                 DrawSegment(dc, trackLeft + ((trackWidth - idleWidth) / 2), segY,
-                    idleWidth, segH, MusicColor, 0.9);
+                    idleWidth, segH, Colors.White, 0.26);
                 break;
         }
     }

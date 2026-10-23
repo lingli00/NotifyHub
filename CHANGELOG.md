@@ -1,5 +1,46 @@
 # 变更记录
 
+## v0.2.9 — 2026-10-23
+
+七块内容：全界面分辨率自适应、灵动岛常驻、岛内通知（配色 / 点击跳转 / 展示策略）、歌词偶发不展示、歌词同步延迟、设置界面毛玻璃 + 两个滑块、Win10/Win11 兼容性。
+
+### 修复
+- **部分歌曲歌词空白、只显示播放控制器**（需求 4，四个独立根因，全部修掉）：
+  1. `LyricsService` 把**网络失败也写进永久缓存**——一次超时/断网，这首歌在本次运行内再也不会去取词。改为失败只记 25 秒退避（`_retryAfter`），不进 `_cache`。
+  2. `IslandController` 里 `_lyricKey` 一旦设上就不再取词，取词请求失败后没有重试入口。改为 `EnsureLyricsRequested()` 幂等补取（最多 3 次、间隔 8 秒退避）+ 2 秒看门狗巡检。
+  3. `MediaPlayerMonitor.TryGetPlayback` 把 `TimelineProperties` 的读取和会话读取放在同一个 try 里，个别播放器 / 遥控应用的 timeline 抛异常会让整个方法返回 false —— 歌词链路直接断掉，看起来就是"有控制器、没歌词"。timeline 改成独立 try，失败走「播放起点 + 墙钟」兜底。
+  4. 设置页把「显示歌词」从关切到开时没有补取歌词（岛已经认为这个词取过了）。配置变更时重置退避并重新请求。
+- **歌词比演唱慢约 1 秒**（需求 5）：`PlaybackClock` 重写。旧版每秒把估算值按 `projected + error*0.35` 往上报值上拽，而上报值本身是 `LastUpdatedTime` 时刻的**陈旧快照**（SMTC 正常播放时根本不刷新），于是稳态被硬拽回到滞后值上；叠加 200ms 轮询，观感就是"上一句唱完、下一句已唱出两个字才跳"。现在：
+  - 按 `LastUpdatedTime` 算**上报年龄**并补偿（`reported + age`），锚点即"此刻的真实位置"；
+  - 播放中位置**只增不减**，上报值落后视为陈旧直接忽略、继续外推；
+  - 去掉比例收敛；歌词轮询 200ms → **90ms**；
+  - `SyncLyricLine` 打偏差日志（`换句 #N 偏差 XXXms`）便于回归。
+  自检实测：模拟 SMTC 每秒上报 + 600ms 延迟 + ±120ms 时钟抖动，**稳态误差最大 119ms**（要求 ≤300ms）。
+- **细条常驻后每 10 秒自己开合一次**（需求 2 实施中实测发现）：细条出现的位置正好是屏幕顶部中央，指针常年停在那里（浏览器标签栏），`MouseEnter` 立刻触发展开 → 10 秒后收起 → 又落回指针底下，形成死循环。`SnapStripWindow` 增加"悬停解除武装"：细条现身时指针若已压在上面，先不响应悬停，等指针离开过一次再恢复；`ExpandFromStrip` 加 400ms 冷却。点击始终有效。
+
+### 新增
+- **统一界面缩放**（需求 1）：`ScreenMetrics.UiScale(work)` 以工作区 1920×1040 为基准，`clamp(0.85, 1.7)`，`NotificationLayout` 全部几何加 `scale` 参数，通知卡走 `LayoutTransform`、岛走 `Pill.LayoutTransform`、细条按比例缩放。实测映射：1080p→1.00 / 2.5K@150%→0.90 / 2.5K→1.35 / 4K→1.70，卡片恒占屏高约 10.8%。
+- **帧时钟去重 + 帧率实测**（需求 1）：`UI/FrameClock.cs`。`CompositionTarget.Rendering` 同一帧会被派发多次（多窗口 / 多趟布局），用 `RenderingEventArgs.RenderingTime` 去重，保证"一帧一次"，高刷屏才能跑到真实刷新率。新增 `--fps-test` 实测 5 秒帧率；本机 1080p@60Hz 实测 **56.3 FPS / 达成率 94%**。
+- **灵动岛常驻**（需求 2）：启动即亮出顶部窄条，无音乐、无任务、无通知时保持窄条**不消失**；有内容自动展开，超时自动收回窄条；点击 / 悬停窄条可手动展开（`_idleExpanded` 撑住这次展开，超时后再收）。全屏时整岛 + 窄条一起隐藏，退出全屏恢复。
+- **岛内通知行**（需求 3）：微信 / QQ / ntfy 通知在岛上独占一行（来源色圆点 + 标签 + 跑马灯正文），与音乐行、任务行各自配色互不干扰。`UI/SourceColors.cs` 统一色板（微信 `#07C160` / QQ `#12B7F5` / ntfy `#F97316` + 多订阅色板），通知卡、岛、细条三处复用同一份。
+- **岛内通知点击跳转**（需求 3）：整行包进透明底 `Button`（`IslandRowButton`，悬停微亮），点击 → ntfy 走浏览器、微信/QQ 走 `WindowActivator` 直接定位到这条会话。`HitTestInteractive` 命中 Button 才放行 `WM_NCHITTEST`，其余区域仍穿透。
+- **展示策略**（需求 3）：`IslandWindow.NoticeGoesToIsland(hasMusic, hasTask)` 纯函数——音乐 + 任务**同时在跑**时通知走四角弹窗，其余情况（都空 / 只有一项）直接在岛内展示。
+- **细条指示器适配来源色**（需求 3）：`StripMode.Notice` + `AccentColor`，通知到访时按来源色单向巡游；待命态改为中性淡白光块（原来用音乐黄压在深底上会变成脏橄榄色，还容易被误读成"在放音乐"）。
+- **设置界面毛玻璃 + 两个滑块**（需求 6）：删掉【主题和文字配色】与透明度调节，改为自绘毛玻璃外壳（`WindowStyle=None` + `AllowsTransparency` + `WindowChrome` + 自绘标题栏 / 最小化 / 关闭）；配色跟随系统深浅，并用 `BackdropProbe` 采样窗口背后亮度自动校正文字对比度。新增两组实时预览滑块：**总长度**（60~160%）与**左右分配比例**（25~75，左=播放器区），拖动立即重排岛（`PreviewLayout` 走内存副本，不落盘）。
+- **系统能力探测 + 环境报告**（需求 7）：`Services/SystemCapabilities.cs` 用 `RtlGetVersion` 读真实版本（`Environment.OSVersion` 与注册表 `ProductName` 在 Win11 上都还写着 Windows 10）、`EnumDisplaySettings` 读刷新率、`DwmIsCompositionEnabled` 判合成、注册表读透明效果 / 应用主题、`SystemParameters.ClientAreaAnimation` 读动画开关。新增 `--env-report` 一次打印全部；任一探测失败都回落安全默认值，绝不抛异常。
+- **`--notice-shot`**：离屏渲染岛内通知三态（`island-notice-wechat/music/task.png`），验收配色与整行排版。
+
+### 优化
+- **系统关掉「动画效果」时不再硬播动画**：`IslandWindow.SlideTo` 直接落位，避免"播到一半停住"的残影；两代系统读同一个 `SystemParameters.ClientAreaAnimation`。
+- **`ConsoleBridge` 输出编码**：被重定向（管道 / 文件）时切 UTF-8，`--selftest` / `--env-report` 的中文不再乱码；挂在真实控制台上仍沿用系统代码页。
+- 自检 **52 → 62 项**：新增界面缩放映射（四点）、四角通知在 0.9/1.0/1.35/1.7 缩放下不重叠不出屏、帧率计量、三来源主题色 + ntfy 多订阅色板、展示策略四种组合、岛内通知整行可点（离屏命中）、歌词时间轴误差 ≤300ms、滑块配置收敛、毛玻璃配色忽略 ThemeMode、系统能力探测。
+
+### 兼容性（Win10 / Win11）
+- 毛玻璃**不依赖任何系统模糊 API**：Win11 的 `DWMWA_SYSTEMBACKDROP_TYPE` / `DWMWA_WINDOW_CORNER_PREFERENCE` 一个都没用，圆角与半透明全部自绘，两代系统像素级一致；用户关掉「透明效果」时自动加深底色。
+- 定位一律实时 `MonitorFromPoint` + `GetMonitorInfo`，不缓存 `SystemParameters`（缩放/换屏/多屏都正确）。
+- 全部 P/Invoke 调用点包 try/catch，API 不存在时回落默认值（`GetDpiForSystem`、`RtlGetVersion`、`EnumDisplaySettings`、`DwmIsCompositionEnabled` 都有兜底）。
+- 本机实测环境：Windows 10 专业版 22H2 build 19045，1920×1080@60Hz，缩放 100%。
+
 ## v0.2.8 — 2026-10-23
 
 五块内容：通知四角坐标与堆叠方向、歌词模块（独立开关 / 自带翻译 / 播放器区重做）、岛动画 60 帧、收纳细条跑道指示器、岛居中与自适应尺寸。

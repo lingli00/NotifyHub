@@ -17,6 +17,9 @@ public enum AppMode
     Settings,
     IslandStream,
     MarqueeTest,
+    FpsTest,
+    EnvReport,
+    NoticeShot,
     Help,
 }
 
@@ -79,6 +82,15 @@ public sealed record CommandLineOptions(
                 case "--marquee-test":
                     // --marquee-test：离屏渲染跑马灯各形态（短文本居中/长文本滚动）自检
                     return new CommandLineOptions(AppMode.MarqueeTest, 0);
+                case "--notice-shot":
+                    // --notice-shot：岛内通知（三种来源配色）离屏渲染成 PNG（需求 3 验收）
+                    return new CommandLineOptions(AppMode.NoticeShot, 0);
+                case "--fps-test":
+                    // --fps-test：量 5 秒内 CompositionTarget.Rendering 的实际帧率（需求 1）
+                    return new CommandLineOptions(AppMode.FpsTest, 5);
+                case "--env-report":
+                    // --env-report：打印系统版本 / DPI / 缩放 / 关键 API 探测（需求 7 兼容性核对）
+                    return new CommandLineOptions(AppMode.EnvReport, 0);
                 case "--help":
                 case "-h":
                 case "/?":

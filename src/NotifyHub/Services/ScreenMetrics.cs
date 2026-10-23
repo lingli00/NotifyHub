@@ -19,6 +19,51 @@ namespace NotifyHub.Services;
 /// </summary>
 public static class ScreenMetrics
 {
+    /// <summary>界面缩放的基准工作区高度（DIP，= 1080p 减任务栏）。</summary>
+    public const double BaseWorkHeight = 1040;
+
+    /// <summary>界面缩放的基准工作区宽度（DIP）。</summary>
+    public const double BaseWorkWidth = 1920;
+
+    /// <summary>界面缩放允许范围。</summary>
+    public const double MinUiScale = 0.85;
+
+    public const double MaxUiScale = 1.7;
+
+    /// <summary>
+    /// 界面缩放（v0.2.9 需求 1）：让"卡片/岛占屏比例"在各分辨率下保持一致。
+    ///
+    /// 为什么不能只靠 DIP：DIP 只把「物理像素 ÷ 系统缩放」折算成逻辑单位，
+    /// 用户完全可以在 2560×1440 上把缩放设成 100%，这时 1 DIP = 1 物理像素，
+    /// 一张 356 DIP 的卡片只占屏宽 13.9%（1080p@100% 是 18.5%）——看起来就是"通知变小了"。
+    ///
+    /// 这里以工作区**高度**为基准（卡片是纵向堆叠的，高度最能决定观感），
+    /// 再用宽度做一次上限约束，避免 32:9 超宽屏把卡片放大到荒唐的尺寸。
+    /// 实测比例：
+    ///   1920×1040   → 1.00（1080p 100%，卡片占屏高 10.8%）
+    ///   1707×933    → 0.90（2.5K 150%，占 10.7%）
+    ///   2560×1400   → 1.35（2.5K 100%，占 10.8%）
+    ///   3840×2100   → 1.70（4K 100%，被上限截住，占 9.0%）
+    /// 也就是说无论缩放怎么设，观感比例基本恒定。
+    /// </summary>
+    public static double UiScale(Rect work)
+    {
+        if (work.Height < 1 || work.Width < 1)
+        {
+            return 1.0;
+        }
+
+        var byHeight = work.Height / BaseWorkHeight;
+        var byWidth = work.Width / BaseWorkWidth;
+
+        // 宽屏优先按高度算，但不要让"又宽又矮"的屏幕把卡片撑大
+        var raw = Math.Min(byHeight, byWidth * 1.25);
+        return Math.Clamp(raw, MinUiScale, MaxUiScale);
+    }
+
+    /// <summary>主屏当前的界面缩放。</summary>
+    public static double UiScaleFor(Visual? visual = null) => UiScale(PrimaryWorkAreaDip(visual));
+
     /// <summary>主屏工作区（DIP，已扣除任务栏）。</summary>
     public static Rect PrimaryWorkAreaDip(Visual? visual = null)
     {

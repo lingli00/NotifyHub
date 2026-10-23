@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using NotifyHub.Models;
 using NotifyHub.Services;
@@ -23,13 +24,53 @@ public sealed class IslandController : IDisposable
     private readonly NtfyPublisher _publisher;
     private readonly LyricsService _lyrics;
     private readonly DispatcherTimer _lyricTimer;
+
+    /// <summary>歌词看门狗（每 2 秒）：补取词、补启动跟随、补定行号。</summary>
+    private readonly DispatcherTimer _lyricWatch;
     private WorkBuddyWatcher? _workbuddy;
 
-    // 歌词状态：当前曲目的时间轴 + 已展示行号（行号不变就不刷新 UI）
+    // ---------------- 歌词状态（v0.2.9 重做，需求 4/5） ----------------
+    // 这一组字段是"歌词为什么不显示"的全部真相来源，诊断日志会一起打出来。
+
+    /// <summary>当前曲目的时间轴（null = 还没取到/没有）。</summary>
     private IReadOnlyList<LyricLine>? _lyricLines;
+
+    /// <summary>当前曲目的键（歌名|歌手）；换歌时变化。</summary>
     private string _lyricKey = string.Empty;
+
+    /// <summary>已展示行号（行号不变就不刷新 UI）。</summary>
     private int _lyricIndex = int.MinValue;
+
+    /// <summary>本曲已经尝试取词的次数（上限 3 次，之后认定"确实没有"）。</summary>
+    private int _lyricAttempts;
+
+    /// <summary>上次取词尝试的时刻（用于按间隔重试）。</summary>
+    private DateTime _lyricLastAttemptUtc = DateTime.MinValue;
+
+    /// <summary>最近一次拿到的媒体信息（看门狗用它判断"有没有歌、歌名是什么"）。</summary>
+    private MediaInfo? _currentMedia;
+
+    /// <summary>看门狗节流：连续取不到进度时的计数。</summary>
+    private int _playbackMisses;
+
+    /// <summary>歌词取词最多尝试次数（超过就认为这首确实没词）。</summary>
+    private const int MaxLyricAttempts = 3;
+
+    /// <summary>两次取词尝试之间的最小间隔（秒）。</summary>
+    private const int LyricRetryIntervalSeconds = 8;
+
+    /// <summary>歌词轮询间隔（毫秒，v0.2.9：200 → 90，需求 5 要求切换误差 ≤300ms）。</summary>
+    private const int LyricTickMs = 90;
+
     private long _manualUntilMs; // 手动 --island 推送后的 15 秒内，自动监视不覆盖
+
+    /// <summary>
+    /// 设置页"岛总长度 / 左右比例"滑块的实时预览配置（v0.2.9 需求 6）。
+    /// 拖动过程中只改这个内存副本，不动 <see cref="ConfigService.Current"/>——
+    /// 用户取消/直接关窗时不会把半成品写进配置文件。
+    /// </summary>
+    private AppConfig? _preview;
+
     private IslandWindow? _island;
     private bool _started;
 
@@ -45,11 +86,15 @@ public sealed class IslandController : IDisposable
         _media = new MediaPlayerMonitor(log);
         _fullscreen = new FullscreenWatcher(log);
 
-        // 歌词同步：200ms 问一次播放进度，行号变化才刷新岛（避免每帧重排跑马灯）。
-        // 进度本身由 MediaPlayerMonitor 的 PlaybackClock 做墙钟外推，因此这里的间隔
-        // 只影响"换句延迟"，不影响准确性（旧版直接读 SMTC 陈旧值 = 歌词卡死）。
-        _lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        // 歌词同步：90ms 问一次播放进度，行号变化才刷新岛（避免每帧重排跑马灯）。
+        // 进度本身由 MediaPlayerMonitor 的 PlaybackClock 做墙钟外推（含上报年龄补偿），
+        // 因此这里的间隔只影响"换句延迟"，不影响准确性。
+        // v0.2.9 需求 5：200ms → 90ms，把换句误差压进 300ms 以内。
+        _lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(LyricTickMs) };
         _lyricTimer.Tick += (_, _) => SyncLyricLine();
+
+        _lyricWatch = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _lyricWatch.Tick += (_, _) => OnLyricWatchdog();
     }
 
     public void Start()
@@ -92,6 +137,23 @@ public sealed class IslandController : IDisposable
         _ = _media.StartAsync();
 
         StartWorkBuddyWatch();
+
+        // 歌词看门狗：常驻跑着，成本是每 2 秒一次字典查询 + 几次字段判断
+        _lyricWatch.Start();
+
+        // v0.2.9 需求 2：启动即常驻——此时没有音乐也没有任务，先把顶部窄条亮出来，
+        // 用户能一眼确认程序在跑；有内容时它会自己展开。
+        _ = _dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                Island().ShowPersistentStrip();
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("Island", "启动常驻细条失败", ex.Message);
+            }
+        }));
 
         // 预热灵动岛窗口（离屏建 HWND + 首帧渲染），
         // 让第一条状态更新也能在 100ms 内上屏，而不是被窗口创建时间吃掉。
@@ -162,6 +224,75 @@ public sealed class IslandController : IDisposable
                 _log.Warn("Island", "新消息弹出灵动岛失败", ex.Message);
             }
         }));
+    }
+
+    /// <summary>
+    /// 新消息到达（v0.2.9 需求 3 的展示策略入口）。
+    ///
+    /// 返回 true = 已在岛内展示（调用方不要再弹四角卡片）；
+    /// 返回 false = 交给四角弹窗（音乐与任务同时存在，岛内已经没有干净的位置）。
+    /// </summary>
+    public bool TryShowNoticeOnIsland(NotifyMessage message)
+    {
+        try
+        {
+            var island = _island;
+            if (island is null)
+            {
+                // 岛还没建（启动最初几秒）：老实用四角弹窗，别让通知凭空消失
+                return false;
+            }
+
+            if (!_dispatcher.CheckAccess())
+            {
+                var box = new StrongBox<bool>(false);
+                _dispatcher.Invoke(() => box.Value = TryShowNoticeOnIsland(message));
+                return box.Value;
+            }
+
+            // 音乐 + 任务同时跑 → 岛内已有两行内容，通知走四角（需求 3 明确要求）
+            if (!IslandWindow.NoticeGoesToIsland(island.HasMusicContent, island.HasTaskContent))
+            {
+                _log.Write(
+                    LogLevel.Debug,
+                    "Island",
+                    "通知走四角弹窗（音乐+任务同时在跑）",
+                    $"{message.SourceText} {message.Sender}");
+                return false;
+            }
+
+            island.ShowNotice(message);
+            _sound.PlayMessage(_config.Current);
+            _log.Info("通知", "岛内展示", $"{message.SourceText} · {message.Sender}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Island", "岛内展示通知失败（回退四角弹窗）", ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>岛内通知被点击：打开对应会话 / 网页（与四角卡片的点击行为保持一致）。</summary>
+    private void OnIslandNoticeClicked(object? sender, NotifyMessage message)
+    {
+        try
+        {
+            if (message.Source == MessageSource.Ntfy && !string.IsNullOrWhiteSpace(message.LinkUrl))
+            {
+                _log.AddEvent(message, EventStatus.Info, "岛内点击：打开 topic 页面");
+                BrowserLauncher.Open(_config.Current.BrowserPath, message.LinkUrl);
+                return;
+            }
+
+            _log.AddEvent(message, EventStatus.Info, "岛内点击定位");
+            var log = _log;
+            Task.Run(() => WindowActivator.TryOpenConversation(message, log));
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Island", "打开岛内通知失败", ex.Message);
+        }
     }
 
     private static string SourceName(MessageSource source) => source switch
@@ -285,6 +416,10 @@ public sealed class IslandController : IDisposable
         island.AutoCollapseSecondsProvider = () => _config.Current.AutoCollapseSeconds;
         island.KeepOpenWhilePlayingProvider = () => _config.Current.KeepOpenWhilePlaying;
 
+        // v0.2.9 需求 6：两个滑块（拖的时候读预览副本，松手保存后读真配置）
+        island.IslandWidthPercentProvider = () => (_preview ?? _config.Current).IslandWidthPercent;
+        island.IslandSplitRatioProvider = () => (_preview ?? _config.Current).IslandSplitRatio;
+
         // 字号依赖 provider，必须在注入之后刷一次（构造函数里读不到配置）
         island.ApplyLyricsTypography();
         island.ApplyThemeWithBackdrop(_config.Current);
@@ -314,6 +449,9 @@ public sealed class IslandController : IDisposable
         island.PlayPauseRequested += () => _ = _media.TogglePlayPauseAsync();
         island.NextRequested += () => _ = _media.NextAsync();
         island.PreviousRequested += () => _ = _media.PreviousAsync();
+
+        // v0.2.9 需求 3：岛内通知点击 → 打开对应会话 / 网页
+        island.NoticeClicked += OnIslandNoticeClicked;
 
         _island = island;
         return island;
@@ -346,21 +484,42 @@ public sealed class IslandController : IDisposable
     /// <summary>
     /// 曲目变化 → 重新取歌词（同曲走缓存，不重复请求）。
     /// 换歌瞬间先收起旧词，避免上一首的歌词短暂串到新歌上。
+    ///
+    /// v0.2.9 需求 4：这里不再"一次定生死"。旧版把 <c>_lyricKey</c> 一设，
+    /// 后续除非换歌就再也不取词——如果那一刻歌名还没就绪、或歌词开关刚被关掉，
+    /// 这首歌就永远没有歌词。现在把「状态重置」和「是否发起请求」拆开，
+    /// 由 <see cref="EnsureLyricsRequested"/> + 看门狗反复兜底。
     /// </summary>
     private void OnMediaForLyrics(MediaInfo? info)
     {
+        var previousKey = _lyricKey;
         var key = info is null ? string.Empty : $"{info.Title}|{info.Artist}";
-        if (string.Equals(key, _lyricKey, StringComparison.Ordinal))
+
+        _currentMedia = info;
+
+        if (string.Equals(key, previousKey, StringComparison.Ordinal))
         {
+            // 同一首歌：只可能"上次没取到"需要补一刀，交给 EnsureLyricsRequested 判断
+            EnsureLyricsRequested();
             return;
         }
 
         _lyricKey = key;
         _lyricLines = null;
         _lyricIndex = int.MinValue;
+        _lyricAttempts = 0;
+        _lyricLastAttemptUtc = DateTime.MinValue;
+        _playbackMisses = 0;
 
-        // v0.2.8 需求 2：歌词开关是独立总开关——关掉后连取词都不做（省流量，也绝不留占位）
-        if (info is null || string.IsNullOrWhiteSpace(info.Title) || !_config.Current.LyricsEnabled)
+        if (info is null || string.IsNullOrWhiteSpace(info.Title))
+        {
+            _lyricTimer.Stop();
+            Island().ShowLyrics(null, null);
+            return;
+        }
+
+        // 关掉歌词总开关时连取词都不做（省流量，也绝不留占位）
+        if (!_config.Current.LyricsEnabled)
         {
             _lyricTimer.Stop();
             Island().ShowLyrics(null, null);
@@ -368,6 +527,63 @@ public sealed class IslandController : IDisposable
         }
 
         Island().ShowLyrics(null, null);
+        EnsureLyricsRequested();
+    }
+
+    /// <summary>
+    /// 幂等地"确保这首歌的歌词正在取/已取到"。
+    ///
+    /// 触发时机：换歌、开关被重新打开、看门狗每 2 秒巡检、进度连续读不到时。
+    /// 只在以下条件全部满足时才真正发请求：
+    ///   * 有一首有名字的歌；
+    ///   * 歌词总开关是开的；
+    ///   * 还没拿到时间轴；
+    ///   * 本曲尝试次数 &lt; 3；
+    ///   * 距上次尝试 ≥ 8 秒（避免网络卡住时把接口打爆）。
+    /// </summary>
+    private void EnsureLyricsRequested()
+    {
+        var info = _currentMedia;
+        if (info is null || string.IsNullOrWhiteSpace(info.Title))
+        {
+            return;
+        }
+
+        if (!_config.Current.LyricsEnabled)
+        {
+            return;
+        }
+
+        if (_lyricLines is { Count: > 0 })
+        {
+            return;
+        }
+
+        // 永久缓存为"没有歌词"的歌（确实搜不到/纯音乐）不再重试
+        if (_lyrics.IsKnownNoLyric(info.Title, info.Artist))
+        {
+            return;
+        }
+
+        if (_lyricAttempts >= MaxLyricAttempts)
+        {
+            return;
+        }
+
+        if ((DateTime.UtcNow - _lyricLastAttemptUtc).TotalSeconds < LyricRetryIntervalSeconds
+            && _lyricAttempts > 0)
+        {
+            return;
+        }
+
+        _lyricAttempts++;
+        _lyricLastAttemptUtc = DateTime.UtcNow;
+
+        _log.Write(
+            LogLevel.Debug,
+            "Lyrics",
+            $"发起取词 第 {_lyricAttempts}/{MaxLyricAttempts} 次: {info.Title} - {info.Artist}");
+
         _ = LoadLyricsAsync(info.Title, info.Artist);
     }
 
@@ -392,39 +608,74 @@ public sealed class IslandController : IDisposable
                 return; // 已经换歌，丢弃过期结果
             }
 
-            _lyricLines = lines;
-            _lyricIndex = int.MinValue;
-
             if (lines is { Count: > 0 })
             {
+                _lyricLines = lines;
+                _lyricIndex = int.MinValue;
+                _playbackMisses = 0;
+
+                // 立刻按当前进度定一次行号，然后开始跟随
                 SyncLyricLine();
-                _lyricTimer.Start();
+
+                if (!_lyricTimer.IsEnabled)
+                {
+                    _lyricTimer.Start();
+                }
+
+                _log.Write(
+                    LogLevel.Debug,
+                    "Lyrics",
+                    $"歌词上屏: {title}（{lines.Count} 行，当前行={_lyricIndex}）");
+                return;
             }
-            else
+
+            // 这一轮没拿到：不清空已有时间轴（可能是重试失败），也不停 timer 太久。
+            // 看门狗会在 8 秒后再试；三次都失败就认了（多半是这首确实没有词或没网）。
+            _lyricLines = null;
+            Island().ShowLyrics(null, null);
+
+            _log.Write(
+                LogLevel.Debug,
+                "Lyrics",
+                $"本轮无词（第 {_lyricAttempts}/{MaxLyricAttempts} 次）: {title} - {artist}");
+
+            // 若还有重试机会，保持 timer 关闭（没有时间轴可跟），由看门狗唤醒
+            if (_lyricAttempts >= MaxLyricAttempts)
             {
                 _lyricTimer.Stop();
-                Island().ShowLyrics(null, null);
             }
         }));
     }
 
     /// <summary>
     /// 按播放进度切换歌词行；行号没变就不动 UI（跑马灯不重排）。
-    /// v0.2.7：进度取自 TryGetPlayback（PlaybackClock 外推），不再直接读 SMTC 的
-    /// 陈旧 Position —— 那是"歌词卡死在某一行、暂停再播才跳"的根因。
+    ///
+    /// v0.2.9 需求 5：
+    ///   * 进度取自 TryGetPlayback（PlaybackClock 外推 + 上报年龄补偿），不再有固定滞后；
+    ///   * 轮询 90ms，切换发生在"目标行开始时间 + 90ms 内"，满足 ≤300ms 的要求；
+    ///   * 每次切换打一条 Debug 日志（目标时间 / 实际进度 / 偏差），便于实测核对。
     /// </summary>
     private void SyncLyricLine()
     {
         if (_lyricLines is not { Count: > 0 })
         {
-            _lyricTimer.Stop();
-            return;
+            return; // 等看门狗补词，不要在这里停 timer（停了就再也不会恢复）
         }
 
         if (!_media.TryGetPlayback(out var position, out _, out _))
         {
-            return; // 会话暂时读不到（切歌间隙），下一拍再试
+            // 会话暂时读不到（切歌间隙 / 播放器退出）：连续多次读不到就暂停轮询并请看门狗介入
+            if (++_playbackMisses >= 30)
+            {
+                _playbackMisses = 0;
+                _lyricTimer.Stop();
+                EnsureLyricsRequested();
+            }
+
+            return;
         }
+
+        _playbackMisses = 0;
 
         var index = LyricsService.IndexAt(_lyricLines, position);
         if (index == _lyricIndex)
@@ -433,7 +684,62 @@ public sealed class IslandController : IDisposable
         }
 
         _lyricIndex = index;
+
+        // 偏差诊断：目标行起始时间 vs 实际切到这一刻的进度（正数=晚切）
+        if (index >= 0 && index < _lyricLines.Count)
+        {
+            var target = _lyricLines[index].Time.TotalSeconds;
+            var delta = (position - target) * 1000;
+            _log.Write(
+                LogLevel.Debug,
+                "Lyrics",
+                $"换句 #{index} 偏差 {delta:F0}ms",
+                $"pos={position:F3}s target={target:F3}s text={_lyricLines[index].Text}");
+        }
+
         Island().ShowLyrics(TextAt(index), TextAt(index + 1), TransAt(index));
+    }
+
+    /// <summary>
+    /// 歌词看门狗：每 2 秒巡检一次。它兜住的是"所有偶发"：
+    ///   · 取词失败后没人再来一次 → 补一次（有次数与间隔上限）；
+    ///   · 时间轴有了但 timer 没跑 → 重新启动；
+    ///   · 有歌在播、歌词开着、行号却一直没定 → 重新定一次；
+    ///   · 开关从关到开（用户中途改设置）→ 重新取。
+    /// </summary>
+    private void OnLyricWatchdog()
+    {
+        var info = _currentMedia;
+        var enabled = _config.Current.LyricsEnabled;
+
+        if (info is null || string.IsNullOrWhiteSpace(info.Title))
+        {
+            return;
+        }
+
+        if (!enabled)
+        {
+            return;
+        }
+
+        if (_lyricLines is { Count: > 0 })
+        {
+            // 有时间轴：确保跟随 timer 在跑
+            if (!_lyricTimer.IsEnabled)
+            {
+                _lyricTimer.Start();
+            }
+
+            if (_lyricIndex == int.MinValue)
+            {
+                SyncLyricLine();
+            }
+
+            return;
+        }
+
+        // 没时间轴：按退避策略补取
+        EnsureLyricsRequested();
     }
 
     private string? TextAt(int index)
@@ -472,12 +778,47 @@ public sealed class IslandController : IDisposable
         }
     }
 
+    /// <summary>
+    /// 设置页滑块的实时预览（v0.2.9 需求 6）：用内存副本立刻重排岛，不落盘。
+    /// 岛当前在细条里也没关系——会先把岛弹出来，用户能直接看到宽度变化。
+    /// </summary>
+    public void PreviewLayout(AppConfig preview)
+    {
+        _dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                _preview = preview;
+
+                var island = _island;
+                if (island is null)
+                {
+                    return;
+                }
+
+                // 先让岛有内容可看（没内容时宽度是"细条"的宽度，看不出滑块效果）
+                island.PokeActivity();
+                island.ApplyLyricsTypography();
+                island.RefreshMedia();
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("Island", "预览岛布局失败", ex.Message);
+            }
+        }));
+    }
+
+    /// <summary>配置真正保存后清掉预览态，后续读真配置（v0.2.9 需求 6）。</summary>
+    public void ClearPreview() => _preview = null;
+
     private void OnConfigChanged(object? sender, AppConfig config)
     {
         _dispatcher.BeginInvoke(new Action(() =>
         {
             try
             {
+                _preview = null; // 保存后以真配置为准
+
                 Island().ApplyModeChange();
 
                 // v0.2.6：主题（纯色/毛玻璃 + 文字配色）保存后立即生效
@@ -485,6 +826,17 @@ public sealed class IslandController : IDisposable
 
                 // v0.2.7：歌词字号 / 总开关 / 收纳时长保存后立即生效
                 Island().ApplyLyricsTypography();
+
+                // v0.2.9 需求 4：歌词开关从关到开时，重置取词退避并立刻补一次
+                // （否则旧 key 上"没取到"的状态会一直挂着，表现就是"开关开了也不出词"）
+                if (config.LyricsEnabled && _lyricLines is null)
+                {
+                    _lyricAttempts = 0;
+                    _lyricLastAttemptUtc = DateTime.MinValue;
+                    _playbackMisses = 0;
+                    EnsureLyricsRequested();
+                }
+
                 Island().ShowLyrics(CurrentLyricText(1), CurrentLyricText(2), CurrentLyricTrans());
 
                 // 音乐开关/跑马灯速度等变更即时生效：
@@ -504,6 +856,7 @@ public sealed class IslandController : IDisposable
     {
         _config.Changed -= OnConfigChanged;
         _lyricTimer.Stop();
+        _lyricWatch.Stop();
         _media.Dispose();
         _fullscreen.Dispose();
         _workbuddy?.Dispose();

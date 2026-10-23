@@ -176,6 +176,29 @@ public sealed class AppConfig
     /// </summary>
     public bool KeepOpenWhilePlaying { get; set; } = true;
 
+    /// <summary>
+    /// 灵动岛总长度（百分比，v0.2.9 需求 6）：100 = 默认自适应宽度，
+    /// 小于 100 整体收紧，大于 100 允许更长（长歌词能显示更多字）。
+    /// 只作用于"宽度上限"，内容短时岛仍然会自己收窄，不会硬撑。
+    /// </summary>
+    public int IslandWidthPercent { get; set; } = 100;
+
+    /// <summary>
+    /// 岛内左右区域分配比例（v0.2.9 需求 6）：左 = 播放器/歌词区占比（百分比）。
+    /// 50 = 均衡；调小 → 播放器变窄、右侧变宽；调大 → 播放器变宽、右侧变窄。
+    /// </summary>
+    public int IslandSplitRatio { get; set; } = 50;
+
+    /// <summary>岛总长度允许范围（百分比）。</summary>
+    public const int MinIslandWidthPercent = 60;
+
+    public const int MaxIslandWidthPercent = 160;
+
+    /// <summary>左右分配比例允许范围（百分比）。</summary>
+    public const int MinIslandSplitRatio = 25;
+
+    public const int MaxIslandSplitRatio = 75;
+
     /// <summary>歌词字号允许范围。</summary>
     public const int MinLyricsFontSize = 10;
 
@@ -252,6 +275,20 @@ public sealed class AppConfig
         // v0.2.7：歌词字号与自动收纳时长收敛到安全区间
         LyricsFontSize = Math.Clamp(LyricsFontSize, MinLyricsFontSize, MaxLyricsFontSize);
         AutoCollapseSeconds = Math.Clamp(AutoCollapseSeconds, MinAutoCollapseSeconds, MaxAutoCollapseSeconds);
+
+        // v0.2.9 需求 6：岛宽度与左右分配比例
+        if (IslandWidthPercent <= 0)
+        {
+            IslandWidthPercent = 100; // 旧配置缺字段时反序列化成 0，按默认处理
+        }
+
+        if (IslandSplitRatio <= 0)
+        {
+            IslandSplitRatio = 50;
+        }
+
+        IslandWidthPercent = Math.Clamp(IslandWidthPercent, MinIslandWidthPercent, MaxIslandWidthPercent);
+        IslandSplitRatio = Math.Clamp(IslandSplitRatio, MinIslandSplitRatio, MaxIslandSplitRatio);
     }
 
     /// <summary>浏览器选择收敛到合法值。</summary>

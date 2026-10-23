@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using NotifyHub.Interop;
@@ -16,6 +17,11 @@ namespace NotifyHub.UI;
 /// 两套提示音开关与音量、微信过滤、浏览器选择、日志目录自定义、运行日志、最近事件，
 /// 以及一键清除日志。
 /// 原独立的"控制台窗口"已取消，详细日志并入这里的「运行日志」栏。
+///
+/// v0.2.9 需求 6：
+///   · 界面改为毛玻璃、自绘标题栏，配色跟随 Windows 应用主题并按背景亮度自动选深浅；
+///   · 删除「主题 / 文字配色」与透明度调节（外观固定毛玻璃 + 自动对比度）；
+///   · 新增「灵动岛总长度」「左右区域比例」两个滑块，拖动时岛实时重排。
 /// </summary>
 public partial class SettingsWindow : Window
 {
@@ -55,9 +61,18 @@ public partial class SettingsWindow : Window
         AutoCollapseSlider.ValueChanged += OnAutoCollapseSecondsChanged;
         LyricsFontSizeSlider.ValueChanged += OnLyricsFontSizeChanged;
 
+        // v0.2.9 需求 6：两个布局滑块（同样延后挂载，XAML 加载期会强制收敛 Value）
+        IslandWidthSlider.ValueChanged += OnIslandWidthChanged;
+        IslandSplitSlider.ValueChanged += OnIslandSplitChanged;
+
         LoadFromConfig();
         RefreshEvents();
         RefreshLogs();
+
+        // v0.2.9 需求 6：毛玻璃外观（先按系统主题上一版，窗口上屏后再按真实背景校正一次）
+        ApplyGlassChrome();
+        Loaded += (_, _) => Dispatcher.BeginInvoke(
+            new Action(ApplyGlassChrome), DispatcherPriority.Background);
 
         _log.RecentChanged += OnRecentChanged;
         _log.ConsoleChanged += OnConsoleChanged;
@@ -72,6 +87,104 @@ public partial class SettingsWindow : Window
             _statusTimer.Stop();
         };
     }
+
+    // ---------------- v0.2.9 需求 6：毛玻璃外观 ----------------
+
+    /// <summary>当前用的是浅色壳还是深色壳（诊断用）。</summary>
+    public bool GlassIsLight { get; private set; }
+
+    /// <summary>
+    /// 应用毛玻璃外观：外壳渐变 + 前景色一起换。
+    ///
+    /// 深浅的判定顺序（需求 6「配色跟随系统，根据背景对比度自动适配」）：
+    ///   1) 先跟随 Windows「应用使用浅色主题」；
+    ///   2) 再实测窗口背后内容的平均亮度——系统是浅色、但背后是纯黑全屏（视频/深色 IDE）时，
+    ///      高透明白玻璃会糊成一片，这时切成深色壳；反之亦然。
+    /// 这样"跟随系统"不会在极端背景下伤害可读性。
+    /// </summary>
+    public void ApplyGlassChrome()
+    {
+        var useLight = ThemePalette.SystemPrefersLight();
+
+        double? backdrop = null;
+        try
+        {
+            if (IsLoaded && ActualWidth > 1)
+            {
+                var origin = PointToScreen(new Point(0, 0));
+                var dpi = VisualTreeHelper.GetDpi(this);
+                var rect = new Rect(
+                    (origin.X / dpi.DpiScaleX) + 8,
+                    (origin.Y / dpi.DpiScaleY) + 8,
+                    Math.Max(1, ActualWidth - 16),
+                    Math.Max(1, ActualHeight - 16));
+
+                backdrop = BackdropProbe.AverageLuminance(rect);
+            }
+        }
+        catch
+        {
+            // 取样失败就按系统主题
+        }
+
+        if (backdrop is { } luminance)
+        {
+            if (useLight && luminance < 0.22)
+            {
+                useLight = false;
+            }
+            else if (!useLight && luminance > 0.78)
+            {
+                useLight = true;
+            }
+        }
+
+        GlassIsLight = useLight;
+
+        Resources["AppFg"] = ThemePalette.Brush(
+            useLight ? Color.FromRgb(0x1C, 0x1C, 0x1E) : Colors.White);
+        Resources["AppSubFg"] = ThemePalette.Brush(
+            useLight ? Color.FromArgb(0xB4, 0x1C, 0x1C, 0x1E) : Color.FromArgb(0xB4, 0xFF, 0xFF, 0xFF));
+        Resources["AppCard"] = ThemePalette.Brush(
+            useLight ? Color.FromArgb(0xC8, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF));
+        Resources["AppInput"] = ThemePalette.Brush(
+            useLight ? Color.FromArgb(0xD8, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x24, 0xFF, 0xFF, 0xFF));
+        Resources["AppBorder"] = ThemePalette.Brush(
+            useLight ? Color.FromArgb(0x2E, 0x00, 0x00, 0x00) : Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
+        Resources["AppHover"] = ThemePalette.Brush(
+            useLight ? Color.FromArgb(0x1C, 0x00, 0x00, 0x00) : Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF));
+
+        Shell.Background = useLight
+            ? new LinearGradientBrush(
+                Color.FromArgb(0xF2, 0xFF, 0xFF, 0xFF),
+                Color.FromArgb(0xE2, 0xEB, 0xED, 0xF1), 90)
+            : new LinearGradientBrush(
+                Color.FromArgb(0xF2, 0x2C, 0x2C, 0x32),
+                Color.FromArgb(0xE0, 0x12, 0x12, 0x16), 90);
+    }
+
+    // ---------------- 自绘标题栏 ----------------
+
+    private void OnTitleBarMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ButtonState != MouseButtonState.Pressed)
+        {
+            return;
+        }
+
+        try
+        {
+            DragMove();
+        }
+        catch
+        {
+            // 双击/快速拖动时 DragMove 可能抛 InvalidOperationException，忽略即可
+        }
+    }
+
+    private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
 
     private void LoadFromConfig()
     {
@@ -126,10 +239,19 @@ public partial class SettingsWindow : Window
         WeChatFilterCheck.IsChecked = config.WeChatFilterEnabled;
         FilterKeywordsBox.Text = config.WeChatBlockedKeywords;
 
-        // v0.2.6 外观：主题 / 文字配色 / 双行歌词
-        SelectComboByTag(ThemeCombo, ThemePalette.NormalizeMode(config.ThemeMode));
-        SelectComboByTag(TextToneCombo, config.TextTone);
+        // v0.2.6 外观：主题固定毛玻璃（v0.2.9 需求 6 起不再可配）
         LyricsEnabledCheck.IsChecked = config.LyricsEnabled;
+
+        // v0.2.9 需求 6：岛总长度 / 左右区域比例
+        var widthPercent = Math.Clamp(
+            config.IslandWidthPercent, AppConfig.MinIslandWidthPercent, AppConfig.MaxIslandWidthPercent);
+        IslandWidthSlider.Value = widthPercent;
+        IslandWidthText.Text = $"{widthPercent}%";
+
+        var splitRatio = Math.Clamp(
+            config.IslandSplitRatio, AppConfig.MinIslandSplitRatio, AppConfig.MaxIslandSplitRatio);
+        IslandSplitSlider.Value = splitRatio;
+        IslandSplitText.Text = $"{splitRatio} : {100 - splitRatio}";
 
         // v0.2.7 需求 1：歌词字号
         var lyricSize = Math.Clamp(config.LyricsFontSize, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize);
@@ -491,6 +613,70 @@ public partial class SettingsWindow : Window
         {
             LyricsFontSizeText.Text = $"{(int)Math.Round(e.NewValue)}";
         }
+
+        PushLivePreview();
+    }
+
+    // ---------------- v0.2.9 需求 6：两个布局滑块的实时预览 ----------------
+
+    /// <summary>
+    /// 实时预览回调（由 App 注入 → IslandController.PreviewLayout）。
+    /// 拖动过程中只把"预览配置"交给岛，不写文件；点保存才真正落盘。
+    /// </summary>
+    public Action<AppConfig>? LivePreview { get; set; }
+
+    private void OnIslandWidthChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (IslandWidthText is not null)
+        {
+            IslandWidthText.Text = $"{(int)Math.Round(e.NewValue)}%";
+        }
+
+        PushLivePreview();
+    }
+
+    private void OnIslandSplitChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (IslandSplitText is not null)
+        {
+            var value = (int)Math.Round(e.NewValue);
+            IslandSplitText.Text = $"{value} : {100 - value}";
+        }
+
+        PushLivePreview();
+    }
+
+    /// <summary>把当前界面上的布局相关取值组成预览配置，交给岛立即重排。</summary>
+    private void PushLivePreview()
+    {
+        try
+        {
+            if (IslandWidthSlider is null || IslandSplitSlider is null)
+            {
+                return;
+            }
+
+            var preview = _config.Current.Clone();
+            preview.IslandWidthPercent = (int)Math.Round(IslandWidthSlider.Value);
+            preview.IslandSplitRatio = (int)Math.Round(IslandSplitSlider.Value);
+
+            // 滑块旁边的歌词字号也一起预览，免得用户以为"字号改了没反应"
+            if (LyricsFontSizeSlider is not null)
+            {
+                preview.LyricsFontSize = (int)Math.Round(LyricsFontSizeSlider.Value);
+            }
+
+            if (LyricsEnabledCheck is not null)
+            {
+                preview.LyricsEnabled = LyricsEnabledCheck.IsChecked == true;
+            }
+
+            LivePreview?.Invoke(preview);
+        }
+        catch
+        {
+            // 预览失败不影响保存流程
+        }
     }
 
     /// <summary>总开关关闭时，把时长滑块与音乐例外一起置灰（避免"调了不生效"的困惑）。</summary>
@@ -575,39 +761,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>
-    /// 主题预览（v0.2.6）：用当前下拉选择生成一张真实通知卡片，直接看到毛玻璃/文字效果；
-    /// 卡片本身也能拖动滑掉，等于同时演示了「滑动取消」。
-    /// </summary>
-    private void OnThemePreviewClick(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var preview = _config.Current.Clone();
-            preview.ThemeMode = ComboTag(ThemeCombo, "SolidDark");
-            preview.TextTone = ComboTag(TextToneCombo, "Auto");
-
-            var message = new NotifyMessage
-            {
-                Source = MessageSource.Ntfy,
-                Sender = $"外观预览 · {ThemePalette.DisplayName(preview.ThemeMode)}",
-                Content = "这是一张预览卡片：按住可以上下/左右拖动，超过阈值松手即带惯性收起。",
-                Time = DateTime.Now,
-                SourceLabel = "NotifyHub 预览",
-            };
-
-            var card = new NotificationWindow(message, 8000, preview.MarqueeSpeed, preview);
-            card.ShowAt(
-                SystemParameters.WorkArea.Right - 384 - 12,
-                SystemParameters.WorkArea.Top + 12,
-                animate: true);
-            _log.Info("Settings", "主题预览已弹出", $"mode={preview.ThemeMode} tone={preview.TextTone}");
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, "预览失败：" + ex.Message, "NotifyHub", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
+    // v0.2.9 需求 6：主题/文字配色选项已删除，预览按钮一起去掉（外观固定毛玻璃 + 自动对比度）。
 
     private void OnSaveClick(object sender, RoutedEventArgs e)
     {
@@ -666,8 +820,16 @@ public partial class SettingsWindow : Window
         next.WeChatBlockedKeywords = FilterKeywordsBox.Text.Trim();
 
         next.MarqueeSpeed = (int)Math.Round(Math.Clamp(MarqueeSpeedSlider.Value, 10, 120));
-        next.ThemeMode = ComboTag(ThemeCombo, "SolidDark");
-        next.TextTone = ComboTag(TextToneCombo, "Auto");
+
+        // v0.2.9 需求 6：外观固定毛玻璃（跟随系统 + 自动对比度），不再保存主题/配色；
+        // 新增两个布局滑块（总长度 / 左右比例）。
+        next.ThemeMode = "GlassAuto";
+        next.TextTone = "Auto";
+        next.IslandWidthPercent = (int)Math.Round(Math.Clamp(
+            IslandWidthSlider.Value, AppConfig.MinIslandWidthPercent, AppConfig.MaxIslandWidthPercent));
+        next.IslandSplitRatio = (int)Math.Round(Math.Clamp(
+            IslandSplitSlider.Value, AppConfig.MinIslandSplitRatio, AppConfig.MaxIslandSplitRatio));
+
         next.LyricsEnabled = LyricsEnabledCheck.IsChecked == true;
         next.LyricsFontSize = (int)Math.Round(Math.Clamp(
             LyricsFontSizeSlider.Value, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize));

@@ -35,7 +35,23 @@ public sealed partial class LyricsService
 
     private readonly LogService _log;
     private readonly Dictionary<string, IReadOnlyList<LyricLine>?> _cache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 临时失败（超时/网络异常）的冻结表：key → 可以重试的时刻。
+    ///
+    /// v0.2.9 需求 4 的根因之一：旧版把"网络失败"也写进了 <see cref="_cache"/>，
+    /// 于是同一首歌只要第一次取词赶上网络抖动，就会被**永久**记为"没有歌词"，
+    /// 之后无论是重播、重开歌词开关还是暂停再播，都不会再请求——表现就是
+    /// "设置里明明开着歌词，岛内只有播放器、歌词区空白"的偶发故障。
+    /// 现在失败只冻结 25 秒（避免连续换歌把接口打爆），到期允许重试；
+    /// 只有"确实搜不到 / 确实没有词"才进永久缓存。
+    /// </summary>
+    private readonly Dictionary<string, DateTime> _retryAfter = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly object _gate = new();
+
+    /// <summary>失败后的重试冻结时长（秒）。</summary>
+    private const int FailureRetrySeconds = 25;
 
     public LyricsService(LogService log) => _log = log;
 
@@ -52,7 +68,9 @@ public sealed partial class LyricsService
     }
 
     /// <summary>
-    /// 取歌词。返回 null 表示没有（网络失败 / 无匹配 / 纯音乐）。
+    /// 取歌词。返回 null 表示"这一轮拿不到"（网络失败 / 无匹配 / 纯音乐）。
+    ///
+    /// 失败与"确实没有"的区别见 <see cref="_retryAfter"/>：前者会自己过期，后者永久缓存。
     /// </summary>
     public async Task<IReadOnlyList<LyricLine>?> GetAsync(string title, string artist, CancellationToken token = default)
     {
@@ -70,9 +88,17 @@ public sealed partial class LyricsService
             {
                 return cached;
             }
+
+            // 上一次是网络失败且还没到重试时间：先不重复请求（上层看门狗会在到期后再来）
+            if (_retryAfter.TryGetValue(key, out var retryAt) && DateTime.UtcNow < retryAt)
+            {
+                return null;
+            }
         }
 
         IReadOnlyList<LyricLine>? result = null;
+        var failed = false;
+
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -92,25 +118,40 @@ public sealed partial class LyricsService
         }
         catch (OperationCanceledException)
         {
-            // 超时：静默（不写告警，避免每次换歌刷日志）
+            // 超时：属于"这一次没成功"，允许稍后重试（旧版会永久缓存 null）
+            failed = true;
         }
         catch (Exception ex)
         {
+            failed = true;
             _log.Warn("Lyrics", $"取歌词失败: {title}", $"{ex.GetType().Name}: {ex.Message}");
         }
 
         lock (_gate)
         {
-            // 缓存上限 64 首，超了清空（简单可靠，不做 LRU）
-            if (_cache.Count > 64)
+            if (failed)
             {
-                _cache.Clear();
+                // 失败不进永久缓存：冻结一小段时间，到期后允许重试
+                _retryAfter[key] = DateTime.UtcNow.AddSeconds(FailureRetrySeconds);
             }
+            else
+            {
+                // 缓存上限 64 首，超了清空（简单可靠，不做 LRU）
+                if (_cache.Count > 64)
+                {
+                    _cache.Clear();
+                }
 
-            _cache[key] = result;
+                _cache[key] = result;
+                _retryAfter.Remove(key);
+            }
         }
 
-        if (result is null)
+        if (failed)
+        {
+            _log.Write(LogLevel.Debug, "Lyrics", $"取词失败（{FailureRetrySeconds}s 后可重试）: {title} - {artist}");
+        }
+        else if (result is null)
         {
             _log.Write(LogLevel.Debug, "Lyrics", $"无歌词: {title} - {artist}");
         }
@@ -122,6 +163,15 @@ public sealed partial class LyricsService
         }
 
         return result;
+    }
+
+    /// <summary>这个 key 是否被永久缓存为"没有歌词"（诊断用）。</summary>
+    public bool IsKnownNoLyric(string title, string artist)
+    {
+        lock (_gate)
+        {
+            return _cache.TryGetValue($"{title}|{artist}", out var cached) && cached is null;
+        }
     }
 
     // ---------------- 网络 ----------------

@@ -24,6 +24,9 @@ public sealed class SnapStripWindow : Window
     /// <summary>鼠标移入细条（展开完整岛）。</summary>
     public event EventHandler? ExpandRequested;
 
+    /// <summary>悬停展开是否已就绪（细条现身时指针已压在上面 → 先不响应悬停）。</summary>
+    private bool _hoverArmed = true;
+
     /// <summary>可视条厚度（DIP）。</summary>
     public const double BarThickness = 12;
 
@@ -78,8 +81,39 @@ public sealed class SnapStripWindow : Window
         Opacity = 0;
         Cursor = Cursors.Hand;
 
-        MouseEnter += (_, _) => ExpandRequested?.Invoke(this, EventArgs.Empty);
+        MouseEnter += (_, _) =>
+        {
+            // 需求 2 的坑：细条常驻后，指针常常正好停在屏幕顶部中央（浏览器标签栏就在这里）。
+            // 细条一出现就落在指针底下 → 立刻 MouseEnter → 展开 → 10 秒后收起 → 又落回指针底下，
+            // 形成"每 10 秒自己开合一次"的死循环。所以细条现身时如果指针已经压在上面，
+            // 先把悬停展开"解除武装"，等指针离开过一次再恢复正常。
+            if (_hoverArmed)
+            {
+                ExpandRequested?.Invoke(this, EventArgs.Empty);
+            }
+        };
+
+        MouseLeave += (_, _) => _hoverArmed = true;
+
+        // 点击永远有效（需求 2：需要时手动点开展开）
         MouseLeftButtonUp += (_, _) => ExpandRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>指针是否已经压在细条窗口上（物理像素比较，避免 DPI 缩放误差）。</summary>
+    private bool IsCursorInside()
+    {
+        if (!NativeMethods.GetCursorPos(out var point))
+        {
+            return false;
+        }
+
+        var scale = ScreenMetrics.ScaleOf(this);
+        var left = Left * scale;
+        var top = Top * scale;
+        var right = left + (Width * scale);
+        var bottom = top + (Height * scale);
+
+        return point.X >= left && point.X <= right && point.Y >= top && point.Y <= bottom;
     }
 
     /// <summary>当前指示器形态（诊断用）。</summary>
@@ -98,25 +132,32 @@ public sealed class SnapStripWindow : Window
     /// 把细条摆到屏幕顶部中央并淡入（已可见时只刷新状态与位置）。
     /// <paramref name="mode"/> 决定跑道指示器的形态，<paramref name="doneState"/> 为完成态（整条转绿）。
     /// </summary>
-    public void ShowFor(StripMode mode, bool doneState)
+    public void ShowFor(StripMode mode, bool doneState, Color? accent = null)
     {
-        // 横条：长 × 细。窗口外扩 HitPadding 扩大命中区。
-        var winW = BarLength + (HitPadding * 2);
-        var winH = BarThickness + (HitPadding * 2);
+        // v0.2.9 需求 1：细条长度按屏幕比例缩放（厚度等比但收敛在 11~18，太粗会像药丸）
+        var scale = ScreenMetrics.UiScaleFor(this);
+        var barLength = Math.Round(BarLength * scale);
+        var barThickness = Math.Clamp(Math.Round(BarThickness * scale), 11, 18);
+
+        // 横条：长 × 细。窗口外扩 HitPadding 扩大命中区（命中余量也按比例放大）。
+        var pad = Math.Round(HitPadding * Math.Clamp(scale, 0.9, 1.4));
+        var winW = barLength + (pad * 2);
+        var winH = barThickness + (pad * 2);
 
         Width = winW;
         Height = winH;
 
-        _bar.Margin = new Thickness(HitPadding);
+        _bar.Margin = new Thickness(pad);
 
         _indicator.Mode = mode;
         _indicator.IsDone = doneState;
+        _indicator.AccentColor = accent;
 
         var area = ScreenMetrics.PrimaryWorkAreaDip(this);
         var gap = 8; // 与岛吸附同款缝隙
 
         Left = Math.Round(area.Left + ((area.Width - winW) / 2));
-        Top = Math.Round(area.Top + gap - HitPadding);
+        Top = Math.Round(area.Top + gap - pad);
 
         if (IsVisible)
         {
@@ -125,13 +166,16 @@ public sealed class SnapStripWindow : Window
             return;
         }
 
+        // 指针本来就在这个位置 → 这次淡入不算"用户移入"，先不给展开
+        _hoverArmed = !IsCursorInside();
+
         Show();
         BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(128)));
         StartBreathing(doneState);
     }
 
     /// <summary>只更新指示器状态（细条已在屏上时用）。</summary>
-    public void UpdateState(StripMode mode, bool doneState)
+    public void UpdateState(StripMode mode, bool doneState, Color? accent = null)
     {
         if (!IsVisible)
         {
@@ -140,6 +184,7 @@ public sealed class SnapStripWindow : Window
 
         _indicator.Mode = mode;
         _indicator.IsDone = doneState;
+        _indicator.AccentColor = accent;
         StartBreathing(doneState);
     }
 

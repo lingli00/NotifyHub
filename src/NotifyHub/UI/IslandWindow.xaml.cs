@@ -95,6 +95,12 @@ public partial class IslandWindow : Window
     /// <summary>滑动动画是否挂在 CompositionTarget.Rendering 上（v0.2.8：帧同步，替代 15ms 计时器）。</summary>
     private bool _slideFrameHooked;
 
+    /// <summary>上一帧合成时间戳（FrameClock 去重用，v0.2.9 需求 1）。</summary>
+    private TimeSpan _slideFrameTime = TimeSpan.MinValue;
+
+    /// <summary>细条最近一次现身的时间（防止刚收起就被展开，v0.2.9 需求 2）。</summary>
+    private long _stripShownAtMs;
+
     /// <summary>
     /// 唯一的「超时自动收纳」计时器（v0.2.7 需求 2）。
     /// 旧版有两个互相打架的计时器（10s 无交互吸附 + 1.4s 从细条收回），再加上
@@ -112,8 +118,41 @@ public partial class IslandWindow : Window
     private bool _collapsing;
     private MediaInfo? _media;
 
+    /// <summary>
+    /// 岛的界面缩放（v0.2.9 需求 1）。整块 Pill 用 LayoutTransform 等比放大，
+    /// 因此岛内所有 DIP 常量（最小歌词宽、字号…）仍然按"缩放前的坐标系"工作，
+    /// 不需要处处置乘——只有窗口级的定位与吸附间距需要关心它。
+    /// </summary>
+    private double _uiScale = 1.0;
+
     /// <summary>当前状态行是否是“新消息提示”的临时内容（超时后整条收起，不留在细条里）。</summary>
     private bool _statusTransient;
+
+    // ---------------- 岛内通知（v0.2.9 需求 3） ----------------
+
+    /// <summary>当前在岛内展示的通知（点击跳转要用它的来源/发件人）。</summary>
+    private NotifyMessage? _notice;
+
+    /// <summary>通知行是否可见。</summary>
+    private bool _noticeVisible;
+
+    /// <summary>通知行出现的时刻（细条配色用它判断"是不是刚来的通知"）。</summary>
+    private DateTime _noticeAt = DateTime.MinValue;
+
+    /// <summary>通知行停留时长（毫秒）：比普通收纳时间略长，够看清也够点。</summary>
+    private const int NoticeHoldMs = 6000;
+
+    /// <summary>通知行的停留计时器（到点只收通知行，不影响音乐/任务）。</summary>
+    private readonly DispatcherTimer _noticeTimer = new();
+
+    /// <summary>
+    /// 空闲展开（v0.2.9 需求 2）：用户手动点开细条时置 true。
+    /// 此时岛上没有任何内容也保持展开，超时后回到细条。
+    /// </summary>
+    private bool _idleExpanded;
+
+    /// <summary>岛内通知被点击（由 IslandController 订阅后打开对应消息）。</summary>
+    public event EventHandler<NotifyMessage>? NoticeClicked;
 
     /// <summary>歌词区换句时的位移变换（只影响渲染，不影响布局）。</summary>
     private readonly TranslateTransform _lyricShift = new();
@@ -178,6 +217,8 @@ public partial class IslandWindow : Window
         _statusTimer.Tick += (_, _) => OnStatusHoldElapsed();
         _musicTimer.Tick += (_, _) => OnMusicGraceElapsed();
         _autoTimer.Tick += (_, _) => OnAutoCollapseElapsed();
+        _noticeTimer.Interval = TimeSpan.FromMilliseconds(NoticeHoldMs);
+        _noticeTimer.Tick += (_, _) => OnNoticeHoldElapsed();
 
         // 鼠标在岛上时不收纳（用户正在看歌词/状态），离开再重新计时
         Pill.MouseEnter += OnPillMouseEnter;
@@ -192,7 +233,28 @@ public partial class IslandWindow : Window
         Loaded += (_, _) => ApplyLyricsTypography();
 
         ApplyLyricsTypography();
+        ApplyUiScale();
     }
+
+    /// <summary>
+    /// 按屏幕尺寸刷新岛的界面缩放（v0.2.9 需求 1）。
+    /// 用 LayoutTransform 而不是 RenderTransform：前者参与布局，窗口 SizeToContent
+    /// 会跟着变大，居中与吸附不用额外改公式。
+    /// </summary>
+    public void ApplyUiScale()
+    {
+        var scale = ScreenMetrics.UiScaleFor(this);
+        if (Math.Abs(scale - _uiScale) < 0.01 && Pill.LayoutTransform is ScaleTransform)
+        {
+            return;
+        }
+
+        _uiScale = scale;
+        Pill.LayoutTransform = new ScaleTransform(scale, scale);
+    }
+
+    /// <summary>当前界面缩放（诊断/自检用）。</summary>
+    public double UiScale => _uiScale;
 
     /// <summary>当前实例（整个应用一个小岛）。</summary>
     public static IslandWindow? Current { get; private set; }
@@ -238,6 +300,12 @@ public partial class IslandWindow : Window
     /// <summary>注入的配置读取：音乐播放期间保持展开（不自动收纳）。</summary>
     public Func<bool>? KeepOpenWhilePlayingProvider { get; set; }
 
+    /// <summary>注入的配置读取：灵动岛总长度（百分比，v0.2.9 需求 6）。</summary>
+    public Func<int>? IslandWidthPercentProvider { get; set; }
+
+    /// <summary>注入的配置读取：岛内左右区域分配比例（左=播放器占比，v0.2.9 需求 6）。</summary>
+    public Func<int>? IslandSplitRatioProvider { get; set; }
+
     /// <summary>歌词区当前是否展开（诊断用）。</summary>
     public bool IsLyricsShown => LyricsPanel.Visibility == Visibility.Visible;
 
@@ -252,10 +320,11 @@ public partial class IslandWindow : Window
 
     /// <summary>排版诊断快照（--island-shot / 排障日志用）。</summary>
     public string LayoutDebug =>
-        $"岛宽={ActualWidth:F0} 歌名宽={MusicText.Width:F0}/自然{MusicText.NaturalWidth:F0} " +
+        $"岛宽={ActualWidth:F0} scale={_uiScale:F2} 歌名宽={MusicText.Width:F0}/自然{MusicText.NaturalWidth:F0} " +
         $"歌词宽={LyricLine1.Width:F0}/自然1={LyricLine1.NaturalWidth:F0}/自然2={LyricLine2.NaturalWidth:F0} " +
         $"任务宽={StatusText.Width:F0}/自然{StatusText.NaturalWidth:F0} " +
-        $"左栏={LeftPane.ActualWidth:F0} 右栏={StatusGroup.ActualWidth:F0} " +
+        $"通知={(_noticeVisible ? NoticeTag.Text : "无")}/宽{NoticeText.Width:F0} " +
+        $"左栏={LeftPane.ActualWidth:F0} 右栏={RightPane.ActualWidth:F0} " +
         $"歌词可见={LyricsPanel.Visibility} 译文={LyricTrans.Visibility} " +
         $"| 歌名[{MusicText.DebugState}] 歌词1[{LyricLine1.DebugState}]";
 
@@ -294,8 +363,8 @@ public partial class IslandWindow : Window
     /// <summary>左栏（音乐 + 歌词）实际宽度，诊断/自检用。</summary>
     public double LeftPaneWidth => LeftPane.ActualWidth;
 
-    /// <summary>右栏（任务）实际宽度，诊断/自检用。</summary>
-    public double RightPaneWidth => StatusGroup.ActualWidth;
+    /// <summary>右栏（任务 + 通知）实际宽度，诊断/自检用。</summary>
+    public double RightPaneWidth => RightPane.ActualWidth;
 
     /// <summary>
     /// 按当前实际布局重算左右两栏配平（v0.2.7）。正常由 <see cref="UpdateChrome"/>
@@ -483,6 +552,147 @@ public partial class IslandWindow : Window
         RestartAutoCollapse();
     }
 
+    // ---------------- 岛内通知（v0.2.9 需求 3） ----------------
+
+    /// <summary>
+    /// 在岛内展示一条通知（微信 / QQ / ntfy），用来源主题色区分，整行可点。
+    ///
+    /// 展示策略由 <see cref="IslandController"/> 决定：音乐与 WorkBuddy 任务同时存在时
+    /// 通知仍走四角弹窗，只有"最多一项内容在跑"时才进岛内（此时岛不会有第四行）。
+    /// </summary>
+    public void ShowNotice(NotifyMessage message)
+    {
+        EnsureCreated();
+
+        _notice = message;
+        _noticeVisible = true;
+        _noticeAt = DateTime.Now;
+        _idleExpanded = false;
+
+        var accent = SourceColors.AccentOf(message);
+        var brush = ThemePalette.Brush(accent);
+
+        NoticeDot.Fill = brush;
+        NoticeTag.Foreground = brush;
+        NoticeTag.Text = message.SourceLabel is { Length: > 0 } label ? label : message.SourceText;
+
+        var who = string.IsNullOrWhiteSpace(message.Sender) ? message.SourceText : message.Sender;
+        var body = string.IsNullOrWhiteSpace(message.Content) ? "（无内容）" : message.Content;
+        NoticeText.Text = FlattenToSingleLine($"{who}：{body}");
+        NoticeText.Anchor = TextAnchor.Left;
+
+        var wasVisible = NoticeButton.Visibility == Visibility.Visible;
+        NoticeButton.Visibility = Visibility.Visible;
+
+        // 内容淡入（首次出现交给整岛展开动画，避免两层叠加发灰）
+        if (wasVisible)
+        {
+            NoticeButton.BeginAnimation(OpacityProperty, null);
+            NoticeButton.Opacity = 1;
+            NoticeButton.BeginAnimation(
+                OpacityProperty,
+                new DoubleAnimation(0.4, 1, TextSwapDuration)
+                {
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                });
+        }
+
+        _noticeTimer.Stop();
+        _noticeTimer.Start();
+
+        UpdateChrome();
+        Evaluate();
+        RestartAutoCollapse();
+    }
+
+    /// <summary>收起岛内通知行（点击已读 / 到时自动）。</summary>
+    public void HideNotice()
+    {
+        _noticeTimer.Stop();
+
+        if (!_noticeVisible)
+        {
+            return;
+        }
+
+        _noticeVisible = false;
+        _notice = null;
+        NoticeButton.Visibility = Visibility.Collapsed;
+
+        UpdateChrome();
+        Evaluate();
+        RestartAutoCollapse();
+    }
+
+    private void OnNoticeHoldElapsed()
+    {
+        _noticeTimer.Stop();
+        HideNotice();
+    }
+
+    /// <summary>通知行被点击：交给控制器打开对应会话 / 网页，然后收起该行。</summary>
+    private void OnNoticeClick(object sender, RoutedEventArgs e)
+    {
+        var notice = _notice;
+        if (notice is null)
+        {
+            return;
+        }
+
+        RestartAutoCollapse();
+
+        try
+        {
+            NoticeClicked?.Invoke(this, notice);
+        }
+        catch (Exception ex)
+        {
+            LogService.Shared.Warn("Island", "岛内通知点击处理失败", ex.Message);
+        }
+
+        HideNotice();
+    }
+
+    /// <summary>岛内当前是否展示了通知（诊断用）。</summary>
+    public bool IsNoticeShown => _noticeVisible;
+
+    /// <summary>是否处于收纳细条形态（诊断/自检用）。</summary>
+    public bool IsStripMode => _stripMode;
+
+    /// <summary>音乐行是否可见（展示策略判断用）。</summary>
+    public bool HasMusicContent => _musicVisible;
+
+    /// <summary>任务行是否可见（展示策略判断用）。</summary>
+    public bool HasTaskContent => _statusVisible;
+
+    /// <summary>
+    /// 音乐与任务是否**同时**在跑（v0.2.9 需求 3 的展示策略开关）：
+    /// 两项都在 → 新通知走四角弹窗；否则进岛内。
+    /// </summary>
+    public bool IsBusyWithBoth => !NoticeGoesToIsland(_musicVisible, _statusVisible);
+
+    /// <summary>
+    /// 展示策略的纯函数版（v0.2.9 需求 3）：
+    ///   音乐 + WorkBuddy 任务**同时在跑** → 岛内两行已经满了，新通知走四角弹窗；
+    ///   都空 / 只有一项在跑        → 岛内还有空间，新通知直接在岛里展示。
+    /// 抽成静态纯函数是为了让自检能直接验证策略分支，不用先把窗口跑起来。
+    /// </summary>
+    public static bool NoticeGoesToIsland(bool hasMusic, bool hasTask) => !(hasMusic && hasTask);
+
+    /// <summary>
+    /// 启动即常驻（v0.2.9 需求 2）：立刻亮出顶部窄条，不等任何内容。
+    /// 之后由 <see cref="Evaluate"/> 统一接管——有内容就展开，没内容就保持窄条。
+    /// </summary>
+    public void ShowPersistentStrip()
+    {
+        EnsureCreated();
+
+        if (!_fullscreen)
+        {
+            Evaluate();
+        }
+    }
+
     /// <summary>
     /// 预热：离屏把 HWND 建出来并跑完一次布局/渲染。
     /// 不预热的话第一条 --island 命令要多等 150~300ms 的窗口创建 + 首帧渲染，
@@ -490,6 +700,12 @@ public partial class IslandWindow : Window
     /// </summary>
     public void WarmUp()
     {
+        // 常驻细条形态下岛窗口本来就是隐藏的，再 Show/Hide 一次会把细条挤掉
+        if (_stripMode)
+        {
+            return;
+        }
+
         if (!_hidden || IsVisible)
         {
             return;
@@ -758,11 +974,17 @@ public partial class IslandWindow : Window
     }
 
     /// <summary>
-    /// 收纳细条当前应该显示哪种形态（v0.2.8 需求 4）：
-    /// 仅音乐 / 仅任务 / 音乐+任务 三种，靠轨道里光块的颜色与运动方式区分。
+    /// 收纳细条当前应该显示哪种形态（v0.2.8 需求 4 + v0.2.9 需求 3）：
+    /// 仅音乐 / 仅任务 / 音乐+任务 靠轨道里光块的颜色与运动方式区分；
+    /// 岛内有通知时优先显示「通知」形态，光块用该来源的主题色。
     /// </summary>
     private StripMode CurrentStripMode()
     {
+        if (_noticeVisible)
+        {
+            return StripMode.Notice;
+        }
+
         if (_musicVisible && _statusVisible)
         {
             return StripMode.Both;
@@ -776,6 +998,10 @@ public partial class IslandWindow : Window
         return _statusVisible ? StripMode.Task : StripMode.None;
     }
 
+    /// <summary>细条要用的强调色（通知的来源色；没有通知返回 null 用内置色）。</summary>
+    private Color? CurrentAccentColor()
+        => _noticeVisible && _notice is not null ? SourceColors.AccentOf(_notice) : null;
+
     /// <summary>细条已显示时，随内容变化刷新指示器（音乐停、任务开始/完成…）。</summary>
     private void SyncStripState()
     {
@@ -784,7 +1010,7 @@ public partial class IslandWindow : Window
             return;
         }
 
-        _strip.UpdateState(CurrentStripMode(), IsDoneState);
+        _strip.UpdateState(CurrentStripMode(), IsDoneState, CurrentAccentColor());
     }
 
     /// <summary>
@@ -802,11 +1028,22 @@ public partial class IslandWindow : Window
     /// </summary>
     private void BalanceWidths()
     {
-        // 1) 任务正文
+        // v0.2.9 需求 6：两个滑块的实时预览都落在这里。
+        //   widthFactor：整体宽度上限的乘数（60%~160%）
+        //   left/rightFactor：按左右分配比例放大或收缩两侧的上限
+        //     比例 50 → 1.0 / 1.0；比例 75 → 左 1.5、右 0.5；比例 25 → 左 0.5、右 1.5
+        // 注意只影响"上限"，内容短时岛依旧自己收窄（否则就不叫自适应了）。
+        var widthFactor = Math.Clamp((IslandWidthPercentProvider?.Invoke() ?? 100) / 100.0, 0.6, 1.6);
+        var split = Math.Clamp((IslandSplitRatioProvider?.Invoke() ?? 50) / 100.0, 0.25, 0.75);
+        var leftFactor = Math.Clamp(split / 0.5, 0.55, 1.7);
+        var rightFactor = Math.Clamp((1 - split) / 0.5, 0.55, 1.7);
+
+        // 1) 任务正文 + 通知正文（共享同一列宽，视觉上左边界才齐）
         //    宽度一律**向上取整**：FormattedText 的自然宽带小数（172.2），若四舍五入成 172
         //    就比自然宽还窄 0.2px，会被跑马灯判成"超宽"从而把开头几个字滚掉（v0.2.8 实测坑）。
-        var statusCap = _musicVisible ? MaxStatusWidthWithMusic : MaxStatusWidthSolo;
-        var statusNatural = StatusText.NaturalWidth;
+        var statusCap = (_musicVisible ? MaxStatusWidthWithMusic : MaxStatusWidthSolo)
+                        * widthFactor * rightFactor;
+        var statusNatural = Math.Max(StatusText.NaturalWidth, NoticeText.NaturalWidth);
         var statusWidth = Math.Ceiling(Math.Clamp(
             statusNatural <= 0 ? MinStatusWidth : statusNatural,
             MinStatusWidth, statusCap));
@@ -814,6 +1051,11 @@ public partial class IslandWindow : Window
         if (double.IsNaN(StatusText.Width) || Math.Abs(StatusText.Width - statusWidth) > 0.5)
         {
             StatusText.Width = statusWidth;
+        }
+
+        if (double.IsNaN(NoticeText.Width) || Math.Abs(NoticeText.Width - statusWidth) > 0.5)
+        {
+            NoticeText.Width = statusWidth;
         }
 
         if (!_musicVisible)
@@ -826,7 +1068,8 @@ public partial class IslandWindow : Window
         LeftPane.Visibility = Visibility.Visible;
 
         // 2) 歌名区
-        var titleCap = _statusVisible ? MaxTitleWidthWithTask : MaxTitleWidthSolo;
+        var titleCap = (_statusVisible ? MaxTitleWidthWithTask : MaxTitleWidthSolo)
+                       * widthFactor * leftFactor;
         var titleNatural = MusicText.NaturalWidth;
         var titleWidth = Math.Ceiling(Math.Clamp(
             titleNatural <= 0 ? MinTitleWidth : titleNatural,
@@ -845,7 +1088,8 @@ public partial class IslandWindow : Window
 
         AlignLyricIndent();
 
-        var lyricCap = _statusVisible ? MaxLyricWidthWithTask : MaxLyricWidthSolo;
+        var lyricCap = (_statusVisible ? MaxLyricWidthWithTask : MaxLyricWidthSolo)
+                       * widthFactor * leftFactor;
         var lyricNatural = Math.Max(
             LyricLine1.NaturalWidth,
             Math.Max(LyricTrans.NaturalWidth, LyricLine2.NaturalWidth));
@@ -943,27 +1187,81 @@ public partial class IslandWindow : Window
 
     // ---------------- 显隐调度 ----------------
 
-    /// <summary>显隐调度：全屏强制隐藏；有任务或音乐才显示。</summary>
+    /// <summary>
+    /// 显隐调度（v0.2.9 需求 2 改造）：**岛常驻**。
+    ///
+    /// 旧逻辑：没有任务也没有音乐 → <see cref="CollapseIsland"/> 把窗口整个 Hide()，
+    /// 桌面上什么都不剩，用户以为程序没跑。
+    /// 现在：只要不在全屏，任何状态下都至少留一条顶部窄条；
+    /// 有音乐 / 任务 / 通知 / 手动展开时展开成完整岛，超时再收成窄条。
+    /// </summary>
     private void Evaluate()
     {
-        var shouldShow = !_fullscreen && (_statusVisible || _musicVisible);
+        // 全屏（观影/游戏）：整岛与细条一起隐藏，退出全屏自动回来
+        if (_fullscreen)
+        {
+            HideEverything();
+            return;
+        }
 
-        if (shouldShow)
+        var hasContent = _statusVisible || _musicVisible || _noticeVisible || _idleExpanded;
+
+        if (hasContent)
         {
             CancelCollapse();
             ShowIsland();
+            return;
         }
-        else if (!_hidden && !_dragging)
+
+        CollapseToStrip();
+    }
+
+    /// <summary>全屏时把岛和细条都收掉（不销毁，退出全屏能立刻回来）。</summary>
+    private void HideEverything()
+    {
+        _autoTimer.Stop();
+        _idleExpanded = false;
+
+        if (_stripMode)
+        {
+            _stripMode = false;
+            _strip?.Collapse();
+        }
+
+        if (!_hidden && !_dragging)
         {
             CollapseIsland();
         }
-        else if (_stripMode)
+    }
+
+    /// <summary>
+    /// 收成顶部窄条（v0.2.9 需求 2 的常驻形态）。
+    /// 三种入口：岛还隐着（启动/全屏恢复）→ 直接显示细条；
+    /// 已经是细条 → 只刷新指示器；岛正展开 → 滑到顶再切换。
+    /// </summary>
+    private void CollapseToStrip()
+    {
+        if (_hidden || !IsVisible)
         {
-            // 细条形态下内容全部消失（任务过期/音乐停止）：细条一并收掉
-            _stripMode = false;
-            _strip?.Collapse();
             _autoTimer.Stop();
+            _stripMode = true;
+            _stripShownAtMs = Environment.TickCount64;
+            EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState, CurrentAccentColor());
+            return;
         }
+
+        if (_stripMode)
+        {
+            _strip?.UpdateState(CurrentStripMode(), IsDoneState);
+            return;
+        }
+
+        if (_dragging || _sliding)
+        {
+            return;
+        }
+
+        SnapToNearestEdge();
     }
 
     /// <summary>展开：180ms ease-out（淡入 + 自上而下落位）。已显示则只做内容更新。</summary>
@@ -1093,6 +1391,11 @@ public partial class IslandWindow : Window
             if (!_musicVisible)
             {
                 MusicGroup.Visibility = Visibility.Collapsed;
+            }
+
+            if (!_noticeVisible)
+            {
+                NoticeButton.Visibility = Visibility.Collapsed;
             }
 
             Hide();
@@ -1298,13 +1601,21 @@ public partial class IslandWindow : Window
             return;
         }
 
-        _autoTimer.Interval = TimeSpan.FromSeconds(AutoCollapseSeconds());
+        // 通知行在岛上时至少给够它自己的停留时长（默认 6s），
+        // 否则用户把收纳时长设成 1~3 秒时，通知刚弹出来就跟着岛一起没了，根本来不及点。
+        var seconds = (double)AutoCollapseSeconds();
+        if (_noticeVisible)
+        {
+            seconds = Math.Max(seconds, NoticeHoldMs / 1000.0);
+        }
+
+        _autoTimer.Interval = TimeSpan.FromSeconds(seconds);
         _autoTimer.Start();
 
         LogService.Shared.Write(
             LogLevel.Debug, "IslandAuto",
-            $"收纳倒计时重置 {AutoCollapseSeconds()}s",
-            $"hidden={_hidden} strip={_stripMode} hover={Pill.IsMouseOver} music={_musicPlaying} status={_statusVisible}");
+            $"收纳倒计时重置 {seconds:F0}s",
+            $"hidden={_hidden} strip={_stripMode} hover={Pill.IsMouseOver} music={_musicPlaying} status={_statusVisible} notice={_noticeVisible}");
     }
 
     /// <summary>
@@ -1352,13 +1663,23 @@ public partial class IslandWindow : Window
             return;
         }
 
+        // 通知行到点先收通知行（音乐/任务还在时岛继续留着）
+        if (_noticeVisible)
+        {
+            HideNotice();
+            return;
+        }
+
         // 音乐正在播且允许保持展开 → 一直显示歌词
         if (_musicPlaying && _musicVisible && KeepOpenWhilePlaying())
         {
             return;
         }
 
-        SnapToNearestEdge();
+        // 空闲手动展开的时间到了：撤销撑住标志，正常收成细条
+        _idleExpanded = false;
+
+        CollapseToStrip();
     }
 
     private void OnPillMouseEnter(object sender, MouseEventArgs e)
@@ -1405,7 +1726,8 @@ public partial class IslandWindow : Window
         }
 
         _stripMode = true;
-        EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState);
+        _stripShownAtMs = Environment.TickCount64;
+        EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState, CurrentAccentColor());
 
         var token = ++_animToken;
         BeginAnimation(OpacityProperty, null);
@@ -1437,12 +1759,23 @@ public partial class IslandWindow : Window
             return;
         }
 
-        LogService.Shared.Write(LogLevel.Debug, "IslandAuto", "从细条展开", $"status={_statusVisible} music={_musicPlaying}");
+        // 刚收起来就被"展开"（细条恰好落在指针下、或吸附动画尾帧的用户输入）会变成抖动，
+        // 400ms 内直接忽略。
+        if (Environment.TickCount64 - _stripShownAtMs < 400)
+        {
+            return;
+        }
+
+        LogService.Shared.Write(LogLevel.Debug, "IslandAuto", "从细条展开", $"status={_statusVisible} music={_musicPlaying} notice={_noticeVisible}");
 
         var token = ++_animToken;
         _stripMode = false;
         _strip?.Collapse();
         _snapped = false;
+
+        // 没有任何内容却手动展开（需求 2：需要时手动点开展开）：
+        // 用 _idleExpanded 撑住这次展开，超时后自动回到细条。
+        _idleExpanded = !(_statusVisible || _musicVisible || _noticeVisible);
 
         // 贴顶全展开：水平收敛进中间 3/5，垂直留出与吸附同款缝隙
         var (left, _) = ClampToScreen(Left, Top);
@@ -1508,6 +1841,17 @@ public partial class IslandWindow : Window
         _slideFromY = current.Top;
         _slideToX = (int)Math.Round(targetLeft * scaleX);
         _slideToY = (int)Math.Round(targetTop * scaleY);
+        // 系统关掉了"动画效果"（Win10 设置→轻松使用 / Win11 设置→辅助功能）：直接落位，
+        // 否则用户会看到一段"没播完就停住"的残影。两代系统都会读同一个 SystemParameters 开关。
+        if (!Services.SystemCapabilities.Current.AnimationsEnabled)
+        {
+            _slideDone = null;
+            NativeMethods.MoveWindowTo(_hwnd, _slideToX, _slideToY);
+            SyncWpfPositionFromHwnd();
+            done?.Invoke();
+            return;
+        }
+
         _slideDuration = Math.Max(60, durationMs);
         _slideDone = done;
 
@@ -1555,6 +1899,12 @@ public partial class IslandWindow : Window
         if (!_sliding)
         {
             UnhookSlideFrame();
+            return;
+        }
+
+        // 一帧只移动一次（v0.2.9 需求 1）：同一帧重复 SetWindowPos 会触发多余的 DWM 提交
+        if (!UI.FrameClock.ShouldTick(ref _slideFrameTime, e))
+        {
             return;
         }
 
@@ -1948,7 +2298,45 @@ public partial class IslandWindow : Window
         _source = HwndSource.FromHwnd(_hwnd);
         _source?.AddHook(WndProc);
 
+        // 有了真实 HWND 之后 DPI 才准确：再算一次缩放，并按新尺寸重新定位
+        ApplyUiScale();
+
         ApplyModeChange();
+    }
+
+    /// <summary>
+    /// 显示器 DPI / 分辨率变化（拖到另一块屏、改系统缩放）：
+    /// 重算界面缩放 → 岛内尺寸变了 → 重新居中/贴边（v0.2.9 需求 1）。
+    /// </summary>
+    protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+    {
+        base.OnDpiChanged(oldDpi, newDpi);
+
+        try
+        {
+            ApplyUiScale();
+            UpdateLayout();
+
+            if (!_hidden && IsVisible && !_dragging && !_sliding)
+            {
+                if (IsFreeMode())
+                {
+                    var (left, top) = ClampToScreen(Left, Top);
+                    Left = left;
+                    Top = top;
+                }
+                else
+                {
+                    RecenterFixed();
+                }
+            }
+
+            SyncStripState();
+        }
+        catch
+        {
+            // 切换显示器瞬间布局可能还没就绪，下一帧会自愈
+        }
     }
 
     protected override void OnClosed(EventArgs e)

@@ -960,7 +960,11 @@ public static class SelfTest
                     return false;
                 }
 
-                var balanced = left > 240 && right > 200 && Math.Abs(left - right) <= Math.Max(left, right) * 0.30;
+                // 两栏都"有实质内容"且量级接近（30% 以内）。
+                // 阈值取 220/190 而不是 240/200：左侧装饰既可能是 App 图标（17+7），
+                // 也可能是 ♪ 兜底字形（更窄 9px），拿一个卡在边界的绝对值断言会让
+                // "图标提取不到"被误报成配平失败（v0.2.9 实测踩过）。
+                var balanced = left > 220 && right > 190 && Math.Abs(left - right) <= Math.Max(left, right) * 0.30;
                 var dividerOk = divider.Visibility == Visibility.Visible;
 
                 // 歌词与歌名同一左边界（同一内容列，误差 ≤2px）
@@ -971,9 +975,12 @@ public static class SelfTest
                 // 字号 = 配置值 + 1
                 var fontOk = Math.Abs(lyric.FontSize - 14) < 0.01;
 
+                var iconShown = (withTask.FindName("MusicIconBox") as System.Windows.Controls.Border)?.Visibility
+                                == Visibility.Visible;
+
                 report.Append($"有任务: 整条={totalBoth:F1} 左={left:F1} 右={right:F1} " +
                               $"歌词左={lyricLeft:F1} 歌名左={titleLeft:F1} 字号={lyric.FontSize:F1} " +
-                              $"分隔线={divider.Visibility} 歌词宽={lyric.ActualWidth:F1}");
+                              $"分隔线={divider.Visibility} 歌词宽={lyric.ActualWidth:F1} 图标={iconShown}");
 
                 // ---------- ② 无任务时左栏不预留空位、整条更窄 ----------
                 solo.ApplyTheme(ThemePalette.Create(new AppConfig()));
@@ -1105,6 +1112,291 @@ public static class SelfTest
 
                 return sized && switched && doneOk && geometry;
             });
+        });
+
+        Check("v0.2.9 需求1：界面缩放映射（1080p→1.00 / 2.5K@150%→0.90 / 2.5K→1.35 / 4K→1.70）", () =>
+        {
+            // 需求 1 的核心不是"卡片变大变小"，而是"卡片占屏比例恒定"。
+            // 这四个点是实机最常见的四种组合，比例都该落在 10.8% 上下。
+            var p1080 = ScreenMetrics.UiScale(new Rect(0, 0, 1920, 1040));
+            var p25k150 = ScreenMetrics.UiScale(new Rect(0, 0, 1707, 933));
+            var p25k100 = ScreenMetrics.UiScale(new Rect(0, 0, 2560, 1400));
+            var p4k = ScreenMetrics.UiScale(new Rect(0, 0, 3840, 2100));
+
+            // 0×0 之类的异常输入必须安全回落，不能除零变成 NaN 把布局带崩
+            var degenerate = ScreenMetrics.UiScale(new Rect(0, 0, 0, 0));
+
+            return Math.Abs(p1080 - 1.00) < 0.02
+                   && Math.Abs(p25k150 - 0.90) < 0.03
+                   && Math.Abs(p25k100 - 1.35) < 0.03
+                   && Math.Abs(p4k - 1.70) < 0.03
+                   && Math.Abs(degenerate - 1.0) < 0.001;
+        });
+
+        Check("v0.2.9 需求1：四角通知在 0.9/1.0/1.35/1.7 缩放下都不重叠、不出屏", () =>
+        {
+            var ok = true;
+            var work = new Rect(0, 0, 1920, 1040);
+
+            foreach (var scale in new[] { 0.9, 1.0, 1.35, 1.7 })
+            {
+                foreach (var corner in new[]
+                         {
+                             NotifyCorner.TopLeft, NotifyCorner.TopRight,
+                             NotifyCorner.BottomLeft, NotifyCorner.BottomRight,
+                         })
+                {
+                    var rects = NotificationLayout.CardRects(work, corner, 3, scale);
+                    if (rects.Count != 3)
+                    {
+                        ok = false;
+                        continue;
+                    }
+
+                    foreach (var rect in rects)
+                    {
+                        ok &= rect.Left >= -0.5 && rect.Top >= -0.5
+                              && rect.Right <= work.Right + 0.5 && rect.Bottom <= work.Bottom + 0.5
+                              && Math.Abs(rect.Width - NotificationLayout.CardWidth(scale)) < 0.5
+                              && Math.Abs(rect.Height - NotificationLayout.CardHeight(scale)) < 0.5;
+                    }
+
+                    // 相邻两张不能压在一起（四角堆叠方向不同，用"纵向区间是否相交"判，而不是比大小）
+                    for (var i = 1; i < rects.Count; i++)
+                    {
+                        var overlap = Math.Min(rects[i - 1].Bottom, rects[i].Bottom)
+                                      - Math.Max(rects[i - 1].Top, rects[i].Top);
+                        ok &= overlap <= 0.5;
+                    }
+                }
+            }
+
+            return ok;
+        });
+
+        Check("v0.2.9 需求1：帧率计量（去重后一帧一次 / 间隔统计 / 卡顿判定）", () =>
+        {
+            var meter = new FpsMeter();
+            meter.Start();
+
+            for (var i = 0; i < 40; i++)
+            {
+                meter.Tick(new EventArgs());
+                System.Threading.Thread.Sleep(6);
+            }
+
+            var report = meter.Finish(60);
+
+            // 只看"能不能正确统计"，不卡具体帧率（自检机器可能被 UIA 拖慢）
+            return report.Frames >= 35
+                   && report.AvgFps > 15
+                   && report.AvgIntervalMs > 1
+                   && report.MaxIntervalMs >= report.AvgIntervalMs
+                   && report.RefreshHz == 60
+                   && report.ToReport().Contains("达成率");
+        });
+
+        Check("v0.2.9 需求3：三来源主题色互不相同 + ntfy 多订阅取色板", () =>
+        {
+            var wechat = SourceColors.AccentOf(new NotifyMessage { Source = MessageSource.WeChat });
+            var qq = SourceColors.AccentOf(new NotifyMessage { Source = MessageSource.QQ });
+            var ntfy = SourceColors.AccentOf(new NotifyMessage { Source = MessageSource.Ntfy });
+
+            var distinct = wechat != qq && qq != ntfy && wechat != ntfy;
+
+            // ntfy 多订阅：负索引（旧消息/无订阅）回落默认橙；合法索引取订阅色板
+            var ntfyFallback = SourceColors.AccentOf(
+                new NotifyMessage { Source = MessageSource.Ntfy, AccentIndex = -1 });
+            var ntfyPalette = SourceColors.AccentOf(
+                new NotifyMessage { Source = MessageSource.Ntfy, AccentIndex = 1 });
+
+            var brush = SourceColors.GradientOf(qq);
+
+            var glyphs = SourceColors.GlyphOf(new NotifyMessage { Source = MessageSource.WeChat }) == "微"
+                         && SourceColors.GlyphOf(new NotifyMessage { Source = MessageSource.QQ }) == "Q"
+                         && SourceColors.GlyphOf(new NotifyMessage { Source = MessageSource.Ntfy }) == "N";
+
+            return distinct
+                   && ntfyFallback == SourceColors.Ntfy
+                   && ntfyPalette != SourceColors.Ntfy
+                   && brush.GradientStops.Count == 2
+                   && glyphs;
+        });
+
+        Check("v0.2.9 需求3：展示策略（音乐+任务同时在跑→四角；其余→岛内）", () =>
+        {
+            return IslandWindow.NoticeGoesToIsland(false, false)
+                   && IslandWindow.NoticeGoesToIsland(true, false)
+                   && IslandWindow.NoticeGoesToIsland(false, true)
+                   && !IslandWindow.NoticeGoesToIsland(true, true);
+        });
+
+        Check("v0.2.9 需求3：岛内通知整行可点（点击能到达 WPF，不被穿透）", () =>
+        {
+            var ok = false;
+            var worker = new System.Threading.Thread(() => ok = RunNoticeHitTest(), 8 * 1024 * 1024);
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+
+            if (!worker.Join(TimeSpan.FromSeconds(15)))
+            {
+                return false;
+            }
+
+            return ok;
+        });
+
+        static bool RunNoticeHitTest()
+        {
+            // 岛的窗口是 NOACTIVATE + 分层的，WM_NCHITTEST 默认返回 HTTRANSPARENT（点穿），
+            // 只有落在 Button 上才放行。通知行整行被包进一个透明底的 Button，
+            // 这里验证"点在通知行正中间 → 判定为可交互"，否则点击跳转就是死代码。
+            var island = new IslandWindow
+            {
+                ModeProvider = () => "Fixed",
+                MusicEnabledProvider = () => true,
+                MarqueeSpeedProvider = () => 45,
+                LyricsEnabledProvider = () => true,
+                SavedPositionProvider = () => null,
+            };
+
+            try
+            {
+                island.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                island.SetMedia(new MediaInfo("侧脸", "魏语诺", "FOLIA", true, "", "Folia", 30, 200));
+                island.ShowNotice(new NotifyMessage
+                {
+                    Source = MessageSource.WeChat,
+                    Sender = "张三",
+                    Content = "在吗？刚才那个需求文档我改了一版",
+                    Time = DateTime.Now,
+                });
+
+                island.Measure(new Size(900, 200));
+                island.Arrange(new Rect(0, 0, 900, 200));
+                island.UpdateLayout();
+
+                if (island.FindName("NoticeButton") is not System.Windows.Controls.Button button
+                    || button.ActualWidth <= 0 || button.ActualHeight <= 0)
+                {
+                    return false;
+                }
+
+                var center = button.TranslatePoint(
+                    new System.Windows.Point(button.ActualWidth / 2, button.ActualHeight / 2), island);
+
+                // 通知行中间必须是"可交互"，且状态标记为已展示
+                return island.IsNoticeShown && island.HitTestInteractive(center);
+            }
+            finally
+            {
+                island.Close();
+            }
+        }
+
+        Check("v0.2.9 需求5：歌词时间轴误差 ≤300ms（模拟 SMTC 每秒上报 + 600ms 上报延迟）", () =>
+        {
+            // 这是"歌词慢半句"的根因复现：SMTC 的 Position 是 LastUpdatedTime 那一刻的快照，
+            // 我们读到它时已经过去了几百毫秒。补偿前稳态落后 ≈ 上报延迟 + 上报周期。
+            // 现在按 reportAge 补偿 + 播放中只增不减，逐 90ms 推进的误差应当远小于 300ms。
+            const double reportLagSeconds = 0.6;
+            var freq = System.Diagnostics.Stopwatch.Frequency;
+            var clock = new PlaybackClock();
+            var maxError = 0.0;
+            var steadyError = 0.0;
+
+            // 从第 1 秒开始（第 0 秒时"上报值 = -0.6"会被夹到 0，属于模型边界，不是代码问题）
+            for (var ms = 1000; ms <= 21000; ms += 90)
+            {
+                var truePosition = ms / 1000.0;
+
+                // 上一次上报发生在"整秒"处，上报的也是那一刻的真实位置
+                var lastReportAt = Math.Floor(ms / 1000.0);
+                var reported = lastReportAt - reportLagSeconds;
+
+                // 上报年龄本身也带误差（LastUpdatedTime 与本地时钟总有几十上百毫秒偏差），
+                // 用确定性正弦抖动模拟，保证自检可复现
+                var ageJitter = 0.12 * Math.Sin(ms / 700.0);
+
+                var position = clock.Update(
+                    reported,
+                    playing: true,
+                    nowTicks: (long)(ms / 1000.0 * freq),
+                    reportAgeSeconds: reportLagSeconds + ageJitter);
+
+                var error = Math.Abs(position - truePosition);
+                maxError = Math.Max(maxError, error);
+
+                if (ms > 6000)
+                {
+                    steadyError = Math.Max(steadyError, error);
+                }
+            }
+
+            LogService.Shared.Write(
+                steadyError <= 0.30 ? LogLevel.Info : LogLevel.Error,
+                "SelfTest",
+                "歌词时间轴误差",
+                $"稳态最大 {steadyError * 1000:F0}ms / 全程最大 {maxError * 1000:F0}ms");
+
+            // 稳态（跳过起步的 6 秒）误差才是用户能感知的部分
+            return steadyError <= 0.30 && maxError <= 0.35;
+        });
+
+        Check("v0.2.9 需求6：岛长度/左右分配滑块（默认值 / 越界收敛 / 旧配置 0 回落）", () =>
+        {
+            var defaults = new AppConfig();
+            var okDefaults = defaults.IslandWidthPercent == 100 && defaults.IslandSplitRatio == 50;
+
+            var high = new AppConfig { IslandWidthPercent = 999, IslandSplitRatio = 999 };
+            high.Normalize();
+            var okHigh = high.IslandWidthPercent == AppConfig.MaxIslandWidthPercent
+                         && high.IslandSplitRatio == AppConfig.MaxIslandSplitRatio;
+
+            var low = new AppConfig { IslandWidthPercent = 1, IslandSplitRatio = 1 };
+            low.Normalize();
+            var okLow = low.IslandWidthPercent == AppConfig.MinIslandWidthPercent
+                        && low.IslandSplitRatio == AppConfig.MinIslandSplitRatio;
+
+            // 旧版 config.json 没有这两个字段 → 反序列化成 0 → 必须回落默认而不是缩到最小
+            var legacy = new AppConfig { IslandWidthPercent = 0, IslandSplitRatio = 0 };
+            legacy.Normalize();
+            var okLegacy = legacy.IslandWidthPercent == 100 && legacy.IslandSplitRatio == 50;
+
+            return okDefaults && okHigh && okLow && okLegacy;
+        });
+
+        Check("v0.2.9 需求6：毛玻璃配色跟随系统（ThemeMode/TextTone 不再影响调色板）", () =>
+        {
+            var a = ThemePalette.Create(new AppConfig { ThemeMode = "SolidDark", TextTone = "White" }, 0.2);
+            var b = ThemePalette.Create(new AppConfig { ThemeMode = "GlassLight", TextTone = "Black" }, 0.2);
+
+            var ignored = a.TextPrimary == b.TextPrimary && a.NominalBackground == b.NominalBackground;
+
+            // 背景亮暗都要自己把文字对比度拉回 WCAG 4.5 以上，不需要用户手调
+            var onDark = ThemePalette.Create(new AppConfig(), 0.12);
+            var onLight = ThemePalette.Create(new AppConfig(), 0.88);
+            var readable = ThemePalette.ContrastRatio(onDark.TextPrimary, onDark.NominalBackground) >= 4.5
+                           && ThemePalette.ContrastRatio(onLight.TextPrimary, onLight.NominalBackground) >= 4.5;
+
+            return ignored && readable;
+        });
+
+        Check("v0.2.9 需求7：系统能力探测（不抛异常 / Win11 判定与 Build 对齐 / 数值合理）", () =>
+        {
+            var caps = SystemCapabilities.Refresh();
+
+            var ok = caps.Build >= 7600
+                     && caps.DpiForSystem >= 96
+                     && caps.UiScale >= ScreenMetrics.MinUiScale
+                     && caps.UiScale <= ScreenMetrics.MaxUiScale
+                     && caps.WorkArea.Width > 100
+                     && caps.WorkArea.Height > 100
+                     && caps.IsWindows11 == (caps.Build >= 22000)
+                     && caps.ToReport().Contains("毛玻璃实现");
+
+            LogService.Shared.Write(ok ? LogLevel.Info : LogLevel.Error, "SelfTest", "系统能力 " + caps.ToLogLine());
+            return ok;
         });
 
         Check("v0.2.7 需求2：收纳配置默认 3 秒 / 区间收敛 / 音乐例外默认开", () =>

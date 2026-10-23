@@ -324,6 +324,9 @@ public partial class NotificationWindow : Window
 
     private void OnCardMouseEnter(object sender, MouseEventArgs e)
     {
+        // v0.2.10 需求 3：悬停只做"整卡轻微放大"，不再叠加任何黑色遮罩/变色。
+        AnimateHoverScale(1.02, spring: true);
+
         if (!_timer.IsEnabled)
         {
             return;
@@ -336,6 +339,8 @@ public partial class NotificationWindow : Window
 
     private void OnCardMouseLeave(object sender, MouseEventArgs e)
     {
+        AnimateHoverScale(1.0, spring: false);
+
         // 拖动中鼠标会“离开”卡片（窗口跟着手走，但离开事件仍会触发），此时不能恢复计时
         if (_closing || _pressed)
         {
@@ -343,6 +348,20 @@ public partial class NotificationWindow : Window
         }
 
         StartCountdown(_remainingMs);
+    }
+
+    /// <summary>整卡悬停缩放：进入用回弹（柔和弹性）、离开平稳收，幅度 2%。</summary>
+    private void AnimateHoverScale(double target, bool spring)
+    {
+        var duration = TimeSpan.FromMilliseconds(spring ? 200 : 160);
+        var ease = spring
+            ? new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.3 }
+            : (IEasingFunction)new CubicEase { EasingMode = EasingMode.EaseOut };
+
+        CardHoverScale.BeginAnimation(
+            ScaleTransform.ScaleXProperty, new DoubleAnimation(target, duration) { EasingFunction = ease });
+        CardHoverScale.BeginAnimation(
+            ScaleTransform.ScaleYProperty, new DoubleAnimation(target, duration) { EasingFunction = ease });
     }
 
     /// <summary>左键抬起：区分「滑动取消」与「点击」。</summary>

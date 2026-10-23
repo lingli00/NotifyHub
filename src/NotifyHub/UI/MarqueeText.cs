@@ -257,6 +257,31 @@ public sealed class MarqueeText : Control
         dc.DrawText(formatted, new Point(_offset + _textWidth + TextGap, y));
     }
 
+    /// <summary>
+    /// 重新起跑：清掉滚动状态，让下一次渲染重新判定"要不要滚"（v0.2.10 需求 4）。
+    ///
+    /// 为什么需要：岛收起成窄条时窗口是 Hide 的，这期间文本会被更新（歌词照样按进度换行），
+    /// 但 <see cref="OnRender"/> 不跑 → `_scrolling` 停留在收起前的状态、`_offset` 也停在半路。
+    /// 岛重新展开时，如果新一句本来不需要滚（变短了）却还留着 `_scrolling=true`，
+    /// 或者需要滚却因为 `_offset` 越界画到视口外，看起来就是"歌词不动 / 位置不对"。
+    /// 展开时统一重启一次，两个症状一起消掉。
+    /// </summary>
+    /// <summary>是否正在逐帧推进（= "确实在滚"，与按宽度判断的 <see cref="IsScrolling"/> 不同）。</summary>
+    public bool IsScrollRunning => _scrolling;
+
+    /// <summary>当前滚动偏移（诊断/自检用；0 = 停在起点）。</summary>
+    public double ScrollOffset => _offset;
+
+    public void RestartScroll()
+    {
+        _scrolling = false;
+        _offset = 0;
+        _lastTick = DateTime.MinValue;
+        FrameClock.Reset(ref _lastFrameTime);
+        InvalidateMeasure();
+        InvalidateVisual();
+    }
+
     /// <summary>整块矩形可命中：鼠标进入/离开才能驱动悬停暂停。</summary>
     protected override HitTestResult HitTestCore(PointHitTestParameters hitTestParameters)
         => new PointHitTestResult(this, hitTestParameters.HitPoint);

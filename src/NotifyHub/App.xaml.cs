@@ -82,6 +82,7 @@ public partial class App : Application
                 ConsoleBridge.WriteLine("  NotifyHub.exe --env-report  打印系统版本/DPI/缩放/刷新率/能力探测（兼容性核对）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --fps-test    实测 5 秒渲染帧率与卡顿（高刷屏验证）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --notice-shot 离屏渲染岛内通知三种来源配色（验收用）");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --snapshot    导出一条 Bug 快照（截图+前后10秒核心日志）并打开查看页");
                 Shutdown();
                 return;
 
@@ -291,7 +292,11 @@ public partial class App : Application
                         captureTimer.Stop();
                         CaptureWindow(settings, "settings-capture.png", log);
 
-                        // 整页内容（ScrollViewer 会被视口裁剪，直接 Render 内容面板拿到完整排版）
+                        // 整页内容（ScrollViewer 会被视口裁剪，直接 Render 内容面板拿到完整排版）。
+                        // 先把滚动位置归零：内容面板的 Render 会带上父级 ScrollViewer 的偏移，
+                        // 偏移不为 0 时截出来的图顶部/底部就是"半截被裁"的假象。
+                        settings.MainScroll.ScrollToHome();
+                        settings.UpdateLayout();
                         CaptureVisual(settings.SettingsContent, "settings-full.png", log);
 
                         settings.Tabs.SelectedIndex = 1;
@@ -417,6 +422,37 @@ public partial class App : Application
                     noticeJobs[0].Run();
                     noticeIndex = 1;
                     noticeStep.Start();
+                    return;
+                }
+
+            case AppMode.Snapshot:
+                {
+                    // --snapshot：导出一条 Bug 快照 → 打开查看页 → 把查看页截成 PNG（需求 6 验收）
+                    var configService = new ConfigService(log);
+                    configService.Load();
+
+                    BugSnapshotService.Current = () => configService.Current;
+
+                    var info = BugSnapshotService.Capture("命令行 --snapshot 验收", () => null);
+                    ConsoleBridge.TryAttach();
+                    ConsoleBridge.WriteLine($"SNAPSHOT {info.Directory}");
+                    log.Info("Snapshot", "命令行快照", info.Directory);
+
+                    var viewer = new SnapshotWindow(info.Id) { Width = 1180, Height = 720 };
+                    viewer.Left = 80;
+                    viewer.Top = 60;
+                    viewer.Show();
+                    viewer.UpdateLayout();
+
+                    var viewerTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+                    viewerTimer.Tick += (_, _) =>
+                    {
+                        viewerTimer.Stop();
+                        CaptureWindow(viewer, "snapshot-view.png", log);
+                        viewer.Close();
+                        Shutdown();
+                    };
+                    viewerTimer.Start();
                     return;
                 }
 
@@ -795,6 +831,11 @@ public partial class App : Application
         // 灵动岛总控：WorkBuddy 任务状态 + 音乐监控（SMTC）+ 全屏自动隐藏 + 位置持久化
         _islandController = new IslandController(log, _configService, Dispatcher, _sound);
         _islandController.Start();
+
+        // v0.2.10 需求 6：Bug 快照要读"当前配置"和"当前岛矩形"，这里把入口挂上。
+        // 只是两个委托，不启动任何后台任务——只在用户点「导出 Bug 快照」时才会被调用。
+        BugSnapshotService.Current = () => _configService.Current;
+        BugSnapshotService.IslandRectProvider = () => _islandController?.IslandBounds;
 
         // 灵动岛转发通道：常驻期间监听 --island 命令
         IslandIpc.StartServer(Dispatcher, log);

@@ -975,6 +975,45 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>
+    /// 导出 Bug 快照（v0.2.10 需求 6）：截整屏 + 抓前后各 10 秒五个核心模块日志 + 当前配置，
+    /// 落到 `snapshots\&lt;时间&gt;\`，然后直接打开查看页（左边截图、右边日志对照）。
+    ///
+    /// 只在这里调用一次 <see cref="BugSnapshotService.Capture"/>：不常驻、不轮询，
+    /// 后段 10 秒的补录是那次调用里起的一次性任务，跑完就结束。
+    /// </summary>
+    private void OnExportSnapshotClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var info = BugSnapshotService.Capture($"由设置页导出（{DateTime.Now:HH:mm:ss}）");
+
+            SnapshotStatus.Text = info.LineCount > 0
+                ? $"已导出：{info.Id}（前段 {info.LineCount} 行，后段 10 秒补录中）"
+                : $"已导出：{info.Id}（该时段没有核心模块日志）";
+
+            new SnapshotWindow(info.Id) { Owner = this }.Show();
+        }
+        catch (Exception ex)
+        {
+            SnapshotStatus.Text = "导出失败：" + ex.Message;
+            LogService.Shared.Error("Snapshot", "导出 Bug 快照失败", ex.ToString());
+        }
+    }
+
+    /// <summary>打开快照查看页（默认最新一条）。</summary>
+    private void OnOpenSnapshotClick(object sender, RoutedEventArgs e)
+    {
+        var latest = BugSnapshotService.List().FirstOrDefault();
+        if (latest is null)
+        {
+            SnapshotStatus.Text = "还没有快照，先点「导出 Bug 快照」。";
+            return;
+        }
+
+        new SnapshotWindow(latest.Id) { Owner = this }.Show();
+    }
+
     /// <summary>一键清除全部日志（二次确认，只清日志，不删配置与去重记录）。</summary>
     private void OnClearLogsClick(object sender, RoutedEventArgs e)
     {

@@ -26,8 +26,13 @@
             Cursor="Hand" MouseLeftButtonUp="OnCardLeftUp" MouseRightButtonUp="OnCardRightClick"
             MouseLeftButtonDown="OnCardMouseDown" MouseMove="OnCardMouseMove">
         <Border.RenderTransform>
-            <TranslateTransform x:Name="CardTransform" X="40" />
+            <!--  v0.2.10 需求 3：悬停整卡轻微放大（2%），不加遮罩、不变色  -->
+            <TransformGroup>
+                <ScaleTransform x:Name="CardHoverScale" ScaleX="1" ScaleY="1" />
+                <TranslateTransform x:Name="CardTransform" X="40" />
+            </TransformGroup>
         </Border.RenderTransform>
+        <Border.RenderTransformOrigin>0.5,0.5</Border.RenderTransformOrigin>
 
         <Border.Background>
             <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">

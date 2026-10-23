@@ -47,9 +47,16 @@
             <Setter Property="Foreground" Value="{DynamicResource AppFg}" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
+        <!--
+          v0.2.10 需求 5：提示文案默认换行。
+          以前这些长句没有 TextWrapping，而外层 ScrollViewer 又禁用了横向滚动 →
+          超出宽度的部分被直接裁掉（"拦截关键词"那段说明、ntfy 地址说明都是这样被截断的）。
+          现在三重保证：文案自己换行 + 容器用 WrapPanel + 外层允许横向滚动。
+        -->
         <Style x:Key="HintText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="Foreground" Value="{DynamicResource AppSubFg}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
 
         <!--  自绘标题栏按钮（最小化 / 关闭）：无边框方形，悬停微亮  -->
@@ -173,6 +180,11 @@
 
             <!--  ================= 设置  =================  -->
             <TabItem Header="设置">
+                <!--
+                      横向保持 Disabled（内容被约束到视口宽度），这样文字才真的换行；
+                      想靠横向滚动"藏起来"会让 Wrap 失效、所有提示变成一条超长横线。
+                      不裁字靠的是：HintText 默认 Wrap + 控件行改用 WrapPanel。
+                    -->
                 <ScrollViewer x:Name="MainScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel x:Name="SettingsContent" Margin="0,8,0,0">
 
@@ -191,7 +203,7 @@
                                 <!--  订阅列表（代码动态生成行）  -->
                                 <StackPanel Grid.Row="1" x:Name="NtfyListPanel" />
 
-                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="NtfyEnabledCheck" Content="启用 ntfy 订阅" MinWidth="118"
                                               VerticalAlignment="Center" />
                                     <Button x:Name="NtfyAddButton" Content="+ 添加订阅" MinWidth="96" Padding="10,3"
@@ -199,7 +211,7 @@
                                     <TextBlock Style="{StaticResource HintText}" Margin="12,0,0,0"
                                                VerticalAlignment="Center"
                                                Text="名称会显示在通知卡顶部（如“ntfy · 家庭”），留空只显示 ntfy" />
-                                </StackPanel>
+                                </WrapPanel>
                             </Grid>
                         </GroupBox>
 
@@ -263,7 +275,7 @@
                                     </Grid.ColumnDefinitions>
 
                                     <TextBlock Grid.Column="0" Text="通知位置" Margin="0,0,10,0" />
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                    <WrapPanel Grid.Column="1" Orientation="Horizontal">
                                         <ComboBox x:Name="CornerCombo" Width="120" Height="26" FontSize="12.5" SelectedIndex="0">
                                             <ComboBoxItem Content="右上角" />
                                             <ComboBoxItem Content="左上角" />
@@ -272,15 +284,15 @@
                                         </ComboBox>
                                         <TextBlock Style="{StaticResource HintText}" Margin="12,0,0,0"
                                                    Text="轮询间隔 300~2000ms，默认 300ms；通知时长 1000~30000ms" />
-                                    </StackPanel>
+                                    </WrapPanel>
                                 </Grid>
 
-                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="AutoStartCheck" Content="开机自启" />
                                     <CheckBox x:Name="DumpOnStartCheck" Content="启动时导出 UIA 树（探测模式）" />
                                     <TextBlock Style="{StaticResource HintText}"
                                                Text="堆叠上限固定 5 条；鼠标悬停暂停倒计时；点击通知跳转聊天" />
-                                </StackPanel>
+                                </WrapPanel>
                             </Grid>
                         </GroupBox>
 
@@ -312,17 +324,17 @@
                                     </StackPanel>
                                 </Grid>
 
-                                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                                <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="MusicEnabledCheck" Content="音乐控制模块" MinWidth="196" />
                                     <TextBlock Style="{StaticResource HintText}"
                                                Text="播放内置支持的音乐 App（网易云/QQ音乐/Spotify 等）时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏" />
-                                </StackPanel>
+                                </WrapPanel>
 
-                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="WbWatchCheck" Content="自动读取 WorkBuddy 任务进度" MinWidth="196" />
                                     <TextBlock Style="{StaticResource HintText}"
                                                Text="AI 的反馈文字实时上岛，回合结束报完成态并响完成音" />
-                                </StackPanel>
+                                </WrapPanel>
 
                                 <Grid Grid.Row="3" Margin="24,8,0,0">
                                     <Grid.ColumnDefinitions>
@@ -374,7 +386,7 @@
 
                                 <!--  滑块 1：岛总长度  -->
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="总长度" Margin="0,0,10,0" />
-                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
+                                <WrapPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
                                     <Slider x:Name="IslandWidthSlider" Width="220" Height="24"
                                             Minimum="60" Maximum="160" IsSnapToTickEnabled="True"
                                             TickFrequency="5" VerticalAlignment="Center"
@@ -383,11 +395,11 @@
                                                Foreground="{DynamicResource AppSubFg}" Text="100%" />
                                     <TextBlock Style="{StaticResource HintText}"
                                                Text="只调上限，内容短时岛仍会自动收窄" />
-                                </StackPanel>
+                                </WrapPanel>
 
                                 <!--  滑块 2：左右区域分配比例  -->
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="区域比例" Margin="0,10,10,0" />
-                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                                <WrapPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
                                     <TextBlock Text="播放器" Style="{StaticResource HintText}" />
                                     <Slider x:Name="IslandSplitSlider" Width="180" Height="24" Margin="8,0"
                                             Minimum="25" Maximum="75" IsSnapToTickEnabled="True"
@@ -396,10 +408,10 @@
                                     <TextBlock Text="任务/通知" Style="{StaticResource HintText}" />
                                     <TextBlock x:Name="IslandSplitText" Width="76" Margin="10,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="50 : 50" />
-                                </StackPanel>
+                                </WrapPanel>
 
                                 <!--  歌词总开关 + 字号（与"音乐播放时保持展开"互相独立）  -->
-                                <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                                <WrapPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
                                             Orientation="Horizontal" Margin="0,12,0,0">
                                     <CheckBox x:Name="LyricsEnabledCheck" Content="显示歌词" MinWidth="92" />
                                     <TextBlock Text="歌词字号" Margin="0,0,8,0" />
@@ -408,7 +420,7 @@
                                     <TextBlock x:Name="LyricsFontSizeText" Width="48" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="13" />
                                     <TextBlock Style="{StaticResource HintText}" Text="关掉后即使保持展开也不显示歌词（与上面的保持展开互相独立）" />
-                                </StackPanel>
+                                </WrapPanel>
 
                                 <!--  外观说明：主题固定为毛玻璃，跟随系统深浅，文字自动保证对比度  -->
                                 <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
@@ -431,7 +443,7 @@
                                 </Grid.ColumnDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="浏览器" Margin="0,0,10,0" />
-                                <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
+                                <WrapPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
                                     <ComboBox x:Name="BrowserChoiceCombo" Width="150" Height="26" FontSize="12.5"
                                               SelectedIndex="0">
                                         <ComboBoxItem Content="系统默认浏览器" Tag="System" />
@@ -444,7 +456,7 @@
                                                Margin="12,0,0,0" VerticalAlignment="Center"
                                                TextTrimming="CharacterEllipsis"
                                                Text="点击 ntfy 通知时用系统默认浏览器打开主题网页" />
-                                </StackPanel>
+                                </WrapPanel>
 
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="浏览器路径" Margin="0,8,10,0"
                                            x:Name="BrowserPathLabel" />
@@ -508,11 +520,11 @@
                                             Margin="10,0,0,0" FontSize="11.5" Click="OnTaskSoundTestClick" />
                                 </StackPanel>
 
-                                <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="SuppressAppSoundsCheck" Content="自动静音微信/QQ 自带提示音" />
                                     <TextBlock Style="{StaticResource HintText}"
                                                Text="勾选后：本应用消息提示音开启时，自动静音微信与 QQ 自己的提示音，只保留本应用的音效（关闭恢复）" />
-                                </StackPanel>
+                                </WrapPanel>
 
                                 <TextBlock Grid.Row="3" Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap"
                                            Text="仅放行的聊天消息播放提示音，被过滤的消息不发声；任务完成提示音在 WorkBuddy 完成态出现时播放，与消息提示音互相独立。" />
@@ -541,6 +553,31 @@
                                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
                                            Margin="0,6,0,0" TextWrapping="Wrap"
                                            Text="类型判定只看真实信号：免打扰标记、微信内置系统会话（服务号/服务通知/微信团队/公众号等整名匹配）、公众号文章链接、以及“无发言人结构的群发推送”；不按群名/好友名的文字猜测，群名叫“阿里云”也不会被误杀。拦截关键词是你自己的追加黑名单（逗号分隔），命中会话名或摘要即拦截。QQ 不过滤。" />
+                            </Grid>
+                        </GroupBox>
+
+                        <!--  诊断与反馈（v0.2.10 需求 6）：手动导出 Bug 快照  -->
+                        <GroupBox Header="诊断与反馈">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <WrapPanel Grid.Row="0">
+                                    <Button x:Name="ExportSnapshotButton" Content="导出 Bug 快照"
+                                            Padding="14,6" Click="OnExportSnapshotClick"
+                                            ToolTip="截一张整屏图，并收集前后各 10 秒的核心模块日志与当前配置" />
+                                    <Button x:Name="OpenSnapshotButton" Content="查看快照"
+                                            Padding="14,6" Click="OnOpenSnapshotClick" />
+                                    <TextBlock x:Name="SnapshotStatus" Style="{StaticResource HintText}"
+                                               Margin="10,0,0,0" VerticalAlignment="Center"
+                                               Text="仅在点击时采集，平时不占 CPU / 内存" />
+                                </WrapPanel>
+
+                                <TextBlock Grid.Row="1" Style="{StaticResource HintText}" Margin="0,6,0,0"
+                                           TextWrapping="Wrap"
+                                           Text="快照包含：整屏截图 + 点击前后各 10 秒的五个核心模块日志（歌词 / 灵动岛布局 / 通知渲染 / 设置UI / 交互控制）+ 当前整套配置。产出一个独立目录，查看页左边截图、右边对应时段日志，可直接打包发给开发者。" />
                             </Grid>
                         </GroupBox>
                     </StackPanel>
@@ -608,7 +645,7 @@
 
                     <ListView Grid.Row="3" x:Name="EventList" BorderThickness="1" BorderBrush="{DynamicResource AppBorder}"
                               Background="{DynamicResource AppInput}" FontSize="12"
-                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                              ScrollViewer.HorizontalScrollBarVisibility="Auto">
                         <ListView.View>
                             <GridView>
                                 <GridViewColumn Header="时间" Width="74" DisplayMemberBinding="{Binding TimeText}" />

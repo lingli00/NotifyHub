@@ -194,6 +194,18 @@ public sealed class LogService
         }
     }
 
+    /// <summary>当前正在写的日志文件（v0.2.10 需求 6：Bug 快照要按时间窗回读它）。</summary>
+    public string CurrentLogFile
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _logFile;
+            }
+        }
+    }
+
     /// <summary>控制台日志快照（最新在末尾）。</summary>
     public IReadOnlyList<ConsoleLine> ConsoleSnapshot()
     {

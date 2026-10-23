@@ -164,7 +164,8 @@ public sealed class StripIndicator : FrameworkElement
         _lastSeconds = now;
 
         // 完成态是静止画面，不需要逐帧重绘
-        if (_done || _mode == StripMode.None)
+        // 待命态通常不动（省 CPU），但悬停分区时要给"活的"反馈，所以放行
+        if (_done || (_mode == StripMode.None && _hoverZone == StripZone.None))
         {
             return;
         }
@@ -185,6 +186,29 @@ public sealed class StripIndicator : FrameworkElement
 
     /// <summary>动画相位（秒，诊断/自检用：连续两次采样应该变大说明在动）。</summary>
     public double Phase => _phase;
+
+    private StripZone _hoverZone = StripZone.None;
+
+    /// <summary>
+    /// 悬停分区（v0.2.10 需求 2）：左段 = 音乐播放器、右段 = WorkBuddy。
+    /// 悬停时**指示器配色跟着换**，让用户在点之前就知道这一半是干什么的：
+    ///   左 → 音乐黄；右 → 任务琥珀。离开后回到按内容推导的配色。
+    /// </summary>
+    public StripZone HoverZone
+    {
+        get => _hoverZone;
+        set
+        {
+            if (_hoverZone == value)
+            {
+                return;
+            }
+
+            _hoverZone = value;
+            InvalidateVisual();
+        }
+    }
+
 
     /// <summary>
     /// 撑满父级给的空间。
@@ -227,6 +251,20 @@ public sealed class StripIndicator : FrameworkElement
             var doneWidth = Math.Min(trackWidth, 26);
             DrawSegment(dc, trackLeft + ((trackWidth - doneWidth) / 2), segY,
                 doneWidth, segH, DoneColor, 0.95);
+            return;
+        }
+
+        // 悬停分区配色优先于内容配色（需求 2）：让"这一半是音乐 / 那一半是 WorkBuddy"可预判。
+        // 左段用音乐黄来回摆（像电平），右段用琥珀单向巡游（像任务进度），配色与动感一起换。
+        if (_hoverZone == StripZone.Left)
+        {
+            DrawOscillating(dc, trackLeft, trackWidth, segY, segH, MusicColor, speed: 0.72);
+            return;
+        }
+
+        if (_hoverZone == StripZone.Right)
+        {
+            DrawComet(dc, trackLeft, trackWidth, segY, segH, TaskColor, speed: 0.6);
             return;
         }
 

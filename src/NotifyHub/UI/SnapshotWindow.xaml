@@ -1,0 +1,129 @@
+<Window x:Class="NotifyHub.UI.SnapshotWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NotifyHub · Bug 快照" Height="720" Width="1180"
+        MinHeight="520" MinWidth="900"
+        WindowStartupLocation="CenterScreen"
+        Background="#F7F7F9" FontFamily="Microsoft YaHei UI, Segoe UI"
+        TextOptions.TextRenderingMode="ClearType">
+
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Foreground" Value="#1F2328" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Foreground" Value="#6B7280" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="12,5" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="MinWidth" Value="0" />
+        </Style>
+        <Style x:Key="Chip" TargetType="ToggleButton">
+            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="MinWidth" Value="0" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!--  标题行  -->
+        <WrapPanel Grid.Row="0" Margin="0,0,0,8">
+            <TextBlock Text="Bug 快照" FontSize="16" FontWeight="SemiBold" Margin="0,0,14,0" />
+            <TextBlock Text="快照" Margin="0,0,6,0" />
+            <ComboBox x:Name="SnapshotCombo" Width="240" Height="26" FontSize="12"
+                      SelectionChanged="OnSnapshotSelected" />
+            <TextBlock x:Name="StatusText" Style="{StaticResource Hint}" Margin="12,0,0,0"
+                       Text="左侧截图 / 右侧同一时段核心模块日志" />
+            <TextBlock x:Name="CountText" Style="{StaticResource Hint}" Margin="12,0,0,0" />
+        </WrapPanel>
+
+        <!--  模块筛选  -->
+        <WrapPanel Grid.Row="1" x:Name="ModulePanel" Margin="0,0,0,8" />
+
+        <!--  左：截图      右：日志  -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="1.05*" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="1*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" Background="White" CornerRadius="8" BorderBrush="#E3E5E9"
+                    BorderThickness="1" Padding="6">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                              Background="#F2F3F5">
+                    <!--  按面板宽度等比缩放：诊断看的是"当时屏幕上是什么样"，不是像素级比对  -->
+                    <Image x:Name="ShotImage" Stretch="Uniform" StretchDirection="DownOnly"
+                           HorizontalAlignment="Stretch" VerticalAlignment="Top"
+                           SnapsToDevicePixels="True" />
+                </ScrollViewer>
+            </Border>
+
+            <Border Grid.Column="2" Background="White" CornerRadius="8" BorderBrush="#E3E5E9"
+                    BorderThickness="1">
+                <ListBox x:Name="LogList" BorderThickness="0" Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="6,2" />
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding Time, StringFormat=HH:mm:ss.fff}" FontFamily="Consolas"
+                                           FontSize="11" Foreground="#8A8F98" Margin="0,0,8,0" />
+                                <Border Grid.Column="1" CornerRadius="4" Background="#EEF1F5"
+                                        Padding="5,1" Margin="0,0,8,0">
+                                    <TextBlock Text="{Binding Module}" FontSize="10.5" Foreground="#4B5563" />
+                                </Border>
+                                <TextBlock Grid.Column="2" Text="{Binding Text}" FontFamily="Consolas"
+                                           FontSize="11.5" TextWrapping="Wrap" Foreground="#1F2328" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Border>
+        </Grid>
+
+        <!--  底部：路径 + 操作  -->
+        <Grid Grid.Row="3" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <TextBlock x:Name="PathText" Grid.Column="0" Style="{StaticResource Hint}"
+                       TextTrimming="CharacterEllipsis" />
+
+            <WrapPanel Grid.Column="1">
+                <Button Content="打开文件夹" Click="OnOpenFolderClick" />
+                <Button Content="复制路径" Click="OnCopyPathClick" />
+                <Button Content="刷新" Click="OnRefreshClick" />
+                <Button Content="关闭" Click="OnCloseClick" />
+            </WrapPanel>
+        </Grid>
+    </Grid>
+</Window>

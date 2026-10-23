@@ -54,7 +54,13 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <!--  岛内信息行按钮（通知行）：整行可点、透明底、悬停微亮，命中判定走 Button  -->
+        <!--
+          岛内信息行按钮（通知行）：整行可点、透明底，命中判定走 Button。
+
+          v0.2.10 需求 3：**去掉悬停/按下的底色**。
+          浅色毛玻璃下 IslandHover 是「黑 12%」，铺在整行上就是一条明显的黑色遮罩，
+          鼠标一过整条消息像被"选中"了一样。现在悬停反馈统一交给整岛轻微放大（见 OnPillMouseEnter）。
+        -->
         <Style x:Key="IslandRowButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
@@ -70,14 +76,6 @@
                             <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
                                               VerticalAlignment="Center" />
                         </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="RowBd" Property="Background" Value="{DynamicResource IslandHover}" />
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="RowBd" Property="Background" Value="{DynamicResource IslandPress}" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -110,8 +108,13 @@
             </LinearGradientBrush>
         </Border.Background>
         <Border.RenderTransform>
-            <TranslateTransform x:Name="IslandShift" Y="-10" />
+            <!--  v0.2.10 需求 3：悬停整岛轻微放大（≈2.5%，回弹缓动），不加遮罩、不变色  -->
+            <TransformGroup>
+                <ScaleTransform x:Name="PillHoverScale" ScaleX="1" ScaleY="1" />
+                <TranslateTransform x:Name="IslandShift" Y="-10" />
+            </TransformGroup>
         </Border.RenderTransform>
+        <Border.RenderTransformOrigin>0.5,0.5</Border.RenderTransformOrigin>
 
         <Grid>
             <!--  毛玻璃顶部高光：一条极淡的白色渐变，让半透明面板有"玻璃"的层次  -->

@@ -9,23 +9,35 @@ using NotifyHub.Services;
 
 namespace NotifyHub.UI;
 
+/// <summary>细条的左/右分区（v0.2.10 需求 2）：左 = 音乐播放器，右 = WorkBuddy。</summary>
+public enum StripZone
+{
+    None,
+    Left,
+    Right,
+}
+
 /// <summary>
-/// 吸附态的「细条」（v0.2.8 需求 4 改造）：灵动岛收纳后只留一条窄条，
-/// 鼠标移入或点击立即展开完整岛。
+/// 待机窄条（v0.2.10 需求 2 重做）。
 ///
-/// 和旧版的差别：中间的静态小圆点换成了 <see cref="StripIndicator"/>（跑道指示器），
-/// 能区分「仅音乐 / 仅任务 / 音乐+任务」三种状态；整条保留原有的呼吸效果
-/// （整体透明度 1 ↔ 0.55 循环），不再是一个不动的点。
+/// 交互规则（这次按需求逐条对齐）：
+///   · 悬停：整条**轻微放大**（1.06 倍 + 回弹），不展开、不变色遮罩；
+///   · 按「左右分配比例」把窄条分成两段：左段 = 音乐播放器，右段 = WorkBuddy；
+///   · 悬停左段 → 指示器换成音乐配色；悬停右段 → 换成 WorkBuddy 琥珀；
+///   · 双击左段 → 打开音乐播放器；双击右段 → 打开 WorkBuddy。
 ///
-/// 窗口仍比可视条大一圈（左右各 8px 命中余量），"容易点到"靠它 + 128ms 快速淡入。
+/// 注意：这里**不再"鼠标移入就展开岛"**。上一版这么做，而窄条正好常驻在屏幕顶部中央
+/// （指针常年停在那），于是展开 → 超时收起 → 又落回指针下，每 N 秒自己开合一次；
+/// 而且没有内容时展开出来的是个空壳（宽度塌缩 + 圆角 → 屏幕上出现一个竖立白色椭圆）。
+/// 现在只有"确实有内容"时岛才会自己展开，窄条只负责这两件事：悬停反馈 + 双击开应用。
 /// </summary>
 public sealed class SnapStripWindow : Window
 {
-    /// <summary>鼠标移入细条（展开完整岛）。</summary>
-    public event EventHandler? ExpandRequested;
+    /// <summary>双击某一段（左=音乐 / 右=WorkBuddy）。</summary>
+    public event EventHandler<StripZone>? ZoneDoubleClicked;
 
-    /// <summary>悬停展开是否已就绪（细条现身时指针已压在上面 → 先不响应悬停）。</summary>
-    private bool _hoverArmed = true;
+    /// <summary>左右分段比例（百分比，来自设置里的"区域比例"滑块；50 = 对半）。</summary>
+    public Func<int>? SplitRatioProvider { get; set; }
 
     /// <summary>可视条厚度（DIP）。</summary>
     public const double BarThickness = 12;
@@ -36,8 +48,12 @@ public sealed class SnapStripWindow : Window
     /// <summary>窗口四边命中余量（DIP）。</summary>
     private const double HitPadding = 8;
 
+    /// <summary>悬停放大倍数（需求要求"轻微放大"，1.01~1.03 太弱、>1.1 会顶出窗口）。</summary>
+    private const double HoverScale = 1.06;
+
     private readonly Border _bar;
     private readonly StripIndicator _indicator;
+    private readonly ScaleTransform _hoverScale = new(1, 1);
 
     public SnapStripWindow()
     {
@@ -75,45 +91,90 @@ public sealed class SnapStripWindow : Window
                 },
             },
             Child = _indicator,
+            RenderTransform = _hoverScale,
+            RenderTransformOrigin = new Point(0.5, 0.5),
         };
 
         Content = _bar;
         Opacity = 0;
         Cursor = Cursors.Hand;
 
-        MouseEnter += (_, _) =>
+        MouseEnter += (_, _) => ApplyHover(true);
+        MouseLeave += (_, _) => ApplyHover(false);
+        MouseMove += (_, e) => UpdateHoverZone(e.GetPosition(this).X);
+
+        // 双击分区打开对应应用（单击不再承担"展开"职责，否则双击会被第一下打断）
+        MouseLeftButtonDown += (_, e) =>
         {
-            // 需求 2 的坑：细条常驻后，指针常常正好停在屏幕顶部中央（浏览器标签栏就在这里）。
-            // 细条一出现就落在指针底下 → 立刻 MouseEnter → 展开 → 10 秒后收起 → 又落回指针底下，
-            // 形成"每 10 秒自己开合一次"的死循环。所以细条现身时如果指针已经压在上面，
-            // 先把悬停展开"解除武装"，等指针离开过一次再恢复正常。
-            if (_hoverArmed)
+            if (e.ClickCount < 2)
             {
-                ExpandRequested?.Invoke(this, EventArgs.Empty);
+                return;
             }
+
+            var zone = ZoneAt(e.GetPosition(this).X);
+            if (zone == StripZone.None)
+            {
+                return;
+            }
+
+            e.Handled = true;
+            ZoneDoubleClicked?.Invoke(this, zone);
         };
-
-        MouseLeave += (_, _) => _hoverArmed = true;
-
-        // 点击永远有效（需求 2：需要时手动点开展开）
-        MouseLeftButtonUp += (_, _) => ExpandRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>指针是否已经压在细条窗口上（物理像素比较，避免 DPI 缩放误差）。</summary>
-    private bool IsCursorInside()
+    /// <summary>当前悬停分区（诊断用）。</summary>
+    public StripZone HoverZone { get; private set; } = StripZone.None;
+
+    /// <summary>把窗口内 x 换算成左/右分区。</summary>
+    public StripZone ZoneAt(double x) => ZoneAt(x, Width, SplitRatioProvider?.Invoke() ?? 50);
+
+    /// <summary>
+    /// 分区判定的纯函数版（自检直接断言，不需要窗口）：
+    /// 宽度 ≤1 视为无效；其余按比例切，x 落在切点左侧算左段。
+    /// </summary>
+    public static StripZone ZoneAt(double x, double width, int splitPercent)
     {
-        if (!NativeMethods.GetCursorPos(out var point))
+        if (width <= 1)
         {
-            return false;
+            return StripZone.None;
         }
 
-        var scale = ScreenMetrics.ScaleOf(this);
-        var left = Left * scale;
-        var top = Top * scale;
-        var right = left + (Width * scale);
-        var bottom = top + (Height * scale);
+        var ratio = Math.Clamp(splitPercent, 25, 75) / 100.0;
+        return x < width * ratio ? StripZone.Left : StripZone.Right;
+    }
 
-        return point.X >= left && point.X <= right && point.Y >= top && point.Y <= bottom;
+    /// <summary>悬停反馈：轻微放大 + 指示器换分区配色。</summary>
+    private void ApplyHover(bool hovering)
+    {
+        var target = hovering ? HoverScale : 1.0;
+        var scale = new DoubleAnimation(target, TimeSpan.FromMilliseconds(hovering ? 160 : 220))
+        {
+            // 放大用回弹（略冲过头再回来），收起用 ease-out：手感"柔软"而不是机械
+            EasingFunction = hovering
+                ? new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.28 }
+                : new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+
+        _hoverScale.BeginAnimation(ScaleTransform.ScaleXProperty, scale);
+        _hoverScale.BeginAnimation(ScaleTransform.ScaleYProperty, scale);
+
+        if (!hovering)
+        {
+            HoverZone = StripZone.None;
+            _indicator.HoverZone = StripZone.None;
+        }
+    }
+
+    private void UpdateHoverZone(double x)
+    {
+        var zone = ZoneAt(x);
+        if (zone == HoverZone)
+        {
+            return;
+        }
+
+        HoverZone = zone;
+        _indicator.HoverZone = zone;
     }
 
     /// <summary>当前指示器形态（诊断用）。</summary>
@@ -165,9 +226,6 @@ public sealed class SnapStripWindow : Window
             StartBreathing(doneState);
             return;
         }
-
-        // 指针本来就在这个位置 → 这次淡入不算"用户移入"，先不给展开
-        _hoverArmed = !IsCursorInside();
 
         Show();
         BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(128)));

@@ -1,6 +1,49 @@
 # 变更记录
 
+## v0.2.10 — 2026-10-23
+
+六件事：岛内容居中/比例布局、待机窄条交互重做（含"竖立白色椭圆"根治）、通知卡悬停改轻微放大、歌词在非常驻模式下的同步与滚动、设置页文字裁切、"导出 Bug 快照"。
+
+### 修复
+- **岛为空/新来通知时内容不在正中**（需求 1）：两个叠加的成因。
+  1) `ExpandFromStrip()` 用展开前的旧 `Left` 直接展开，且期间 `_hidden` 还是 true，`SizeChanged` 早退 → 窗口从旧位置往右（或左）长，宽度差多少就偏多少。现在展开前先落 `_hidden`、按实时宽度 `RecenterFixed()`，并新增 `ScheduleRecenter()`（`DispatcherPriority.Loaded`，布局落定后再纠一次偏，合并重复请求）。
+  2) `BalanceWidths()` 无论单内容还是双内容都套"区域比例"系数，比例 25% 时通知区上限被砍一半。现在抽出纯函数 `SplitFactors(splitPercent, bothSides)`：**只有音乐与右侧内容同时存在时才按比例分配，单内容两边系数都是 1.0**（可用宽度全给它）。单内容时任务/通知正文的宽度下限也从 160 降到 96，避免短消息被撑出一片空白、把可见文字顶到一边。
+- **待机态屏顶出现"竖立白色椭圆"**（需求 2）：`Evaluate()` 把 `_idleExpanded`（手动展开标志）也算成"有内容"，于是没有任何内容时也会 `Show()` 岛窗口 —— 所有栏都 Collapsed，宽度塌到 40 左右，而 `Pill` 圆角是 22，画出来就是一个竖椭圆。现在 `_idleExpanded` 不再参与 `hasContent`，且 `ExpandFromStrip()` 在"没有任何内容"时直接返回（只保留窄条）。真机复测：待机只有 122×10 的横条，无任何悬挂图形。
+- **通知卡/岛内通知行悬停时的黑色遮罩**（需求 3）：`IslandRowButton` 的 `IsMouseOver` 触发器给整行铺 `IslandHover`，浅色毛玻璃下这个颜色是"黑 12%" → 鼠标一过就像被选中的深色条。现在移除该行的悬停/按下底色，悬停反馈统一改为**整岛轻微放大 2.5%**（`BackEase` 回弹）；四角通知卡同样改为整卡放大 2%（`TransformGroup` + `RenderTransformOrigin=0.5,0.5`，不影响滑动用的 `TranslateTransform`）。
+- **悬停放大在固定模式下压根收不到鼠标消息**（需求 3 实施中实测发现）：岛是点穿窗口（`WM_NCHITTEST` 对非按钮区域返回 `HTTRANSPARENT`），系统不会派发 `WM_MOUSEMOVE`，`Pill.IsMouseOver` 恒为 false —— 悬停放大/悬停暂停计时用 `IsMouseOver` 全部不生效（实测悬停前后像素零变化）。新增 `_hoverWatch`：仅在岛可见时每 120ms 读一次 `GetCursorPos` 与岛窗口矩形比较，状态变化时才动动画，顺带修正"鼠标停在岛上不计时"这条豁免（之前只在自由模式生效）。
+- **歌词在"非常驻"模式下与进度对不上、不自动滚动**（需求 4）：岛收起成窄条后窗口是 `Hide()` 的，这期间 UI 不渲染 —— `MarqueeText` 的 `_scrolling`/`_offset` 停在收起前的状态，而歌词文本仍在按进度更新。重新展开时可能"新一句本来就短、却还留着滚动状态"，或偏移停在越界位置，表现就是"位置不对/不滚"。修法：
+  - `IslandWindow` 新增 `IslandBecameVisible` 事件（`ShowIsland` 从隐藏态出现、`ExpandFromStrip` 展开两处触发）+ `RestartLyricScroll()`；
+  - `MarqueeText.RestartScroll()` 清 `_scrolling`/`_offset`/`_lastTick` 并重新失效布局；
+  - `IslandController.ResyncLyricsAfterShow()`：展开时补起跟随 timer、**强制**重定一次行号（`SyncLyricLine(force: true)` 跳过"行号没变就返回"）、再重启三行滚动。
+  常驻与非持久两模式走同一段代码，行为一致。
+- **设置页文字被截断**（需求 5）：提示文案（`HintText`）没有 `TextWrapping`，且大量提示放在横向 `StackPanel` 里（横向 StackPanel 给子元素的是无限宽度，永远不换行），外层 `ScrollViewer` 又禁用了横向滚动 → 超出部分被直接裁掉（ntfy 地址说明、"拦截关键词"整段说明都是这样没的）。修法三件套：`HintText` 样式默认 `Wrap`；含提示的 10 处横向 `StackPanel` 改为 `WrapPanel`（放不下就换行）；`--settings` 截图前把 `MainScroll` 归零（截图带上滚动偏移会拍出"顶部被裁"的假象）。
+
+### 新增
+- **单内容居中 / 双内容按比例**（需求 1）：`IslandWindow.SplitFactors()` 纯函数 + `BalanceWidths()` 按 `bothSides` 分流；真机实测"仅任务"场景窗口中心 959.5、药丸墨迹中心 959.5（屏心 960，偏差 0.5px）。
+- **待机窄条分区交互**（需求 2）：
+  - 悬停整条放大到 1.06 倍（进入 `BackEase` 回弹、离开 `CubicEase`）——不再"鼠标一进就展开"（那正是每 N 秒自己开合的根源）；
+  - 按「区域比例」把窄条切成左右两段（`SnapStripWindow.ZoneAt(x, width, splitPercent)` 纯函数）：左段 = 音乐播放器、右段 = WorkBuddy；
+  - 悬停左段 → 指示器换成音乐黄、来回摆动；悬停右段 → 换成任务琥珀、单向巡游（`StripIndicator.HoverZone`）；
+  - **双击**左段打开音乐播放器、双击右段打开 WorkBuddy（新增 `Services/AppLauncher.cs`：进程名包含匹配 + `EnumWindows` 找顶层窗口 + `AttachThreadInput` 绕过前台锁，找不到再按安装路径启动）。
+  - 单击不再承担"展开"职责（否则双击的第一下会把窄条点没，双击永远成立不了）。
+- **Bug 快照**（需求 6）：「设置 → 诊断与反馈 → 导出 Bug 快照」：整屏截图（GDI `BitBlt` + `CAPTUREBLT`，能拍到分层窗）+ 点击前后各 10 秒的**五个核心模块**日志（歌词 / 灵动岛布局 / 通知渲染 / 设置UI / 交互控制）+ 当前整套配置 + 环境元信息，落盘到 `snapshots\<时间>\`（`screen.png` / `logs.txt` / `logs-before.txt` / `logs-after.txt` / `config.json` / `meta.json`）。
+  查看页 `SnapshotWindow`：左边截屏、右边同一时段日志（带时间与模块标签、五个模块可勾选过滤）、可切历史快照、可一键打开目录。**只在点按钮时采集**，不挂定时器、不驻留后台线程；后段 10 秒补录是那一次调用里起的一次性任务，跑完即结束。
+  新增 `--snapshot`（命令行导出一条快照并打开查看页截图，验收用）。
+
+### 优化
+- 岛内通知行的点击区域不再因为"去掉悬停底色"而变小（`IslandRowButton` 的模板只保留内容呈现，整行仍是 Button）。
+- `MarqueeText` 新增诊断属性 `IsScrollRunning` / `ScrollOffset`（自检断言用）。
+- `LogService` 暴露 `CurrentLogFile`（快照按时间窗回读日志用，避免内存环形缓冲被高频日志冲掉）。
+
+### 验证
+- `--selftest` **62 → 67 项全通过**，新增 5 项：单内容不套比例/双内容按比例、窄条左右分区、跑马灯重启滚动（离屏渲染判定 + 换短句后回到起点 + 换回长句能再滚）、快照日志五模块归类（含 `IslandDrag` 不被 `Island` 抢走）、快照日志时间窗过滤与解析。
+- 真机（1920×1040）：仅任务时岛窗口中心 959.5 / 药丸中心 959.5；待机窄条 122×10 居中、**无竖椭圆**；窄条悬停 122 → 129（≈1.06×）；左半段指示器纯黄、右半段琥珀带拖尾；双击左/右分别激活 Folia 与 WorkBuddy（日志 `ok=True`）。
+- 岛悬停放大：悬停前后整幅对比差异 3543 px、范围正好覆盖药丸边缘（缩放生效），且无任何遮罩色块。
+- `--snapshot`：产物 6 个文件齐备，`meta.json` 记录屏幕尺寸/时间/模块计数；查看页截图 `snapshot-view.png` 左图右日志对照正常。
+- 设置页：`settings-full.png` 全量重拍，ntfy 说明与"拦截关键词"整段均可完整阅读。
+
 ## v0.2.9 — 2026-10-23
+
 
 七块内容：全界面分辨率自适应、灵动岛常驻、岛内通知（配色 / 点击跳转 / 展示策略）、歌词偶发不展示、歌词同步延迟、设置界面毛玻璃 + 两个滑块、Win10/Win11 兼容性。
 

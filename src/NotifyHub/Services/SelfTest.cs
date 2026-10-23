@@ -1114,6 +1114,181 @@ public static class SelfTest
             });
         });
 
+        Check("v0.2.10 需求4：跑马灯重启滚动（收起期间换行后能重新判定并从头开始）", () =>
+        {
+            return RunSta(() =>
+            {
+                var text = new MarqueeText
+                {
+                    Width = 120,
+                    FontSize = 14,
+                    Text = "这是一段明显超出可视宽度的长歌词文本内容",
+                };
+
+                var host = new System.Windows.Controls.Border
+                {
+                    Width = 120,
+                    Height = 24,
+                    Background = System.Windows.Media.Brushes.Black,
+                    Child = text,
+                };
+
+                host.Measure(new Size(120, 24));
+                host.Arrange(new Rect(0, 0, 120, 24));
+                host.UpdateLayout();
+
+                // 离屏渲染一次：OnRender 里才会判定"要不要滚"，这是 v0.2.8 的坑（不渲染就没有状态）
+                var rtb = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                    120, 24, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+                rtb.Render(host);
+
+                var shouldScroll = text.IsScrolling;
+                var running = text.IsScrollRunning;
+
+                // 模拟"收起期间换了更短的一句"：重启后必须回到起点、且重新走一遍判定。
+                // 注意要重跑 Measure/Arrange —— 真实运行时 WPF 会在渲染前自动重排，
+                // 离屏测试必须自己补这一步，否则 _textWidth 还是上一句的宽度。
+                text.Text = "短句";
+                text.RestartScroll();
+                host.Measure(new Size(120, 24));
+                host.Arrange(new Rect(0, 0, 120, 24));
+                host.UpdateLayout();
+                rtb.Render(host);
+
+                var shortNoScroll = !text.IsScrolling && !text.IsScrollRunning
+                                    && Math.Abs(text.ScrollOffset) < 0.01;
+
+                // 再换回长句：重启后仍能重新进入滚动
+                text.Text = "又是一段超出可视宽度的很长的歌词内容";
+                text.RestartScroll();
+                host.Measure(new Size(120, 24));
+                host.Arrange(new Rect(0, 0, 120, 24));
+                host.UpdateLayout();
+                rtb.Render(host);
+                var longScrollsAgain = text.IsScrolling;
+
+                LogService.Shared.Write(
+                    LogLevel.Info,
+                    "SelfTest",
+                    "跑马灯重启滚动诊断",
+                    $"should={shouldScroll} running={running} shortNoScroll={shortNoScroll} " +
+                    $"again={longScrollsAgain} off={text.ScrollOffset:F1}");
+
+                return shouldScroll && running && shortNoScroll && longScrollsAgain;
+            });
+        });
+
+        Check("v0.2.10 需求1：单内容不套比例（居中）/ 双内容按比例分配", () =>
+        {
+            // 只有一侧内容：左右系数都必须是 1.0，可用宽度全给它（否则内容会被裁一半、看着偏一边）
+            var single = IslandWindow.SplitFactors(75, bothSides: false);
+            var single2 = IslandWindow.SplitFactors(25, bothSides: false);
+            var singleOk = Math.Abs(single.Left - 1.0) < 1e-6 && Math.Abs(single.Right - 1.0) < 1e-6
+                           && Math.Abs(single2.Left - 1.0) < 1e-6 && Math.Abs(single2.Right - 1.0) < 1e-6;
+
+            // 两侧都有：按比例偏置，且左右互为镜像
+            var half = IslandWindow.SplitFactors(50, bothSides: true);
+            var left75 = IslandWindow.SplitFactors(75, bothSides: true);
+            var left25 = IslandWindow.SplitFactors(25, bothSides: true);
+
+            var ratioOk = Math.Abs(half.Left - 1.0) < 1e-6 && Math.Abs(half.Right - 1.0) < 1e-6
+                          && left75.Left > left75.Right + 0.5
+                          && left25.Right > left25.Left + 0.5
+                          && Math.Abs(left75.Left - left25.Right) < 1e-6;
+
+            return singleOk && ratioOk;
+        });
+
+        Check("v0.2.10 需求2：收纳细条左右分区（按比例切换音乐/WorkBuddy）", () =>
+        {
+            // 50% → 中线；25% → 切点左移；75% → 切点右移；宽度无效时 None
+            var mid = SnapStripWindow.ZoneAt(70, 140, 50);
+            var leftZone = SnapStripWindow.ZoneAt(10, 140, 50);
+            var rightZone = SnapStripWindow.ZoneAt(130, 140, 50);
+            var narrow = SnapStripWindow.ZoneAt(20, 140, 25);   // 切点 35 → 20 属于左段
+            var wide = SnapStripWindow.ZoneAt(20, 140, 75);     // 切点 105 → 20 仍属左段
+            var invalid = SnapStripWindow.ZoneAt(5, 0, 50);
+
+            return mid == StripZone.Right
+                   && leftZone == StripZone.Left
+                   && rightZone == StripZone.Right
+                   && narrow == StripZone.Left
+                   && wide == StripZone.Left
+                   && invalid == StripZone.None
+                   // 比例真的在移动切点：40 在 25% 时已属右段、在 75% 时仍属左段
+                   && SnapStripWindow.ZoneAt(40, 140, 25) == StripZone.Right
+                   && SnapStripWindow.ZoneAt(40, 140, 75) == StripZone.Left;
+        });
+
+        Check("v0.2.10 需求6：Bug 快照日志归类（五模块命中 / 快照自身排除 / 未知丢弃）", () =>
+        {
+            bool Hit(string tag, string expect)
+                => string.Equals(BugSnapshotService.Classify(tag), expect, StringComparison.Ordinal);
+
+            var ok = Hit("Lyrics", "歌词")
+                     && Hit("IslandAuto", "岛布局")
+                     && Hit("IslandStrip", "岛布局")
+                     && Hit("通知", "通知渲染")
+                     && Hit("Notification", "通知渲染")
+                     && Hit("Settings", "设置UI")
+                     && Hit("IslandDrag", "交互控制");
+
+            // 快照自身的日志必须排除，否则每导一次就多一堆自己的记录
+            var selfExcluded = BugSnapshotService.Classify("Snapshot") is null;
+
+            // 与五个模块无关的模块（UIA / 去重 / 配置）不进快照，避免几百行噪声
+            var noiseExcluded = BugSnapshotService.Classify("Uia") is null
+                                && BugSnapshotService.Classify("Dedup") is null;
+
+            var modules = BugSnapshotService.Modules.Count == 5;
+
+            return ok && selfExcluded && noiseExcluded && modules;
+        });
+
+        Check("v0.2.10 需求6：快照日志按时间窗过滤并落盘（读回可解析）", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "notifyhub-snapshot-test-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+
+            try
+            {
+                var now = DateTime.Now;
+                var lines = new[]
+                {
+                    // 时间窗外（11 秒前）：应被丢弃
+                    $"{now.AddSeconds(-11):yyyy-MM-dd HH:mm:ss.fff} [DBG] [Lyrics] 太早了",
+                    // 窗内五个模块各一行
+                    $"{now.AddSeconds(-2):yyyy-MM-dd HH:mm:ss.fff} [DBG] [Lyrics] 换句 #3",
+                    $"{now.AddSeconds(-2):yyyy-MM-dd HH:mm:ss.fff} [DBG] [IslandAuto] 收纳计时到点",
+                    $"{now.AddSeconds(-1):yyyy-MM-dd HH:mm:ss.fff} [INF] [通知] 岛内展示",
+                    $"{now.AddSeconds(-1):yyyy-MM-dd HH:mm:ss.fff} [INF] [Settings] 保存配置",
+                    $"{now:yyyy-MM-dd HH:mm:ss.fff} [DBG] [IslandDrag] 开始拖拽",
+                    // 非核心模块：丢弃
+                    $"{now:yyyy-MM-dd HH:mm:ss.fff} [DBG] [Uia] 读会话列表",
+                };
+
+                File.WriteAllLines(Path.Combine(dir, "logs.txt"), lines, new UTF8Encoding(false));
+
+                var parsed = BugSnapshotService.ReadLines(dir, now.AddSeconds(-10), now.AddSeconds(1));
+                var modules = parsed.Select(l => l.Module).Distinct().OrderBy(m => m).ToList();
+
+                return parsed.Count == 5
+                       && modules.SequenceEqual(new[] { "交互控制", "岛布局", "歌词", "设置UI", "通知渲染" }.OrderBy(m => m))
+                       && parsed.All(l => l.Time > now.AddSeconds(-10));
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(dir, true);
+                }
+                catch
+                {
+                    // 清理失败不影响结论
+                }
+            }
+        });
+
         Check("v0.2.9 需求1：界面缩放映射（1080p→1.00 / 2.5K@150%→0.90 / 2.5K→1.35 / 4K→1.70）", () =>
         {
             // 需求 1 的核心不是"卡片变大变小"，而是"卡片占屏比例恒定"。

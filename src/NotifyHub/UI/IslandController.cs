@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Windows;
 using System.Windows.Threading;
 using NotifyHub.Models;
 using NotifyHub.Services;
@@ -453,6 +454,11 @@ public sealed class IslandController : IDisposable
         // v0.2.9 需求 3：岛内通知点击 → 打开对应会话 / 网页
         island.NoticeClicked += OnIslandNoticeClicked;
 
+        // v0.2.10 需求 4：岛从"隐藏/窄条"重新出现 → 重定歌词行 + 重启滚动。
+        // 收起期间窗口是 Hide 的，UI 不渲染，跑马灯与行号可能停在半路；
+        // 不补这一刀就会出现"展开了但歌词还是上一句 / 不跟着滚动"。
+        island.IslandBecameVisible += (_, _) => ResyncLyricsAfterShow();
+
         _island = island;
         return island;
     }
@@ -655,7 +661,7 @@ public sealed class IslandController : IDisposable
     ///   * 轮询 90ms，切换发生在"目标行开始时间 + 90ms 内"，满足 ≤300ms 的要求；
     ///   * 每次切换打一条 Debug 日志（目标时间 / 实际进度 / 偏差），便于实测核对。
     /// </summary>
-    private void SyncLyricLine()
+    private void SyncLyricLine(bool force = false)
     {
         if (_lyricLines is not { Count: > 0 })
         {
@@ -678,7 +684,7 @@ public sealed class IslandController : IDisposable
         _playbackMisses = 0;
 
         var index = LyricsService.IndexAt(_lyricLines, position);
-        if (index == _lyricIndex)
+        if (index == _lyricIndex && !force)
         {
             return;
         }
@@ -698,6 +704,54 @@ public sealed class IslandController : IDisposable
         }
 
         Island().ShowLyrics(TextAt(index), TextAt(index + 1), TransAt(index));
+    }
+
+    /// <summary>
+    /// 岛重新可见后重放一次歌词状态（v0.2.10 需求 4）。
+    ///
+    /// 只做三件事，都是"补状态"而不是"改策略"，所以常驻/非常驻两种模式行为一致：
+    ///   1. 跟随 timer 没跑就拉起来（收起期间被停过的情况）；
+    ///   2. 按当前播放进度**强制**重定一次行号（force=true 会跳过"行号没变就返回"）；
+    ///   3. 让三行跑马灯重新起跑（清 `_scrolling` / `_offset`）。
+    /// </summary>
+    private void ResyncLyricsAfterShow()
+    {
+        try
+        {
+            _log.Write(
+                LogLevel.Debug,
+                "Lyrics",
+                "展开后重定歌词",
+                $"时间轴={( _lyricLines is { Count: > 0 } ? _lyricLines.Count + " 行" : "无")} " +
+                $"行号={_lyricIndex} timer={_lyricTimer.IsEnabled} 歌={_currentMedia?.Title ?? "-"}");
+
+            if (_lyricLines is { Count: > 0 })
+            {
+                if (!_lyricTimer.IsEnabled)
+                {
+                    _lyricTimer.Start();
+                }
+
+                SyncLyricLine(force: true);
+
+                _log.Write(
+                    LogLevel.Debug,
+                    "Lyrics",
+                    "重定行完成",
+                    $"行={_lyricIndex}/{_lyricLines.Count}");
+            }
+            else
+            {
+                // 还没有时间轴：给一次补取机会（看门狗 2s 内也会再兜一次）
+                EnsureLyricsRequested();
+            }
+
+            Island().RestartLyricScroll();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Lyrics", "展开后重定歌词失败", ex.Message);
+        }
     }
 
     /// <summary>
@@ -806,6 +860,21 @@ public sealed class IslandController : IDisposable
                 _log.Warn("Island", "预览岛布局失败", ex.Message);
             }
         }));
+    }
+
+    /// <summary>当前灵动岛窗口矩形（DIP）；岛没建或不可见返回 null。Bug 快照记录用。</summary>
+    public Rect? IslandBounds
+    {
+        get
+        {
+            var island = _island;
+            if (island is null || island.ActualWidth < 1)
+            {
+                return null;
+            }
+
+            return new Rect(island.Left, island.Top, island.ActualWidth, island.ActualHeight);
+        }
     }
 
     /// <summary>配置真正保存后清掉预览态，后续读真配置（v0.2.9 需求 6）。</summary>

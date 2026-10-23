@@ -20,6 +20,7 @@ public enum AppMode
     FpsTest,
     EnvReport,
     NoticeShot,
+    Snapshot,
     Help,
 }
 
@@ -88,6 +89,9 @@ public sealed record CommandLineOptions(
                 case "--fps-test":
                     // --fps-test：量 5 秒内 CompositionTarget.Rendering 的实际帧率（需求 1）
                     return new CommandLineOptions(AppMode.FpsTest, 5);
+                case "--snapshot":
+                    // --snapshot：导出一条 Bug 快照并打开查看页截图（需求 6 验收）
+                    return new CommandLineOptions(AppMode.Snapshot, 0);
                 case "--env-report":
                     // --env-report：打印系统版本 / DPI / 缩放 / 关键 API 探测（需求 7 兼容性核对）
                     return new CommandLineOptions(AppMode.EnvReport, 0);

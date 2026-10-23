@@ -98,6 +98,21 @@ public partial class IslandWindow : Window
     /// <summary>上一帧合成时间戳（FrameClock 去重用，v0.2.9 需求 1）。</summary>
     private TimeSpan _slideFrameTime = TimeSpan.MinValue;
 
+    /// <summary>已经排过一次「布局后重新居中」（合并重复请求用）。</summary>
+    private bool _recenterScheduled;
+
+    /// <summary>
+    /// 指针是否正压在岛上（v0.2.10 需求 3）。
+    ///
+    /// 为什么不用 Pill.IsMouseOver：岛是 **点穿窗口**（WM_NCHITTEST 对非按钮区域返回 HTTRANSPARENT），
+    /// 系统根本不会把鼠标消息发给它 —— IsMouseOver 在固定模式下永远是 false，
+    /// "悬停放大/悬停暂停计时"这类需求靠它实现不了（实测：悬停前后像素零变化）。
+    /// 这里改成自己轮询光标位置，只在岛可见时跑（120ms 一次，一次 GetCursorPos）。
+    /// </summary>
+    private bool _pointerOverIsland;
+
+    private DispatcherTimer? _hoverWatch;
+
     /// <summary>细条最近一次现身的时间（防止刚收起就被展开，v0.2.9 需求 2）。</summary>
     private long _stripShownAtMs;
 
@@ -149,6 +164,7 @@ public partial class IslandWindow : Window
     /// 空闲展开（v0.2.9 需求 2）：用户手动点开细条时置 true。
     /// 此时岛上没有任何内容也保持展开，超时后回到细条。
     /// </summary>
+    /// <summary>占位：v0.2.10 起不再允许"无内容也展开"，字段保留只为兼容旧日志格式。</summary>
     private bool _idleExpanded;
 
     /// <summary>岛内通知被点击（由 IslandController 订阅后打开对应消息）。</summary>
@@ -654,6 +670,20 @@ public partial class IslandWindow : Window
     }
 
     /// <summary>岛内当前是否展示了通知（诊断用）。</summary>
+    /// <summary>
+    /// 岛"刚变成可见"（从隐藏/窄条展开）时触发（v0.2.10 需求 4）。
+    /// 控制器收到后重定歌词行 + 重启歌词滚动：收起期间 UI 不渲染，状态可能停在半路。
+    /// </summary>
+    public event EventHandler? IslandBecameVisible;
+
+    /// <summary>重启歌词三行的滚动状态（展开时调用，见 <see cref="MarqueeText.RestartScroll"/>）。</summary>
+    public void RestartLyricScroll()
+    {
+        LyricLine1.RestartScroll();
+        LyricTrans.RestartScroll();
+        LyricLine2.RestartScroll();
+    }
+
     public bool IsNoticeShown => _noticeVisible;
 
     /// <summary>是否处于收纳细条形态（诊断/自检用）。</summary>
@@ -971,6 +1001,57 @@ public partial class IslandWindow : Window
         Divider.Visibility = _musicVisible && _statusVisible ? Visibility.Visible : Visibility.Collapsed;
         BalanceWidths();
         SyncStripState();
+
+        // 内容变了 → 岛宽会在随后的布局趟里变 → 必须在布局落定后重新居中一次，
+        // 否则窗口会从旧的 Left 往右/往左长，看起来就是"内容偏右/偏左"（v0.2.10 需求 1）。
+        ScheduleRecenter();
+    }
+
+    /// <summary>
+    /// 合并式重新居中（v0.2.10 需求 1）：同一个布局周期里可能被连调多次
+    /// （ShowNotice → UpdateChrome → Evaluate → …），只排一次就够。
+    ///
+    /// 为什么不能用 SizeChanged 兜住：ExpandFromStrip / ShowIsland 期间 `_hidden` 还是 true，
+    /// SizeChanged 会早退；等 `_hidden` 变 false 时尺寸已经稳定，不再派发 SizeChanged ——
+    /// 于是位置永远停在展开前的旧 Left 上，岛越宽偏得越多。
+    /// 这里用 Loaded 优先级（布局跑完之后）补一刀，并且只在真的偏了才写 Left。
+    /// </summary>
+    private void ScheduleRecenter()
+    {
+        if (_recenterScheduled)
+        {
+            return;
+        }
+
+        _recenterScheduled = true;
+        Dispatcher.BeginInvoke(
+            new Action(() =>
+            {
+                _recenterScheduled = false;
+
+                if (_hidden || _dragging || _sliding || !IsLoaded || _stripMode)
+                {
+                    return;
+                }
+
+                if (IsFreeMode())
+                {
+                    if (_snapped)
+                    {
+                        ReapplySnap();
+                    }
+
+                    return;
+                }
+
+                var work = WorkArea();
+                var target = CenteredLeft(work, ActualWidth > 1 ? ActualWidth : 420);
+                if (double.IsNaN(Left) || Math.Abs(Left - target) > 0.5)
+                {
+                    Left = target;
+                }
+            }),
+            DispatcherPriority.Loaded);
     }
 
     /// <summary>
@@ -1028,15 +1109,16 @@ public partial class IslandWindow : Window
     /// </summary>
     private void BalanceWidths()
     {
-        // v0.2.9 需求 6：两个滑块的实时预览都落在这里。
+        // v0.2.9 需求 6 + v0.2.10 需求 1：
         //   widthFactor：整体宽度上限的乘数（60%~160%）
-        //   left/rightFactor：按左右分配比例放大或收缩两侧的上限
-        //     比例 50 → 1.0 / 1.0；比例 75 → 左 1.5、右 0.5；比例 25 → 左 0.5、右 1.5
-        // 注意只影响"上限"，内容短时岛依旧自己收窄（否则就不叫自适应了）。
+        //   left/rightFactor：按左右分配比例放大或收缩两侧的上限 —— **只在左右两侧都有内容时生效**。
+        // 需求 1 明确：岛内只有一项内容时"整体自动居中"，不能被比例滑块把可用宽度砍掉一半
+        // （比例 25 时把通知区上限压到 50%，长消息会被莫名其妙截断，观感还是"偏一边"）。
         var widthFactor = Math.Clamp((IslandWidthPercentProvider?.Invoke() ?? 100) / 100.0, 0.6, 1.6);
-        var split = Math.Clamp((IslandSplitRatioProvider?.Invoke() ?? 50) / 100.0, 0.25, 0.75);
-        var leftFactor = Math.Clamp(split / 0.5, 0.55, 1.7);
-        var rightFactor = Math.Clamp((1 - split) / 0.5, 0.55, 1.7);
+        var hasLeft = _musicVisible;
+        var hasRight = _statusVisible || _noticeVisible;
+        var bothSides = hasLeft && hasRight;
+        var (leftFactor, rightFactor) = SplitFactors(IslandSplitRatioProvider?.Invoke() ?? 50, bothSides);
 
         // 1) 任务正文 + 通知正文（共享同一列宽，视觉上左边界才齐）
         //    宽度一律**向上取整**：FormattedText 的自然宽带小数（172.2），若四舍五入成 172
@@ -1044,9 +1126,14 @@ public partial class IslandWindow : Window
         var statusCap = (_musicVisible ? MaxStatusWidthWithMusic : MaxStatusWidthSolo)
                         * widthFactor * rightFactor;
         var statusNatural = Math.Max(StatusText.NaturalWidth, NoticeText.NaturalWidth);
+
+        // 单内容时不要 160 的下限：短消息被撑到 160 会在右侧留下一片空白，
+        // 岛本身是居中的，那片空白就把可见文字"推"到左边去（需求 1 的观感来源之一）。
+        var statusFloor = bothSides ? MinStatusWidth : 96;
+
         var statusWidth = Math.Ceiling(Math.Clamp(
-            statusNatural <= 0 ? MinStatusWidth : statusNatural,
-            MinStatusWidth, statusCap));
+            statusNatural <= 0 ? statusFloor : statusNatural,
+            statusFloor, Math.Max(statusFloor, statusCap)));
 
         if (double.IsNaN(StatusText.Width) || Math.Abs(StatusText.Width - statusWidth) > 0.5)
         {
@@ -1104,6 +1191,28 @@ public partial class IslandWindow : Window
             LyricTrans.Width = lyricWidth;
             LyricLine2.Width = lyricWidth;
         }
+    }
+
+    /// <summary>
+    /// 左右两侧的宽度系数（v0.2.10 需求 1）。
+    ///
+    /// 规则只有一句话：**两侧都有内容时才按"区域比例"分配，只有一侧时两边系数都是 1**
+    /// ——单内容要把可用宽度全部给那一侧，岛整体才是居中的；如果单内容也套比例，
+    /// 比例 25% 时通知区上限会被砍掉一半，长消息被截断，观感就是"内容偏在一边"。
+    ///
+    /// 抽成纯函数是为了让自检能直接断言这条规则，不用把窗口跑起来。
+    /// </summary>
+    public static (double Left, double Right) SplitFactors(int splitPercent, bool bothSides)
+    {
+        if (!bothSides)
+        {
+            return (1.0, 1.0);
+        }
+
+        var split = Math.Clamp(splitPercent / 100.0, 0.25, 0.75);
+
+        // 50 → 1.0 / 1.0；75 → 1.5 / 0.5；25 → 0.5 / 1.5
+        return (Math.Clamp(split / 0.5, 0.55, 1.7), Math.Clamp((1 - split) / 0.5, 0.55, 1.7));
     }
 
     /// <summary>
@@ -1204,7 +1313,11 @@ public partial class IslandWindow : Window
             return;
         }
 
-        var hasContent = _statusVisible || _musicVisible || _noticeVisible || _idleExpanded;
+        // v0.2.10 需求 2：**不允许"没有任何内容却展开"**。
+        // 旧版把 _idleExpanded 也算成内容，于是空岛被 Show 出来：所有栏都 Collapsed，
+        // 宽度塌到 40 左右、Pill 圆角 22 → 屏幕上就是一个竖立的白色/浅灰椭圆（用户截图里的那个）。
+        // 待机态的正确形态只有一种：顶部窄条。
+        var hasContent = _statusVisible || _musicVisible || _noticeVisible;
 
         if (hasContent)
         {
@@ -1292,6 +1405,10 @@ public partial class IslandWindow : Window
                 // SizeToContent 后宽度可能变化，固定模式再校正一次居中
                 PositionIsland();
             }
+
+            // 从隐藏态出现：让外部重定歌词行 / 重启滚动（v0.2.10 需求 4）
+            RaiseIslandBecameVisible();
+            SetHoverWatch(true);
         }
 
         // 内容变化引起的宽度微调交给 SizeChanged 保持中心，这里不再干预
@@ -1638,7 +1755,7 @@ public partial class IslandWindow : Window
             return;
         }
 
-        if (Pill.IsMouseOver)
+        if (_pointerOverIsland || Pill.IsMouseOver)
         {
             RestartAutoCollapse();
             return;
@@ -1686,16 +1803,130 @@ public partial class IslandWindow : Window
     {
         // 鼠标进入：暂停收纳倒计时（正在看歌词 / 准备点按钮）
         _autoTimer.Stop();
+
+        // v0.2.10 需求 3：悬停反馈只做"整岛轻微放大"（≈2.5%，回弹），不再叠任何遮罩/变色。
+        // 放大走 RenderTransform（不参与布局），窗口尺寸与居中都不受影响；
+        // Pill 四周有 14px 留白，放大后也不会被窗口边界裁掉。
+        AnimateHoverScale(1.025, spring: true);
     }
 
     private void OnPillMouseLeave(object sender, MouseEventArgs e)
     {
+        AnimateHoverScale(1.0, spring: false);
+
         if (_dragging || _sliding)
         {
             return;
         }
 
         RestartAutoCollapse();
+    }
+
+    /// <summary>开始/停止指针巡检（只在岛可见时跑，避免常驻空转）。</summary>
+    private void SetHoverWatch(bool on)
+    {
+        if (on)
+        {
+            _hoverWatch ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+            if (_hoverWatch.IsEnabled)
+            {
+                return;
+            }
+
+            _hoverWatch.Tick -= OnHoverWatchTick;
+            _hoverWatch.Tick += OnHoverWatchTick;
+            _hoverWatch.Start();
+            return;
+        }
+
+        if (_hoverWatch is { IsEnabled: true })
+        {
+            _hoverWatch.Stop();
+        }
+
+        if (_pointerOverIsland)
+        {
+            _pointerOverIsland = false;
+            AnimateHoverScale(1.0, spring: false);
+        }
+    }
+
+    private void OnHoverWatchTick(object? sender, EventArgs e)
+    {
+        if (_hidden || _stripMode)
+        {
+            SetHoverWatch(false);
+            return;
+        }
+
+        var inside = PointerInsideIsland();
+        if (inside == _pointerOverIsland)
+        {
+            return;
+        }
+
+        _pointerOverIsland = inside;
+
+        // 进入时暂停收纳倒计时（用户正在看），离开时重新计时
+        if (inside)
+        {
+            _autoTimer.Stop();
+        }
+        else if (!_dragging && !_sliding)
+        {
+            RestartAutoCollapse();
+        }
+
+        AnimateHoverScale(inside ? 1.025 : 1.0, spring: inside);
+    }
+
+    /// <summary>光标是否落在岛窗口矩形内（物理像素比较，避免 DPI 换算误差）。</summary>
+    private bool PointerInsideIsland()
+    {
+        try
+        {
+            if (!IsLoaded || ActualWidth < 1 || ActualHeight < 1)
+            {
+                return false;
+            }
+
+            if (!NativeMethods.GetCursorPos(out var point))
+            {
+                return false;
+            }
+
+            var scale = VisualTreeHelper.GetDpi(this).DpiScaleX;
+            if (scale <= 0.1)
+            {
+                scale = 1;
+            }
+
+            var left = Left * scale;
+            var top = Top * scale;
+            var right = left + (ActualWidth * scale);
+            var bottom = top + (ActualHeight * scale);
+
+            return point.X >= left && point.X <= right && point.Y >= top && point.Y <= bottom;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>整岛悬停缩放（v0.2.10 需求 3）：进入带回弹、离开平稳收，幅度 1.025。</summary>
+    private void AnimateHoverScale(double target, bool spring)
+    {
+        var duration = TimeSpan.FromMilliseconds(spring ? 190 : 160);
+        var ease = spring
+            ? new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.35 }
+            : (IEasingFunction)new CubicEase { EasingMode = EasingMode.EaseOut };
+
+        var sx = new DoubleAnimation(target, duration) { EasingFunction = ease };
+        var sy = new DoubleAnimation(target, duration) { EasingFunction = ease };
+
+        PillHoverScale.BeginAnimation(ScaleTransform.ScaleXProperty, sx);
+        PillHoverScale.BeginAnimation(ScaleTransform.ScaleYProperty, sy);
     }
 
     /// <summary>
@@ -1766,24 +1997,33 @@ public partial class IslandWindow : Window
             return;
         }
 
+        // 没有任何内容就不展开（v0.2.10 需求 2）：待机态只有窄条，
+        // 展开一个空壳只会在屏幕上画出一个竖椭圆。
+        if (!_statusVisible && !_musicVisible && !_noticeVisible)
+        {
+            LogService.Shared.Write(LogLevel.Debug, "IslandAuto", "无内容，忽略展开请求", "只保留窄条");
+            return;
+        }
+
         LogService.Shared.Write(LogLevel.Debug, "IslandAuto", "从细条展开", $"status={_statusVisible} music={_musicPlaying} notice={_noticeVisible}");
 
         var token = ++_animToken;
         _stripMode = false;
         _strip?.Collapse();
         _snapped = false;
+        _idleExpanded = false;
 
-        // 没有任何内容却手动展开（需求 2：需要时手动点开展开）：
-        // 用 _idleExpanded 撑住这次展开，超时后自动回到细条。
-        _idleExpanded = !(_statusVisible || _musicVisible || _noticeVisible);
+        // 先落 _hidden，让随后的 SizeChanged / 布局回调能正常参与居中
+        _hidden = false;
 
-        // 贴顶全展开：水平收敛进中间 3/5，垂直留出与吸附同款缝隙
-        var (left, _) = ClampToScreen(Left, Top);
-        Left = left;
+        // 贴顶：水平交给 RecenterFixed（此刻宽度还没定，先按现有宽度居中，布局完再纠一次）
         Top = WorkArea().Top + EdgeGap - PillPad;
+        RecenterFixed();
 
         Show();
         UpdateLayout();
+        RecenterFixed();
+        ScheduleRecenter();
 
         BeginAnimation(OpacityProperty, null);
         Opacity = 0;
@@ -1796,6 +2036,12 @@ public partial class IslandWindow : Window
         };
         BeginAnimation(OpacityProperty, fade);
 
+        // 从窄条展开：同样是"刚刚可见"，重定歌词行 + 重启滚动（v0.2.10 需求 4）
+        RaiseIslandBecameVisible();
+
+        // 展开态才需要指针巡检（悬停放大 / 悬停暂停计时）
+        SetHoverWatch(true);
+
         // 展开后按统一规则重新计时：鼠标不进来就等超时再收成细条
         _autoTimer.Stop();
         RestartAutoCollapse();
@@ -1805,17 +2051,66 @@ public partial class IslandWindow : Window
     {
         if (_strip is null)
         {
-            _strip = new SnapStripWindow();
-            _strip.ExpandRequested += (_, _) =>
+            _strip = new SnapStripWindow
             {
-                if (_stripMode && !_dragging && !_sliding)
-                {
-                    ExpandFromStrip();
-                }
+                // 左/右分段比例跟设置里的"区域比例"滑块一致（需求 2）
+                SplitRatioProvider = () => IslandSplitRatioProvider?.Invoke() ?? 50,
             };
+
+            _strip.ZoneDoubleClicked += OnStripZoneDoubleClicked;
         }
 
         return _strip;
+    }
+
+    /// <summary>
+    /// 待机窄条双击分区（v0.2.10 需求 2）：左段打开音乐播放器、右段打开 WorkBuddy。
+    /// 只用双击，单击不做事——否则双击的第一下就会被单击逻辑吃掉（比如把岛展开、细条消失）。
+    /// </summary>
+    private void OnStripZoneDoubleClicked(object? sender, StripZone zone)
+    {
+        try
+        {
+            if (zone == StripZone.Left)
+            {
+                var running = _media?.ProcessName;
+                var ok = !string.IsNullOrWhiteSpace(running) && AppLauncher.TryActivate(running!);
+                if (!ok)
+                {
+                    ok = AppLauncher.TryActivateOrLaunch("Folia", AppLauncher.MusicAppCandidates());
+                }
+
+                LogService.Shared.Write(
+                    ok ? LogLevel.Info : LogLevel.Warn,
+                    "IslandStrip",
+                    "双击左段：打开音乐播放器",
+                    $"ok={ok} process={running}");
+                return;
+            }
+
+            var opened = AppLauncher.TryActivateOrLaunch("WorkBuddy", AppLauncher.WorkBuddyCandidates());
+            LogService.Shared.Write(
+                opened ? LogLevel.Info : LogLevel.Warn,
+                "IslandStrip",
+                "双击右段：打开 WorkBuddy",
+                $"ok={opened}");
+        }
+        catch (Exception ex)
+        {
+            LogService.Shared.Warn("IslandStrip", "双击分区处理失败", ex.Message);
+        }
+    }
+
+    private void RaiseIslandBecameVisible()
+    {
+        try
+        {
+            IslandBecameVisible?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            LogService.Shared.Warn("Island", "岛可见回调失败", ex.Message);
+        }
     }
 
     /// <summary>细条上的状态点颜色：完成态绿点，其余黄点。</summary>

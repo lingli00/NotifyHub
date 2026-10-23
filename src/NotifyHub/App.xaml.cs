@@ -517,7 +517,8 @@ public partial class App : Application
 
                     void CaptureIsland(string fileName, bool withMusic, bool withTask,
                         string? trans = null, string title = "侧脸", string artist = "魏语诺, 五毛",
-                        string line1 = "关于你的一切 我都想要了解", string line2 = "陪伴三个季节 还是承受决裂")
+                        string line1 = "关于你的一切 我都想要了解", string line2 = "陪伴三个季节 还是承受决裂",
+                        bool withPresence = false)
                     {
                         var island = new IslandWindow
                         {
@@ -532,6 +533,18 @@ public partial class App : Application
 
                         island.ApplyLyricsTypography();
                         island.ApplyTheme(ThemePalette.Create(config));
+
+                        // v0.2.12 需求 3：待机态（播放器 + WorkBuddy 进程都在、但没播放/没任务）
+                        if (withPresence)
+                        {
+                            island.SetPresence(true, true, "Folia");
+                        }
+
+                        // v0.2.12 需求 3：待机态（播放器 + WorkBuddy 进程都在、但没播放/没任务）
+                        if (withPresence)
+                        {
+                            island.SetPresence(true, true, "Folia");
+                        }
 
                         if (withMusic)
                         {
@@ -575,6 +588,8 @@ public partial class App : Application
                             line2: "Even when the city sleeps")),
                         ("island-task.png", () => CaptureIsland("island-task.png", true, true)),
                         ("island-task-only.png", () => CaptureIsland("island-task-only.png", false, true)),
+                        ("island-standby-split.png", () => CaptureIsland(
+                            "island-standby-split.png", false, false, withPresence: true)),
                     };
 
                     // 顺序跑：每张渲染完 1.4s 再启动下一张，最后一张后收尾退出

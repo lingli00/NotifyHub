@@ -379,7 +379,8 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
+                                                                    <RowDefinition Height="Auto" />
+</Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="86" />
                                     <ColumnDefinition Width="*" />
@@ -423,8 +424,25 @@
                                     <TextBlock Style="{StaticResource HintText}" Text="关掉后即使保持展开也不显示歌词（与上面的保持展开互相独立）" />
                                 </WrapPanel>
 
+                                <!--
+                                  歌词来源与时间微调（v0.2.12 需求 1）：
+                                  本地 .lrc（播放器缓存 / 歌曲同目录）优先，本地没有才联网，且只认严格匹配。
+                                -->
+                                <WrapPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                            Orientation="Horizontal" Margin="0,10,0,0">
+                                    <CheckBox x:Name="LyricsNetworkCheck" MinWidth="0"
+                                              Content="本地没词时联网兜底（只接受歌名+歌手都对上的结果）" />
+                                    <TextBlock Text="时间微调" Margin="18,0,8,0" />
+                                    <Slider x:Name="LyricOffsetSlider" Width="130"
+                                            Minimum="-2000" Maximum="2000"
+                                            IsSnapToTickEnabled="True" TickFrequency="50"
+                                            ToolTip="整体提前/延后歌词，正数=提前显示" />
+                                    <TextBlock x:Name="LyricOffsetText" Width="64" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="0 ms" />
+                                </WrapPanel>
+
                                 <!--  外观说明：主题固定为毛玻璃，跟随系统深浅，文字自动保证对比度  -->
-                                <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
                                            Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap"
                                            Text="外观固定为毛玻璃：半透明可见下层内容，深浅跟随 Windows 应用主题，文字颜色按背景实测亮度自动选对比度更高的一侧（不再提供手动配色与透明度调节）。两个滑块拖动时岛会立即变化，无需保存。" />
                             </Grid>

@@ -1139,6 +1139,165 @@ public static class SelfTest
                    && psi.FileName.EndsWith("notepad.exe", StringComparison.OrdinalIgnoreCase);
         });
 
+        Check("v0.2.12 需求1：LRC [offset:] 整体偏移 + 元信息行过滤", () =>
+        {
+            var lrc = string.Join("\n", new[]
+            {
+                "[ti:测试]",
+                "[ar:某歌手]",
+                "[offset:+500]",
+                "[00:01.00]作词 : 某某",
+                "[00:02.00]作曲 : 另一个人",
+                "[00:03.00]第一句",
+                "[00:05.50]第二句",
+                "[00:04.00]纯音乐，请欣赏",
+            });
+
+            var lines = LyricsService.ParseLrc(lrc, out var offset);
+
+            // offset 读到了、正文两行、元信息行被丢掉
+            var offsetOk = offset == 500;
+            var countOk = lines.Count == 2;
+            var textOk = lines.Count == 2 && lines[0].Text == "第一句" && lines[1].Text == "第二句";
+
+            // 时间轴整体后移 500ms：3.0 → 3.5、5.5 → 6.0，且仍然按时间排序
+            var shiftOk = lines.Count == 2
+                          && Math.Abs((lines[0].Time - TimeSpan.FromSeconds(3.5)).TotalMilliseconds) < 1
+                          && Math.Abs((lines[1].Time - TimeSpan.FromSeconds(6)).TotalMilliseconds) < 1;
+
+            // 负偏移不会把时间点推到负数
+            var negative = LyricsService.ParseLrc("[offset:-9000]\n[00:01.00]开头", out var negOffset);
+            var clampOk = negOffset == -9000 && negative.Count == 1 && negative[0].Time >= TimeSpan.Zero;
+
+            return offsetOk && countOk && textOk && shiftOk && clampOk;
+        });
+
+        Check("v0.2.12 需求1：本地歌词优先（.lrc 命中 + GBK 编码自动识别）", () =>
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "nh-lyrics-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+
+            try
+            {
+                // UTF-8 文件：文件名带歌手，应优先于同名但不带歌手的
+                File.WriteAllText(
+                    Path.Combine(dir, "孤勇者 - 陈奕迅.lrc"),
+                    "[00:01.00]爱你孤身走暗巷\n[00:05.00]爱你不跪的模样",
+                    new UTF8Encoding(false));
+
+                File.WriteAllText(
+                    Path.Combine(dir, "无关的歌词.lrc"),
+                    "[00:01.00]这首歌跟查询无关",
+                    new UTF8Encoding(false));
+
+                // GBK 文件：大量老歌词是这个编码，读错就是满屏乱码
+                LocalLyricsLibrary.EnsureEncodings();
+                var gbkBytes = Encoding.GetEncoding(936).GetBytes("[00:02.00]夜空中最亮的星");
+                File.WriteAllBytes(Path.Combine(dir, "夜空中最亮的星 - 逃跑计划.lrc"), gbkBytes);
+
+                var config = new AppConfig { LyricsExtraPaths = dir };
+                var library = new LocalLyricsLibrary(LogService.Shared, () => config);
+
+                var hit = library.Find("孤勇者", "陈奕迅");
+                var gbk = library.Find("夜空中最亮的星", "逃跑计划");
+                var miss = library.Find("完全不存在的歌名xyz", "谁");
+
+                var hitOk = hit is not null && hit.Text.Contains("爱你孤身走暗巷", StringComparison.Ordinal);
+                var gbkOk = gbk is not null && gbk.Text.Contains("夜空中最亮的星", StringComparison.Ordinal);
+                var missOk = miss is null;
+
+                LogService.Shared.Write(
+                    LogLevel.Info,
+                    "SelfTest",
+                    "本地歌词命中诊断",
+                    $"hit={hitOk} gbk={gbkOk} miss={missOk} files={library.IndexedFiles}");
+
+                return hitOk && gbkOk && missOk;
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(dir, true);
+                }
+                catch
+                {
+                    // 清理失败不影响结论
+                }
+            }
+        });
+
+        Check("v0.2.12 需求3：播放器进程在跑就保留左栏音乐区（图标 + 三键 + 空歌名）", () =>
+        {
+            return RunSta(() =>
+            {
+                var island = new IslandWindow
+                {
+                    ModeProvider = () => "Fixed",
+                    MusicEnabledProvider = () => true,
+                    MarqueeSpeedProvider = () => 45,
+                    LyricsEnabledProvider = () => true,
+                    SavedPositionProvider = () => null,
+                };
+
+                try
+                {
+                    island.ApplyTheme(ThemePalette.Create(new AppConfig()));
+
+                    island.SetPresence(false, false);
+                    var noMusic = island.HasMusicContent;
+
+                    // 只开播放器、还没播放：音乐区必须已经在（需求 3 的核心）
+                    island.SetPresence(true, false, "Folia");
+                    var withMusic = island.HasMusicContent;
+
+                    // 关掉播放器：音乐区收回
+                    island.SetPresence(false, false);
+                    var backOff = island.HasMusicContent;
+
+                    return !noMusic && withMusic && !backOff;
+                }
+                finally
+                {
+                    island.Close();
+                }
+            });
+        });
+
+        Check("v0.2.12 需求5：轮询流水日志默认不落盘 + 相同行 2 秒内去重", () =>
+        {
+            var log = LogService.Shared;
+            var before = log.ConsoleSnapshot().Count;
+
+            var wasEnabled = LogService.RoutineLoggingEnabled;
+            try
+            {
+                LogService.RoutineLoggingEnabled = false;
+
+                // 流水：控制台与文件都不该多出内容
+                log.Routine("IslandAuto", "收纳倒计时重置 3s", "hidden=False");
+                log.Routine("IslandAuto", "收纳倒计时重置 3s", "hidden=False");
+                var routineSilent = log.ConsoleSnapshot().Count == before;
+
+                // 业务日志：照常写；紧接着的重复行被去重
+                var suppressedBefore = log.SuppressedDuplicateLines;
+                log.Info("微信监听", "自检：收到会话变化", "flyme1 → 测试");
+                var afterFirst = log.ConsoleSnapshot().Count;
+                log.Info("微信监听", "自检：收到会话变化", "flyme1 → 测试");
+                var afterSecond = log.ConsoleSnapshot().Count;
+
+                var keptBusiness = afterFirst == before + 1;
+                var deduped = afterSecond == afterFirst
+                              && log.SuppressedDuplicateLines > suppressedBefore;
+
+                return routineSilent && keptBusiness && deduped;
+            }
+            finally
+            {
+                LogService.RoutineLoggingEnabled = wasEnabled;
+            }
+        });
+
         Check("v0.2.11 需求2/4：待机空闲 ⇄ 信息展示 模式判定（进程在线即退出待机）", () =>
         {
             return RunSta(() =>

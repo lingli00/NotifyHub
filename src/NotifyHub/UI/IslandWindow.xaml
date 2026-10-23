@@ -136,7 +136,7 @@
                 </Grid.ColumnDefinitions>
 
                 <!--  ============ 左栏：强调脊线 + 音乐行 + 歌词  ============  -->
-                <Grid x:Name="LeftPane" Grid.Column="0">
+                <Grid x:Name="LeftPane" Grid.Column="0" MinHeight="46" VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
@@ -212,6 +212,12 @@
                                                Foreground="{DynamicResource IslandSubFg}" Opacity="0.55"
                                                Margin="0,1,0,0" VerticalAlignment="Center" Text="" />
                         </StackPanel>
+
+                        <!--
+                          歌词占位（v0.2.12 需求 3）：待机态"歌名/歌手/歌词区域留空"，
+                          显式留一条占位，左右两栏高度才统一（不再是左矮右高一截）。
+                        -->
+                        <Border x:Name="LyricSpacer" Height="17" Margin="24,4,0,0" Visibility="Collapsed" />
                     </StackPanel>
                 </Grid>
 
@@ -222,38 +228,15 @@
 
                 <!--  ============ 右栏：WorkBuddy 任务 + 通知（v0.2.9 需求 3）  ============  -->
                 <StackPanel x:Name="RightPane" Grid.Column="2" Orientation="Vertical"
-                            VerticalAlignment="Center" Margin="0,1,0,1">
+                            VerticalAlignment="Center" MinHeight="46" Margin="0,1,0,1">
 
                     <!--
-                      进程在线行（v0.2.11 需求 2）：音乐播放器 / WorkBuddy **进程已打开**但还没内容时，
-                      岛不回到"待机快捷条"，而是切到信息展示状态，至少把"谁在线"显示出来。
-                      两行独立可见：两个都在线就显示两行（此时一定没有真实任务/通知，空间够）。
+                      WorkBuddy 在线行（v0.2.12 需求 3：待机态走"左右分裂"布局）。
+
+                      左栏留给播放器（图标 + 歌名/歌词占位 + 三个播放键），右栏只放
+                      WorkBuddy / 通知 —— 这就是图二的形态。旧版把"音乐"也塞在右栏里，
+                      于是两行小黄标签挤在一起、文字居中，观感很差。
                     -->
-                    <StackPanel x:Name="PresenceMusicRow" Orientation="Vertical" Visibility="Collapsed">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-
-                            <Grid Grid.Row="0" Grid.Column="0" Width="13" Height="13" VerticalAlignment="Center">
-                                <Ellipse x:Name="PresenceMusicDot" Width="7" Height="7" Fill="#FFD60A" />
-                            </Grid>
-
-                            <TextBlock x:Name="PresenceMusicTag" Grid.Row="0" Grid.Column="1" Text="音乐"
-                                       FontSize="10" Margin="6,0,0,0" Foreground="#FFD60A"
-                                       Opacity="0.95" VerticalAlignment="Center" />
-
-                            <local:MarqueeText x:Name="PresenceMusicText" Grid.Row="1" Grid.Column="1" Width="200"
-                                               FontSize="12.5" Foreground="{DynamicResource IslandFg}"
-                                               Margin="6,2,0,0" VerticalAlignment="Center" Text="" />
-                        </Grid>
-                    </StackPanel>
-
                     <StackPanel x:Name="PresenceWbRow" Orientation="Vertical" Visibility="Collapsed">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -269,9 +252,15 @@
                                 <Ellipse x:Name="PresenceWbDot" Width="7" Height="7" Fill="#FFB020" />
                             </Grid>
 
+                            <!--
+                              需求 2：标签原来是 #FFB020 的淡黄小字（10px + 0.95 透明度），
+                              在深色毛玻璃上又细又糊。现在改成近白的冷色 + 半粗 + 11px，
+                              点仍保留品牌琥珀，身份色靠点表达，文字只负责"看清"。
+                            -->
                             <TextBlock x:Name="PresenceWbTag" Grid.Row="0" Grid.Column="1" Text="WorkBuddy"
-                                       FontSize="10" Margin="6,0,0,0" Foreground="#FFB020"
-                                       Opacity="0.95" VerticalAlignment="Center" />
+                                       FontSize="11" FontWeight="SemiBold" Margin="6,0,0,0"
+                                       Foreground="{DynamicResource IslandFg}" Opacity="1"
+                                       VerticalAlignment="Center" />
 
                             <local:MarqueeText x:Name="PresenceWbText" Grid.Row="1" Grid.Column="1" Width="200"
                                                FontSize="12.5" Foreground="{DynamicResource IslandFg}"
@@ -307,8 +296,8 @@
                             </Grid>
 
                             <TextBlock x:Name="StatusTag" Grid.Row="0" Grid.Column="1" Text="WorkBuddy"
-                                       FontSize="10" Margin="6,0,0,0" Foreground="{DynamicResource IslandSubFg}"
-                                       Opacity="0.85" VerticalAlignment="Center" />
+                                       FontSize="11" FontWeight="SemiBold" Margin="6,0,0,0"
+                                       Foreground="{DynamicResource IslandFg}" Opacity="1" VerticalAlignment="Center" />
 
                             <!--  正文：一行实时动作（跑马灯，超宽横滚、悬停暂停、短文本左对齐）  -->
                             <local:MarqueeText x:Name="StatusText" Grid.Row="1" Grid.Column="1" Width="262"
@@ -340,8 +329,8 @@
                             </Grid>
 
                             <TextBlock x:Name="NoticeTag" Grid.Row="0" Grid.Column="1" Text="微信"
-                                       FontSize="10" Margin="6,0,0,0" Foreground="#07C160"
-                                       Opacity="0.95" VerticalAlignment="Center" />
+                                       FontSize="11" FontWeight="SemiBold" Margin="6,0,0,0"
+                                       Foreground="#07C160" Opacity="1" VerticalAlignment="Center" />
 
                             <local:MarqueeText x:Name="NoticeText" Grid.Row="1" Grid.Column="1" Width="262"
                                                FontSize="12.5" Foreground="{DynamicResource IslandFg}"

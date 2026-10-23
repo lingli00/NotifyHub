@@ -39,6 +39,13 @@ public sealed class LogService
     private bool _initialized;
     private bool _dirty;
 
+    /// <summary>去重窗口（毫秒）：同样的 Debug/Info 行在这个时间内重复出现只留第一条。</summary>
+    private const int DuplicateWindowMs = 2000;
+
+    private string _lastLineKey = string.Empty;
+    private DateTime _lastLineAt = DateTime.MinValue;
+    private int _suppressedLines;
+
     public static LogService Shared { get; } = new();
 
     /// <summary>事件列表变化（可能来自后台线程，订阅方需自行切到 UI 线程）。</summary>
@@ -144,6 +151,32 @@ public sealed class LogService
         return true;
     }
 
+    /// <summary>
+    /// 轮询流水日志开关（v0.2.12 需求 5，默认关）。
+    ///
+    /// 为什么需要这个开关：岛是常驻的，收纳倒计时/指针巡检/进程巡检每秒会走几十次，
+    /// 旧版每个分支都写一条 Debug —— 日志文件里 90% 是"收纳倒计时重置 6s"这种流水，
+    /// 真正的通知与报错被淹没，磁盘也在被无意义地追加。
+    /// 现在这类调用统一走 <see cref="Routine"/>：默认**不落盘也不进控制台**，
+    /// 排查问题时在设置里打开开关即可恢复（不用改代码重编译）。
+    /// </summary>
+    public static bool RoutineLoggingEnabled { get; set; }
+
+    /// <summary>
+    /// 写一条"轮询流水"（默认丢弃）。
+    ///
+    /// 判定标准：**没有业务含义的周期性动作**——计时器重置、指针巡检、轮询心跳、
+    /// 状态未变化的重复判定。有业务含义的一律继续用 Info/Warn/Error/Success：
+    /// 通知收到 / 推送成功失败 / 过滤掉某条会话 / 取词成功或失败 / 配置保存 / 启动停止。
+    /// </summary>
+    public void Routine(string module, string message, string? detail = null)
+    {
+        if (RoutineLoggingEnabled)
+        {
+            Write(LogLevel.Debug, module, message, detail);
+        }
+    }
+
     public void Info(string module, string message, string? detail = null) => Write(LogLevel.Info, module, message, detail);
 
     public void Success(string module, string message, string? detail = null) => Write(LogLevel.Success, module, message, detail);
@@ -159,12 +192,29 @@ public sealed class LogService
 
         Debug.WriteLine(line);
 
+        // 完全相同的行在 2 秒内重复出现 → 只留第一条（v0.2.12 需求 5）。
+        // 这是"流水过滤"的兜底：即使某个调用点漏改成 Routine，也不会把日志刷成一片同义行。
+        // 只对 Debug/Info 生效——WRN/ERR 每一条都是证据，绝不合并。
+        var key = $"{level}|{module}|{message}{detailText}";
+
         try
         {
             lock (_gate)
             {
+                var now = DateTime.Now;
+                if (level <= LogLevel.Info
+                    && string.Equals(key, _lastLineKey, StringComparison.Ordinal)
+                    && (now - _lastLineAt).TotalMilliseconds < DuplicateWindowMs)
+                {
+                    _suppressedLines++;
+                    return;
+                }
+
+                _lastLineKey = key;
+                _lastLineAt = now;
+
                 // 控制台缓冲（内存环形，最多 600 行）
-                _console.Add(new ConsoleLine(DateTime.Now, level, module, message + detailText));
+                _console.Add(new ConsoleLine(now, level, module, message + detailText));
                 while (_console.Count > MaxConsoleLines)
                 {
                     _console.RemoveAt(0);
@@ -191,6 +241,18 @@ public sealed class LogService
         catch
         {
             // 订阅方异常不影响日志
+        }
+    }
+
+    /// <summary>被去重丢掉的行数（诊断用）。</summary>
+    public int SuppressedDuplicateLines
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _suppressedLines;
+            }
         }
     }
 

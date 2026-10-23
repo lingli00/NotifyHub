@@ -43,8 +43,11 @@ public sealed class SnapStripWindow : Window
     /// <summary>是否处于「待机快捷模式」：true=左右分区配色 + 双击唤起；false=纯信息态。</summary>
     private bool _standbyMode = true;
 
-    /// <summary>悬停展开的延时（2023 手感的"意图停留"，避免路过就弹开）。</summary>
-    private const int HoverExpandDelayMs = 260;
+    /// <summary>
+    /// 悬停展开的延时（v0.2.12 需求 4：260 → 180ms）。
+    /// 窄条只有 12px 厚，用户"停在上面"的意图已经很明显，不需要那么长的确认期。
+    /// </summary>
+    private const int HoverExpandDelayMs = 180;
 
     /// <summary>左右分段比例（百分比，来自设置里的"区域比例"滑块；50 = 对半）。</summary>
     public Func<int>? SplitRatioProvider { get; set; }
@@ -113,6 +116,16 @@ public sealed class SnapStripWindow : Window
         {
             ApplyHover(true);
             ArmHoverExpand();
+        };
+
+        // 有的机器上 MouseEnter 之后就不再派发 MouseMove（NOACTIVATE 分层窗），
+        // 所以进入那一刻先把分区定下来，别等 MouseMove（需求 2 的分区配色靠它）。
+        MouseEnter += (_, e) =>
+        {
+            if (_standbyMode)
+            {
+                UpdateHoverZone(e.GetPosition(this).X);
+            }
         };
 
         MouseLeave += (_, _) =>
@@ -207,12 +220,57 @@ public sealed class SnapStripWindow : Window
     {
         _hoverExpandTimer?.Stop();
 
-        if (_standbyMode || !IsMouseOver)
+        if (_standbyMode)
         {
             return;
         }
 
+        // **不要用 IsMouseOver**（v0.2.12 需求 4 的根因）：
+        // 窄条是 WS_EX_NOACTIVATE + AllowsTransparency 的分层窗，鼠标一走神
+        // 系统就不会再给它派发鼠标消息，IsMouseOver 随时可能是 false；
+        // 结果就是"悬停只放大、永远不展开"。这里直接比对光标与窗口矩形。
+        if (!IsCursorInside())
+        {
+            LogService.Shared.Routine("IslandStrip", "悬停展开取消", "光标已离开窄条");
+            return;
+        }
+
+        LogService.Shared.Write(LogLevel.Debug, "IslandStrip", "悬停展开窄条", $"zone={HoverZone}");
         HoverExpandRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>光标是否落在窄条窗口矩形内（物理像素比较，避开 DPI 换算误差）。</summary>
+    public bool IsCursorInside()
+    {
+        try
+        {
+            if (!IsLoaded || Width < 1 || Height < 1)
+            {
+                return false;
+            }
+
+            if (!NativeMethods.GetCursorPos(out var point))
+            {
+                return false;
+            }
+
+            var scale = ScreenMetrics.ScaleOf(this);
+            if (scale <= 0.1)
+            {
+                scale = 1;
+            }
+
+            var left = Left * scale;
+            var top = Top * scale;
+            var right = left + (Width * scale);
+            var bottom = top + (Height * scale);
+
+            return point.X >= left && point.X <= right && point.Y >= top && point.Y <= bottom;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>把窗口内 x 换算成左/右分区。</summary>

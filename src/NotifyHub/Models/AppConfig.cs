@@ -160,6 +160,28 @@ public sealed class AppConfig
     public int LyricsFontSize { get; set; } = 13;
 
     /// <summary>
+    /// 联网补词（v0.2.12 需求 1）。
+    ///
+    /// **优先本地**：只要本地 `.lrc`（播放器缓存 / 歌曲同目录）能对上歌名+歌手，
+    /// 就绝不再联网——这是需求"优先读取播放器自带歌词"的落地。
+    /// 本地确实没有时才走这一步，而且只接受**歌名与歌手都严格对上**的检索结果
+    /// （旧版 0.6 的宽松阈值会配到翻唱/串烧/live 版，那正是"歌词内容不对、时间轴也就跟着错"）。
+    /// 关掉它 = 完全不发网络请求，本地没有就不显示歌词。
+    /// </summary>
+    public bool LyricsNetworkFallback { get; set; } = true;
+
+    /// <summary>
+    /// 歌词时间微调（毫秒，v0.2.12 需求 1，-2000~+2000）。
+    ///
+    /// 个别播放器/歌词源的固有偏差（比如整体慢 300ms）用它一次性对齐，
+    /// 比在代码里猜补偿系数可靠得多。正数 = 歌词提前显示。
+    /// </summary>
+    public int LyricOffsetMs { get; set; }
+
+    /// <summary>额外的本地歌词目录（分号分隔，v0.2.12 需求 1；给把歌放 D 盘的用户用）。</summary>
+    public string LyricsExtraPaths { get; set; } = string.Empty;
+
+    /// <summary>
     /// 超时自动收纳总开关（v0.2.7 需求 2）。关闭后灵动岛在内容存在期间一直展开，
     /// 不再收成顶部细条。
     /// </summary>
@@ -198,6 +220,11 @@ public sealed class AppConfig
     public const int MinIslandSplitRatio = 25;
 
     public const int MaxIslandSplitRatio = 75;
+
+    /// <summary>歌词时间微调允许范围（毫秒）。</summary>
+    public const int MinLyricOffsetMs = -2000;
+
+    public const int MaxLyricOffsetMs = 2000;
 
     /// <summary>歌词字号允许范围。</summary>
     public const int MinLyricsFontSize = 10;
@@ -274,6 +301,8 @@ public sealed class AppConfig
 
         // v0.2.7：歌词字号与自动收纳时长收敛到安全区间
         LyricsFontSize = Math.Clamp(LyricsFontSize, MinLyricsFontSize, MaxLyricsFontSize);
+        LyricOffsetMs = Math.Clamp(LyricOffsetMs, MinLyricOffsetMs, MaxLyricOffsetMs);
+        LyricsExtraPaths = (LyricsExtraPaths ?? string.Empty).Trim();
         AutoCollapseSeconds = Math.Clamp(AutoCollapseSeconds, MinAutoCollapseSeconds, MaxAutoCollapseSeconds);
 
         // v0.2.9 需求 6：岛宽度与左右分配比例

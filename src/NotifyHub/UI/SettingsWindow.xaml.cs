@@ -60,6 +60,7 @@ public partial class SettingsWindow : Window
         // Minimum，早挂的话后面的数值 TextBlock 还是 null）
         AutoCollapseSlider.ValueChanged += OnAutoCollapseSecondsChanged;
         LyricsFontSizeSlider.ValueChanged += OnLyricsFontSizeChanged;
+        LyricOffsetSlider.ValueChanged += OnLyricOffsetChanged;
 
         // v0.2.9 需求 6：两个布局滑块（同样延后挂载，XAML 加载期会强制收敛 Value）
         IslandWidthSlider.ValueChanged += OnIslandWidthChanged;
@@ -257,6 +258,12 @@ public partial class SettingsWindow : Window
         var lyricSize = Math.Clamp(config.LyricsFontSize, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize);
         LyricsFontSizeSlider.Value = lyricSize;
         LyricsFontSizeText.Text = $"{lyricSize}";
+
+        // v0.2.12 需求 1：歌词来源与时间微调
+        LyricsNetworkCheck.IsChecked = config.LyricsNetworkFallback;
+        var offset = Math.Clamp(config.LyricOffsetMs, AppConfig.MinLyricOffsetMs, AppConfig.MaxLyricOffsetMs);
+        LyricOffsetSlider.Value = offset;
+        LyricOffsetText.Text = $"{offset} ms";
 
         // v0.2.7 需求 2：超时自动收纳（开关 + 时长 + 音乐播放例外）
         AutoCollapseCheck.IsChecked = config.AutoCollapseEnabled;
@@ -607,6 +614,14 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>v0.2.7 需求 1：歌词字号滑动时同步数字（10~22）。</summary>
+    private void OnLyricOffsetChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LyricOffsetText is not null)
+        {
+            LyricOffsetText.Text = $"{(int)Math.Round(e.NewValue)} ms";
+        }
+    }
+
     private void OnLyricsFontSizeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (LyricsFontSizeText is not null)
@@ -833,6 +848,9 @@ public partial class SettingsWindow : Window
         next.LyricsEnabled = LyricsEnabledCheck.IsChecked == true;
         next.LyricsFontSize = (int)Math.Round(Math.Clamp(
             LyricsFontSizeSlider.Value, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize));
+        next.LyricsNetworkFallback = LyricsNetworkCheck.IsChecked == true;
+        next.LyricOffsetMs = (int)Math.Round(Math.Clamp(
+            LyricOffsetSlider.Value, AppConfig.MinLyricOffsetMs, AppConfig.MaxLyricOffsetMs));
 
         // v0.2.7 需求 2：统一收纳（开关 + 时长 + 音乐播放例外）
         next.AutoCollapseEnabled = AutoCollapseCheck.IsChecked == true;

@@ -1,8 +1,22 @@
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using NotifyHub.Models;
 
 namespace NotifyHub.Services;
+
+/// <summary>歌词来源（v0.2.12 需求 1：本地优先，日志与设置页都要能看到用的是哪一种）。</summary>
+public enum LyricOrigin
+{
+    /// <summary>没有歌词。</summary>
+    None = 0,
+
+    /// <summary>本地 .lrc（播放器缓存 / 音乐库同目录）。</summary>
+    LocalFile = 1,
+
+    /// <summary>联网检索（默认关闭，仅当用户显式允许时兜底）。</summary>
+    Network = 2,
+}
 
 /// <summary>
 /// 一行歌词（时间点 + 原文 + 可选译文）。
@@ -15,11 +29,17 @@ public sealed record LyricLine(TimeSpan Time, string Text, string Translation = 
 }
 
 /// <summary>
-/// 歌词服务（v0.2.6 需求 5）：按「歌名 + 歌手」在线取 LRC 并解析成带时间轴的行。
+/// 歌词服务（v0.2.12 需求 1 重做）：**先读播放器自己的本地歌词**，联网只作可选兜底。
 ///
-/// 为什么走在线：Windows 的 SMTC 只给标题/歌手/进度，不暴露媒体文件路径，
-/// 本地 .lrc 无从定位；因此在能上网时用网易云公开接口按名字检索。
-/// 取不到（歌名对不上/网络不通）就返回 null——岛内自动收起歌词区，绝不显示错词。
+/// 旧版为什么错：SMTC 只给标题/歌手/进度，不暴露媒体文件路径，于是只能拿歌名去
+/// 网易云搜索 —— 同名、翻唱、串烧、live 版一搜就配错，用户看到的就是
+/// "某些歌歌词内容和时间都对不上"。而那些歌的本地 `.lrc` 其实就在播放器缓存里。
+///
+/// 现在的顺序：
+///   1. <see cref="LocalLyricsLibrary"/> 在音乐库 / 播放器歌词缓存里按歌名+歌手找 `.lrc`；
+///   2. 找到 → 用它（含 `[offset:]` 偏移、过滤作词作曲等元信息行）；
+///   3. 找不到且用户显式打开了「联网补词」→ 才走网易云；
+///   4. 都没有 → 返回 null，岛内收起歌词区，**绝不显示错词**。
 ///
 /// 设计要点：
 ///   1. 结果按「歌名|歌手」缓存（含失败结果），换歌不重复请求；
@@ -34,7 +54,12 @@ public sealed partial class LyricsService
     private static readonly HttpClient Http = CreateClient();
 
     private readonly LogService _log;
+    private readonly Func<AppConfig> _config;
+    private readonly LocalLyricsLibrary _local;
     private readonly Dictionary<string, IReadOnlyList<LyricLine>?> _cache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>每首歌的歌词来源（诊断 / 设置页展示用）。</summary>
+    private readonly Dictionary<string, LyricOrigin> _origins = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// 临时失败（超时/网络异常）的冻结表：key → 可以重试的时刻。
@@ -53,7 +78,40 @@ public sealed partial class LyricsService
     /// <summary>失败后的重试冻结时长（秒）。</summary>
     private const int FailureRetrySeconds = 25;
 
-    public LyricsService(LogService log) => _log = log;
+    /// <summary>联网兜底的最低匹配分（0.9 = 歌名精确 + 歌手命中）。</summary>
+    private const double MinNetworkMatchScore = 0.9;
+
+    public LyricsService(LogService log, Func<AppConfig>? config = null)
+    {
+        _log = log;
+        _config = config ?? (() => new AppConfig());
+        _local = new LocalLyricsLibrary(log, () => _config());
+    }
+
+    /// <summary>本地歌词库（设置页"重新扫描本地歌词"用）。</summary>
+    public LocalLyricsLibrary LocalLibrary => _local;
+
+    /// <summary>这首歌上一次的歌词来源。</summary>
+    public LyricOrigin OriginOf(string title, string artist)
+    {
+        lock (_gate)
+        {
+            return _origins.TryGetValue($"{title}|{artist}", out var origin) ? origin : LyricOrigin.None;
+        }
+    }
+
+    /// <summary>是否允许联网补词（默认否：需求 1 明确要求不要网络搜词）。</summary>
+    private bool NetworkAllowed()
+    {
+        try
+        {
+            return _config().LyricsNetworkFallback;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     /// <summary>缓存命中数（诊断用）。</summary>
     public int CacheCount
@@ -98,33 +156,68 @@ public sealed partial class LyricsService
 
         IReadOnlyList<LyricLine>? result = null;
         var failed = false;
+        var origin = LyricOrigin.None;
+        var originDetail = string.Empty;
 
+        // ---------- 1) 本地优先（v0.2.12 需求 1）----------
+        // 播放器自己的歌词才是"这首歌的歌词"，联网搜的是"歌名相同的某首歌的歌词"。
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeout.CancelAfter(TimeSpan.FromSeconds(6));
-
-            var songId = await SearchSongIdAsync(title, artist, timeout.Token).ConfigureAwait(false);
-            if (songId is not null)
+            var local = await Task.Run(() => _local.Find(title, artist), token).ConfigureAwait(false);
+            if (local is not null)
             {
-                var (lrc, translated) = await FetchLyricAsync(songId.Value, timeout.Token).ConfigureAwait(false);
-                var lines = ParseLrc(lrc);
+                var lines = ParseLrc(local.Text);
                 if (lines.Count > 0)
                 {
-                    // v0.2.8 需求 2：歌词资源自带翻译时自动附带（外文歌才有，中文歌接口返回空）
-                    result = MergeTranslation(lines, translated);
+                    result = lines;
+                    origin = LyricOrigin.LocalFile;
+                    originDetail = local.Path;
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            // 超时：属于"这一次没成功"，允许稍后重试（旧版会永久缓存 null）
             failed = true;
         }
         catch (Exception ex)
         {
+            // 本地读失败不算"这首歌没词"，允许下次重试
             failed = true;
-            _log.Warn("Lyrics", $"取歌词失败: {title}", $"{ex.GetType().Name}: {ex.Message}");
+            _log.Warn("Lyrics", $"读取本地歌词失败: {title}", ex.Message);
+        }
+
+        // ---------- 2) 联网兜底（默认关闭）----------
+        if (result is null && !failed && NetworkAllowed())
+        {
+            try
+            {
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+                timeout.CancelAfter(TimeSpan.FromSeconds(6));
+
+                var songId = await SearchSongIdAsync(title, artist, timeout.Token).ConfigureAwait(false);
+                if (songId is not null)
+                {
+                    var (lrc, translated) = await FetchLyricAsync(songId.Value, timeout.Token).ConfigureAwait(false);
+                    var lines = ParseLrc(lrc);
+                    if (lines.Count > 0)
+                    {
+                        // v0.2.8 需求 2：歌词资源自带翻译时自动附带（外文歌才有，中文歌接口返回空）
+                        result = MergeTranslation(lines, translated);
+                        origin = LyricOrigin.Network;
+                        originDetail = "网易云检索";
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // 超时：属于"这一次没成功"，允许稍后重试（旧版会永久缓存 null）
+                failed = true;
+            }
+            catch (Exception ex)
+            {
+                failed = true;
+                _log.Warn("Lyrics", $"取歌词失败: {title}", $"{ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         lock (_gate)
@@ -143,6 +236,7 @@ public sealed partial class LyricsService
                 }
 
                 _cache[key] = result;
+                _origins[key] = result is null ? LyricOrigin.None : origin;
                 _retryAfter.Remove(key);
             }
         }
@@ -153,13 +247,19 @@ public sealed partial class LyricsService
         }
         else if (result is null)
         {
-            _log.Write(LogLevel.Debug, "Lyrics", $"无歌词: {title} - {artist}");
+            var why = NetworkAllowed() ? "本地与网络都没找到" : "本地没有（联网补词未开启）";
+            _log.Write(LogLevel.Debug, "Lyrics", $"无歌词: {title} - {artist}", why);
         }
         else
         {
             var translatedCount = result.Count(l => l.HasTranslation);
             var suffix = translatedCount > 0 ? $"，含译文 {translatedCount} 行" : string.Empty;
-            _log.Write(LogLevel.Debug, "Lyrics", $"歌词已就绪: {title}（{result.Count} 行{suffix}）");
+            var from = origin == LyricOrigin.LocalFile ? "本地" : "网络";
+            _log.Write(
+                LogLevel.Debug,
+                "Lyrics",
+                $"歌词已就绪（{from}）: {title}（{result.Count} 行{suffix}）",
+                originDetail);
         }
 
         return result;
@@ -226,8 +326,10 @@ public sealed partial class LyricsService
             }
         }
 
-        // 匹配度太低就当没找到（避免给用户看一首完全不相干的歌的歌词）
-        return bestScore >= 0.6 ? bestId : null;
+        // 严格匹配（v0.2.12 需求 1）：只接受"歌名与歌手都对上"的结果（0.75 + 0.25 = 1.0）。
+        // 旧版用 0.6，会把"歌名包含"的翻唱/串烧/live 版也配进来 ——
+        // 用户看到的就是"歌词内容不对、时间轴对不上，还只有部分歌复现"。
+        return bestScore >= MinNetworkMatchScore ? bestId : null;
     }
 
     /// <summary>取原文与译文（tv=-1 = 要求返回翻译歌词，没有翻译时 tlyric.lyric 为空串）。</summary>
@@ -282,11 +384,20 @@ public sealed partial class LyricsService
     // ---------------- 解析与匹配（纯函数，自检覆盖） ----------------
 
     /// <summary>
-    /// 解析 LRC。支持一行多个时间标签 `[00:12.34][00:56.78]歌词`、
-    /// 毫秒两位或三位、以及 `[mm:ss]`。元信息行（ti/ar/al/by/offset）自动跳过。
+    /// 解析 LRC（v0.2.12 需求 1 重做）。支持：
+    ///   * 一行多个时间标签 `[00:12.34][00:56.78]歌词`；
+    ///   * 毫秒两位或三位、`[mm:ss]`；
+    ///   * **`[offset:±毫秒]` 整体偏移**（旧版完全忽略这个标签，于是"部分歌曲"整体偏掉，
+    ///     正是用户说的"某些歌时间对不上、别的歌没事"）；
+    ///   * 过滤作词/作曲/编曲/制作人… 这些元信息行（旧版会把它们当歌词显示，
+    ///     用户看到的第一句歌词是"作词 : 某某"，就是"歌词内容不对"）。
     /// </summary>
-    public static IReadOnlyList<LyricLine> ParseLrc(string? lrc)
+    public static IReadOnlyList<LyricLine> ParseLrc(string? lrc) => ParseLrc(lrc, out _);
+
+    /// <summary>同上，另返回文件里声明的 `[offset:]`（毫秒，没有则 0）。</summary>
+    public static IReadOnlyList<LyricLine> ParseLrc(string? lrc, out int offsetMs)
     {
+        offsetMs = 0;
         var lines = new List<LyricLine>();
         if (string.IsNullOrWhiteSpace(lrc))
         {
@@ -295,10 +406,16 @@ public sealed partial class LyricsService
 
         foreach (var raw in lrc.Split('\n'))
         {
-            var text = raw.Replace("\r", string.Empty);
+            var text = raw.Replace("\r", string.Empty).Trim();
             if (text.Length == 0)
             {
                 continue;
+            }
+
+            var offsetMatch = OffsetTagRegex().Match(text);
+            if (offsetMatch.Success && int.TryParse(offsetMatch.Groups["v"].Value, out var declared))
+            {
+                offsetMs = declared;
             }
 
             var matches = TimeTagRegex().Matches(text);
@@ -307,11 +424,16 @@ public sealed partial class LyricsService
                 continue;
             }
 
-            // 去掉所有时间标签后剩下的就是歌词正文
-            var content = TimeTagRegex().Replace(text, string.Empty).Trim();
+            // 去掉时间标签与 [ti:]/[ar:]/[by:] 等元标签后剩下的才是正文
+            var content = MetaTagRegex().Replace(TimeTagRegex().Replace(text, string.Empty), string.Empty).Trim();
             if (content.Length == 0)
             {
                 continue; // 纯时间标签的空行（间奏）没有可显示内容
+            }
+
+            if (IsMetadataLine(content))
+            {
+                continue; // "作词 : 某某" 不是歌词
             }
 
             foreach (Match match in matches)
@@ -334,8 +456,45 @@ public sealed partial class LyricsService
             }
         }
 
+        // 整篇偏移（[offset:+500] = 歌词比音频晚 500ms 出现 → 时间轴整体后移）
+        if (offsetMs != 0)
+        {
+            for (var i = 0; i < lines.Count; i++)
+            {
+                var shifted = lines[i].Time + TimeSpan.FromMilliseconds(offsetMs);
+                if (shifted < TimeSpan.Zero)
+                {
+                    shifted = TimeSpan.Zero;
+                }
+
+                lines[i] = lines[i] with { Time = shifted };
+            }
+        }
+
         lines.Sort((a, b) => a.Time.CompareTo(b.Time));
         return lines;
+    }
+
+    /// <summary>
+    /// 这一行是不是"元信息"而不是歌词：作词/作曲/编曲/制作人…，
+    /// 以及纯音乐提示语。它们带时间标签，但显示出来就是错的歌词。
+    /// </summary>
+    public static bool IsMetadataLine(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return true;
+        }
+
+        var text = content.Trim();
+        if (MetaTextRegex().IsMatch(text))
+        {
+            return true;
+        }
+
+        return text.Contains("纯音乐，请欣赏", StringComparison.Ordinal)
+               || text.Contains("此歌曲为没有填词的纯音乐", StringComparison.Ordinal)
+               || text.Contains("纯音乐请欣赏", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -513,6 +672,20 @@ public sealed partial class LyricsService
 
     [GeneratedRegex(@"\([^)]*\)|（[^）]*）|\[[^\]]*\]")]
     private static partial Regex BracketRegex();
+
+    /// <summary>`[offset:+500]` / `[offset:-200]`（大小写不敏感）。</summary>
+    [GeneratedRegex(@"\[\s*offset\s*:\s*(?<v>[+-]?\d+)\s*\]", RegexOptions.IgnoreCase)]
+    private static partial Regex OffsetTagRegex();
+
+    /// <summary>`[ti:xxx]` / `[ar:xxx]` / `[by:xxx]` 这类元标签。</summary>
+    [GeneratedRegex(@"\[\s*[a-zA-Z]{1,10}\s*:[^\]]*\]")]
+    private static partial Regex MetaTagRegex();
+
+    /// <summary>作词/作曲… 这类元信息行（只在行首匹配，避免误伤正文）。</summary>
+    [GeneratedRegex(
+        @"^(作词|作曲|编曲|词|曲|编|制作人|监制|混音|母带|录音|出品|发行|和声|吉他|贝斯|鼓|弦乐|钢琴|词曲|制作|统筹|策划|企划|宣发|视觉|封面|原唱|翻唱|OP|SP)\s*[:：]",
+        RegexOptions.IgnoreCase)]
+    private static partial Regex MetaTextRegex();
 
     [GeneratedRegex(@"\b(feat|ft|live|remix|version|伴奏|纯音乐)\b")]
     private static partial Regex SuffixRegex();

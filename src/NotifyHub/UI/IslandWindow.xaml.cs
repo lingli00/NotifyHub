@@ -79,6 +79,12 @@ public partial class IslandWindow : Window
 
     /// <summary>歌名区宽度上下限（DIP）：太短会把标题挤成跑马灯，太长会把岛撑宽。</summary>
     private const double MinTitleWidth = 104;
+
+    /// <summary>
+    /// 待机态歌名区的固定留白宽度（v0.2.12 需求 3）：没有歌时这里什么都不显示，
+    /// 但要占住位置，否则岛会缩成一个只有图标和三键的窄条，和右侧不对称。
+    /// </summary>
+    private const double MusicTitleMinWidth = 132;
     private const double MaxTitleWidthWithTask = 200;
     private const double MaxTitleWidthSolo = 280;
 
@@ -107,8 +113,11 @@ public partial class IslandWindow : Window
     /// <summary>WorkBuddy 进程是否在运行（v0.2.11 需求 2）。</summary>
     private bool _presenceWorkbuddy;
 
-    /// <summary>当前是否在显示"进程在线"占位行。</summary>
+    /// <summary>当前是否在显示"WorkBuddy 在线"占位行。</summary>
     private bool _presenceVisible;
+
+    /// <summary>检测到的播放器进程名（v0.2.12 需求 3：没有播放会话时也要能显示它的图标）。</summary>
+    private string? _presenceMusicProcess;
 
     /// <summary>
     /// 指针是否正压在岛上（v0.2.10 需求 3）。
@@ -173,8 +182,6 @@ public partial class IslandWindow : Window
     /// 空闲展开（v0.2.9 需求 2）：用户手动点开细条时置 true。
     /// 此时岛上没有任何内容也保持展开，超时后回到细条。
     /// </summary>
-    /// <summary>占位：v0.2.10 起不再允许"无内容也展开"，字段保留只为兼容旧日志格式。</summary>
-    private bool _idleExpanded;
 
     /// <summary>岛内通知被点击（由 IslandController 订阅后打开对应消息）。</summary>
     public event EventHandler<NotifyMessage>? NoticeClicked;
@@ -490,6 +497,11 @@ public partial class IslandWindow : Window
 
         LyricsPanel.Visibility = hasLyric ? Visibility.Visible : Visibility.Collapsed;
 
+        // 有词 → 占位让位；没词但音乐组还在（待机）→ 用占位撑住"歌词区域留空"
+        LyricSpacer.Visibility = hasLyric || !_musicVisible
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
         if (hasLyric != wasVisible)
         {
             UpdateChrome();
@@ -592,7 +604,6 @@ public partial class IslandWindow : Window
         _notice = message;
         _noticeVisible = true;
         _noticeAt = DateTime.Now;
-        _idleExpanded = false;
 
         var accent = SourceColors.AccentOf(message);
         var brush = ThemePalette.Brush(accent);
@@ -707,22 +718,26 @@ public partial class IslandWindow : Window
     /// <summary>
     /// 由控制器推送"进程是否在线"（v0.2.11 需求 2）：进程一开就切信息展示模式，不等播放/任务。
     /// </summary>
-    public void SetPresence(bool musicRunning, bool workBuddyRunning)
+    public void SetPresence(bool musicRunning, bool workBuddyRunning, string? musicProcess = null)
     {
-        if (_presenceMusic == musicRunning && _presenceWorkbuddy == workBuddyRunning)
+        var processChanged = !string.Equals(_presenceMusicProcess, musicProcess, StringComparison.OrdinalIgnoreCase);
+
+        if (_presenceMusic == musicRunning && _presenceWorkbuddy == workBuddyRunning && !processChanged)
         {
             return;
         }
 
         _presenceMusic = musicRunning;
         _presenceWorkbuddy = workBuddyRunning;
+        _presenceMusicProcess = musicProcess;
 
-        LogService.Shared.Write(
-            LogLevel.Debug,
+        LogService.Shared.Routine(
             "IslandMode",
             "进程在线状态更新",
-            $"music={musicRunning} workbuddy={workBuddyRunning} standby={IsIdleStandby}");
+            $"music={musicRunning}({musicProcess ?? "-"}) workbuddy={workBuddyRunning} standby={IsIdleStandby}");
 
+        // 音乐组是否显示取决于 presence，所以这边也要重建一次
+        UpdateMusicGroup();
         UpdateChrome();
         Evaluate();
     }
@@ -736,23 +751,18 @@ public partial class IslandWindow : Window
     {
         var hasReal = _statusVisible || _noticeVisible;
 
-        var showMusic = !hasReal && _presenceMusic && !_musicVisible;
+        // 需求 3 的左右分裂布局：**播放器归左栏**（图标 + 空歌名 + 三键），
+        // 右栏只留 WorkBuddy / 通知，不再有"音乐"这行小黄标签。
         var showWb = !hasReal && _presenceWorkbuddy && !_statusVisible;
 
-        PresenceMusicRow.Visibility = showMusic ? Visibility.Visible : Visibility.Collapsed;
         PresenceWbRow.Visibility = showWb ? Visibility.Visible : Visibility.Collapsed;
-
-        if (showMusic)
-        {
-            PresenceMusicText.Text = "播放器已打开 · 等待播放";
-        }
 
         if (showWb)
         {
             PresenceWbText.Text = "已打开 · 等待任务";
         }
 
-        _presenceVisible = showMusic || showWb;
+        _presenceVisible = showWb;
     }
 
     public bool IsNoticeShown => _noticeVisible;
@@ -1003,7 +1013,11 @@ public partial class IslandWindow : Window
     private void UpdateMusicGroup()
     {
         var enabled = MusicEnabledProvider?.Invoke() ?? true;
-        _musicVisible = enabled && (_musicPlaying || _musicTimer.IsEnabled);
+
+        // v0.2.12 需求 3：**播放器进程一开就保留音乐组**，不等真的播放。
+        // 这样待机态左侧就是"图标 + 空的歌名/歌词区 + 三个播放键"，
+        // 和右侧的 WorkBuddy 区块形成左右分裂布局，而不是把两行小字挤在右栏。
+        _musicVisible = enabled && (_musicPlaying || _musicTimer.IsEnabled || _presenceMusic);
 
         MusicGroup.Visibility = _musicVisible ? Visibility.Visible : Visibility.Collapsed;
 
@@ -1015,6 +1029,9 @@ public partial class IslandWindow : Window
 
         LyricsPanel.Visibility = keepLyrics ? Visibility.Visible : Visibility.Collapsed;
 
+        // 没有歌词但音乐组在（待机）：留一条空白占位，"歌词区域留空" + 左右等高
+        LyricSpacer.Visibility = _musicVisible && !keepLyrics ? Visibility.Visible : Visibility.Collapsed;
+
         if (_media is not null)
         {
             var title = string.IsNullOrWhiteSpace(_media.Title) ? "未知曲目" : _media.Title;
@@ -1022,6 +1039,14 @@ public partial class IslandWindow : Window
             MusicText.Text = string.IsNullOrWhiteSpace(artist) ? title : $"{title} - {artist}";
             PlayPauseGlyph.Data = (Geometry)FindResource(_media.IsPlaying ? "GlyphPause" : "GlyphPlay");
             UpdateMusicIcon(_media);
+        }
+        else if (_musicVisible)
+        {
+            // 待机：歌名/歌手**留空**（需求原话），图标仍然显示 - 用户一眼能认出是哪个播放器
+            MusicText.Text = string.Empty;
+            MusicText.Width = MusicTitleMinWidth;
+            PlayPauseGlyph.Data = (Geometry)FindResource("GlyphPlay");
+            UpdateMusicIcon(null);
         }
 
         UpdateChrome();
@@ -1031,11 +1056,18 @@ public partial class IslandWindow : Window
     /// 岛最左侧的当前播放 App 图标（需求 5）：从进程 exe 提取透明图标，
     /// 圆角由外层 Border 裁剪；提不到图标时回落到 ♪ 字符，无播放时整组收起。
     /// </summary>
-    private void UpdateMusicIcon(MediaInfo media)
+    private void UpdateMusicIcon(MediaInfo? media)
     {
         try
         {
-            var icon = AppIconExtractor.GetIcon(media.ProcessName);
+            // 没有播放会话时用 presence 巡检到的进程名（需求 3：待机也要保留播放器图标）
+            var process = media?.ProcessName;
+            if (string.IsNullOrWhiteSpace(process))
+            {
+                process = _presenceMusicProcess;
+            }
+
+            var icon = string.IsNullOrWhiteSpace(process) ? null : AppIconExtractor.GetIcon(process!);
             if (icon is not null)
             {
                 MusicAppIcon.Source = icon;
@@ -1072,7 +1104,12 @@ public partial class IslandWindow : Window
         // 真实任务/通知出现 → 进程在线占位行让位（v0.2.11 需求 2）
         UpdatePresenceRows();
 
-        Divider.Visibility = _musicVisible && _statusVisible ? Visibility.Visible : Visibility.Collapsed;
+        // 左栏（播放器）与右栏（任务/通知/WorkBuddy 在线）同时有东西 → 画竖分隔线。
+        // 待机态也算：需求 3 要的是"左右分裂"，有分界线一眼就看得出两栏（v0.2.12）
+        var rightHasContent = _statusVisible || _noticeVisible || _presenceVisible;
+        Divider.Visibility = _musicVisible && rightHasContent
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         BalanceWidths();
         SyncStripState();
 
@@ -1208,8 +1245,7 @@ public partial class IslandWindow : Window
                         * widthFactor * rightFactor;
         var statusNatural = Math.Max(
             StatusText.NaturalWidth,
-            Math.Max(NoticeText.NaturalWidth,
-                Math.Max(PresenceMusicText.NaturalWidth, PresenceWbText.NaturalWidth)));
+            Math.Max(NoticeText.NaturalWidth, PresenceWbText.NaturalWidth));
 
         // 单内容时不要 160 的下限：短消息被撑到 160 会在右侧留下一片空白，
         // 岛本身是居中的，那片空白就把可见文字"推"到左边去（需求 1 的观感来源之一）。
@@ -1229,10 +1265,9 @@ public partial class IslandWindow : Window
             NoticeText.Width = statusWidth;
         }
 
-        // 进程在线行同样按这一列宽（否则它固定 200 会把岛撑成别的宽度）
-        if (double.IsNaN(PresenceMusicText.Width) || Math.Abs(PresenceMusicText.Width - statusWidth) > 0.5)
+        // WorkBuddy 在线行同样按这一列宽（否则固定 200 会把岛撑成别的宽度）
+        if (double.IsNaN(PresenceWbText.Width) || Math.Abs(PresenceWbText.Width - statusWidth) > 0.5)
         {
-            PresenceMusicText.Width = statusWidth;
             PresenceWbText.Width = statusWidth;
         }
 
@@ -1424,7 +1459,6 @@ public partial class IslandWindow : Window
     private void HideEverything()
     {
         _autoTimer.Stop();
-        _idleExpanded = false;
 
         if (_stripMode)
         {
@@ -1824,10 +1858,12 @@ public partial class IslandWindow : Window
         _autoTimer.Interval = TimeSpan.FromSeconds(seconds);
         _autoTimer.Start();
 
-        LogService.Shared.Write(
-            LogLevel.Debug, "IslandAuto",
+        // 这是**最典型的高频流水**：媒体轮询/指针巡检每秒都会走到这里。
+        // 走 Routine，默认不落盘（v0.2.12 需求 5）。
+        LogService.Shared.Routine(
+            "IslandAuto",
             $"收纳倒计时重置 {seconds:F0}s",
-            $"hidden={_hidden} strip={_stripMode} hover={Pill.IsMouseOver} music={_musicPlaying} status={_statusVisible} notice={_noticeVisible}");
+            $"hidden={_hidden} strip={_stripMode} hover={_pointerOverIsland} music={_musicPlaying} status={_statusVisible} notice={_noticeVisible}");
     }
 
     /// <summary>
@@ -1839,8 +1875,8 @@ public partial class IslandWindow : Window
     {
         _autoTimer.Stop();
 
-        LogService.Shared.Write(
-            LogLevel.Debug, "IslandAuto", "收纳计时到点",
+        LogService.Shared.Routine(
+            "IslandAuto", "收纳计时到点",
             $"hidden={_hidden} drag={_dragging} sliding={_sliding} strip={_stripMode} " +
             $"hover={Pill.IsMouseOver} done={IsDoneState} transient={_statusTransient} " +
             $"music={_musicPlaying} keepOpen={KeepOpenWhilePlaying()}");
@@ -1889,7 +1925,6 @@ public partial class IslandWindow : Window
         }
 
         // 空闲手动展开的时间到了：撤销撑住标志，正常收成细条
-        _idleExpanded = false;
 
         CollapseToStrip();
     }
@@ -2095,19 +2130,18 @@ public partial class IslandWindow : Window
 
         // 没有任何内容就不展开（v0.2.10 需求 2）：待机态只有窄条，
         // 展开一个空壳只会在屏幕上画出一个竖椭圆。
-        if (!_statusVisible && !_musicVisible && !_noticeVisible)
+        if (!_statusVisible && !_musicVisible && !_noticeVisible && !_presenceVisible)
         {
-            LogService.Shared.Write(LogLevel.Debug, "IslandAuto", "无内容，忽略展开请求", "只保留窄条");
+            LogService.Shared.Routine("IslandAuto", "无内容，忽略展开请求", "只保留窄条");
             return;
         }
 
-        LogService.Shared.Write(LogLevel.Debug, "IslandAuto", "从细条展开", $"status={_statusVisible} music={_musicPlaying} notice={_noticeVisible}");
+        LogService.Shared.Routine("IslandAuto", "从细条展开", $"status={_statusVisible} music={_musicPlaying} presence={_presenceVisible}");
 
         var token = ++_animToken;
         _stripMode = false;
         _strip?.Collapse();
         _snapped = false;
-        _idleExpanded = false;
 
         // 先落 _hidden，让随后的 SizeChanged / 布局回调能正常参与居中
         _hidden = false;
@@ -2179,8 +2213,7 @@ public partial class IslandWindow : Window
             // 需求 2：双击快捷唤起**只在待机空闲模式**生效；信息展示模式下不抢占双击
             if (!IsIdleStandby)
             {
-                LogService.Shared.Write(
-                    LogLevel.Debug,
+                LogService.Shared.Routine(
                     "IslandStrip",
                     "非待机模式，忽略双击",
                     $"zone={zone} standby={IsIdleStandby}");
@@ -2456,8 +2489,7 @@ public partial class IslandWindow : Window
                 if (!CanStartDrag(lParam))
                 {
                     // 命中播放按钮或固定模式：这一下交给 WPF 自己处理点击
-                    LogService.Shared.Write(
-                        LogLevel.Debug,
+                    LogService.Shared.Routine(
                         "IslandDrag",
                         "按下被忽略",
                         $"free={IsFreeMode()} hidden={_hidden} interactive={HitIsInteractive(CursorX(lParam), CursorY(lParam))}");

@@ -85,7 +85,8 @@ public sealed class IslandController : IDisposable
         _dispatcher = dispatcher;
         _sound = sound;
         _publisher = new NtfyPublisher(log);
-        _lyrics = new LyricsService(log);
+        // v0.2.12 需求 1：歌词服务要读配置（本地优先 / 联网补词开关 / 额外歌词目录）
+        _lyrics = new LyricsService(log, () => _config.Current);
 
         _media = new MediaPlayerMonitor(log);
         _fullscreen = new FullscreenWatcher(log);
@@ -119,7 +120,7 @@ public sealed class IslandController : IDisposable
         {
             try
             {
-                Island().SetPresence(musicRunning, workBuddyRunning);
+                Island().SetPresence(musicRunning, workBuddyRunning, _presence.MusicProcessName);
             }
             catch (Exception ex)
             {
@@ -485,7 +486,7 @@ public sealed class IslandController : IDisposable
         island.IslandBecameVisible += (_, _) => ResyncLyricsAfterShow();
 
         // 首帧就把"谁在线"告诉岛，避免启动后头一秒还是待机条
-        island.SetPresence(_presence.MusicRunning, _presence.WorkBuddyRunning);
+        island.SetPresence(_presence.MusicRunning, _presence.WorkBuddyRunning, _presence.MusicProcessName);
 
         return island;
     }
@@ -710,6 +711,15 @@ public sealed class IslandController : IDisposable
 
         _playbackMisses = 0;
 
+        // 用户级时间微调（v0.2.12 需求 1）：个别播放器/歌词源有固有偏差，
+        // 正数 = 歌词提前。夹在合法范围内，绝不接受离谱值。
+        var offsetMs = Math.Clamp(
+            _config.Current.LyricOffsetMs, AppConfig.MinLyricOffsetMs, AppConfig.MaxLyricOffsetMs);
+        if (offsetMs != 0)
+        {
+            position = Math.Max(0, position + (offsetMs / 1000.0));
+        }
+
         var index = LyricsService.IndexAt(_lyricLines, position);
         if (index == _lyricIndex && !force)
         {
@@ -718,16 +728,20 @@ public sealed class IslandController : IDisposable
 
         _lyricIndex = index;
 
-        // 偏差诊断：目标行起始时间 vs 实际切到这一刻的进度（正数=晚切）
+        // 偏差诊断：目标行起始时间 vs 实际切到这一刻的进度（正数=晚切）。
+        // 只记"异常偏差"（>400ms）：正常换句的 90ms 内偏差每句都记一遍就是流水（v0.2.12 需求 5）。
         if (index >= 0 && index < _lyricLines.Count)
         {
             var target = _lyricLines[index].Time.TotalSeconds;
             var delta = (position - target) * 1000;
-            _log.Write(
-                LogLevel.Debug,
-                "Lyrics",
-                $"换句 #{index} 偏差 {delta:F0}ms",
-                $"pos={position:F3}s target={target:F3}s text={_lyricLines[index].Text}");
+            if (Math.Abs(delta) > 400)
+            {
+                _log.Write(
+                    LogLevel.Debug,
+                    "Lyrics",
+                    $"换句 #{index} 偏差 {delta:F0}ms",
+                    $"pos={position:F3}s target={target:F3}s text={_lyricLines[index].Text}");
+            }
         }
 
         Island().ShowLyrics(TextAt(index), TextAt(index + 1), TransAt(index));

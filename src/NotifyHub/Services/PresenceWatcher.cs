@@ -24,6 +24,7 @@ public sealed class PresenceWatcher : IDisposable
 
     private bool _musicRunning;
     private bool _workBuddyRunning;
+    private string? _musicProcessName;
     private bool _started;
 
     public PresenceWatcher(LogService log)
@@ -40,6 +41,12 @@ public sealed class PresenceWatcher : IDisposable
 
     /// <summary>WorkBuddy 进程是否在运行。</summary>
     public bool WorkBuddyRunning => _workBuddyRunning;
+
+    /// <summary>
+    /// 命中的播放器进程名（v0.2.12 需求 3）：待机态没有播放会话时，
+    /// 岛左栏还要显示这个播放器的图标，只能靠这里记下来。
+    /// </summary>
+    public string? MusicProcessName => _musicProcessName;
 
     public void Start()
     {
@@ -59,6 +66,7 @@ public sealed class PresenceWatcher : IDisposable
     {
         bool music = false;
         bool workBuddy = false;
+        string? musicProcess = null;
 
         try
         {
@@ -76,6 +84,7 @@ public sealed class PresenceWatcher : IDisposable
                     if (!music && MatchesMusicApp(name))
                     {
                         music = true;
+                        musicProcess = name;
                     }
 
                     if (music && workBuddy)
@@ -98,20 +107,22 @@ public sealed class PresenceWatcher : IDisposable
 
         lock (_gate)
         {
-            if (music == _musicRunning && workBuddy == _workBuddyRunning)
+            if (music == _musicRunning
+                && workBuddy == _workBuddyRunning
+                && string.Equals(musicProcess, _musicProcessName, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
 
             _musicRunning = music;
             _workBuddyRunning = workBuddy;
+            _musicProcessName = musicProcess;
         }
 
-        _log.Write(
-            LogLevel.Debug,
+        _log.Routine(
             "Presence",
             "进程状态变化",
-            $"music={music} workbuddy={workBuddy}");
+            $"music={music}({musicProcess ?? "-"}) workbuddy={workBuddy}");
 
         try
         {

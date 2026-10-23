@@ -23,6 +23,9 @@ public sealed class IslandController : IDisposable
     private readonly MediaPlayerMonitor _media;
     private readonly FullscreenWatcher _fullscreen;
     private readonly NtfyPublisher _publisher;
+
+    /// <summary>进程在线巡检（v0.2.11 需求 2）：播放器/WorkBuddy 一打开就切信息展示模式。</summary>
+    private readonly PresenceWatcher _presence;
     private readonly LyricsService _lyrics;
     private readonly DispatcherTimer _lyricTimer;
 
@@ -86,6 +89,7 @@ public sealed class IslandController : IDisposable
 
         _media = new MediaPlayerMonitor(log);
         _fullscreen = new FullscreenWatcher(log);
+        _presence = new PresenceWatcher(log);
 
         // 歌词同步：90ms 问一次播放进度，行号变化才刷新岛（避免每帧重排跑马灯）。
         // 进度本身由 MediaPlayerMonitor 的 PlaybackClock 做墙钟外推（含上报年龄补偿），
@@ -109,6 +113,21 @@ public sealed class IslandController : IDisposable
         Current = this;
 
         _config.Changed += OnConfigChanged;
+
+        // v0.2.11 需求 2：进程在线巡检（1.5 秒一次，只在状态变化时回调）
+        _presence.Changed += (musicRunning, workBuddyRunning) => _dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                Island().SetPresence(musicRunning, workBuddyRunning);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("Island", "更新进程在线状态失败", ex.Message);
+            }
+        }));
+
+        _presence.Start();
 
         _media.MediaChanged += info => _dispatcher.BeginInvoke(new Action(() =>
         {
@@ -408,6 +427,12 @@ public sealed class IslandController : IDisposable
         }
 
         var island = new IslandWindow();
+
+        // 立刻登记：下面的 SetPresence / ApplyTheme 都会同步触发 Show/Evaluate，
+        // 那些回调里如果再问 Island()，`_island` 还没赋值就会**再创建一个窗口**
+        // （实测：日志里同一秒出现 5 条"进程在线状态更新"＝ 5 个岛实例，屏幕上就是几块幽灵矩形）。
+        _island = island;
+
         island.ModeProvider = () => _config.Current.IslandMode;
         island.MusicEnabledProvider = () => _config.Current.MusicEnabled;
         island.MarqueeSpeedProvider = () => _config.Current.MarqueeSpeed;
@@ -459,7 +484,9 @@ public sealed class IslandController : IDisposable
         // 不补这一刀就会出现"展开了但歌词还是上一句 / 不跟着滚动"。
         island.IslandBecameVisible += (_, _) => ResyncLyricsAfterShow();
 
-        _island = island;
+        // 首帧就把"谁在线"告诉岛，避免启动后头一秒还是待机条
+        island.SetPresence(_presence.MusicRunning, _presence.WorkBuddyRunning);
+
         return island;
     }
 
@@ -930,6 +957,7 @@ public sealed class IslandController : IDisposable
         _fullscreen.Dispose();
         _workbuddy?.Dispose();
         _publisher.Dispose();
+        _presence.Dispose();
 
         if (Current == this)
         {

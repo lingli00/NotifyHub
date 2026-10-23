@@ -101,6 +101,15 @@ public partial class IslandWindow : Window
     /// <summary>已经排过一次「布局后重新居中」（合并重复请求用）。</summary>
     private bool _recenterScheduled;
 
+    /// <summary>音乐播放器进程是否在运行（v0.2.11 需求 2，由 PresenceWatcher 推送）。</summary>
+    private bool _presenceMusic;
+
+    /// <summary>WorkBuddy 进程是否在运行（v0.2.11 需求 2）。</summary>
+    private bool _presenceWorkbuddy;
+
+    /// <summary>当前是否在显示"进程在线"占位行。</summary>
+    private bool _presenceVisible;
+
     /// <summary>
     /// 指针是否正压在岛上（v0.2.10 需求 3）。
     ///
@@ -684,6 +693,68 @@ public partial class IslandWindow : Window
         LyricLine2.RestartScroll();
     }
 
+    /// <summary>
+    /// 是否处于「待机空闲模式」（v0.2.11 需求 2/4）。
+    ///
+    /// 待机空闲 = 没有音乐播放器在跑、没有 WorkBuddy 在跑、也没有任务 / 播放 / 通知。
+    /// **只有这个模式**才有"左右分区悬浮配色 + 双击快捷唤起"；
+    /// 一旦进程在线或来了内容，就进入信息展示模式，那些待机交互全部关闭。
+    /// </summary>
+    public bool IsIdleStandby
+        => !_presenceMusic && !_presenceWorkbuddy
+           && !_statusVisible && !_musicVisible && !_noticeVisible;
+
+    /// <summary>
+    /// 由控制器推送"进程是否在线"（v0.2.11 需求 2）：进程一开就切信息展示模式，不等播放/任务。
+    /// </summary>
+    public void SetPresence(bool musicRunning, bool workBuddyRunning)
+    {
+        if (_presenceMusic == musicRunning && _presenceWorkbuddy == workBuddyRunning)
+        {
+            return;
+        }
+
+        _presenceMusic = musicRunning;
+        _presenceWorkbuddy = workBuddyRunning;
+
+        LogService.Shared.Write(
+            LogLevel.Debug,
+            "IslandMode",
+            "进程在线状态更新",
+            $"music={musicRunning} workbuddy={workBuddyRunning} standby={IsIdleStandby}");
+
+        UpdateChrome();
+        Evaluate();
+    }
+
+    /// <summary>
+    /// 进程在线行的显示规则：
+    ///   有真实任务 / 通知时让位（它们是更高优先级的信息）；
+    ///   只有进程在线、没有内容时，把"谁在线"显示出来 —— 这就是"信息展示状态"的兜底内容。
+    /// </summary>
+    private void UpdatePresenceRows()
+    {
+        var hasReal = _statusVisible || _noticeVisible;
+
+        var showMusic = !hasReal && _presenceMusic && !_musicVisible;
+        var showWb = !hasReal && _presenceWorkbuddy && !_statusVisible;
+
+        PresenceMusicRow.Visibility = showMusic ? Visibility.Visible : Visibility.Collapsed;
+        PresenceWbRow.Visibility = showWb ? Visibility.Visible : Visibility.Collapsed;
+
+        if (showMusic)
+        {
+            PresenceMusicText.Text = "播放器已打开 · 等待播放";
+        }
+
+        if (showWb)
+        {
+            PresenceWbText.Text = "已打开 · 等待任务";
+        }
+
+        _presenceVisible = showMusic || showWb;
+    }
+
     public bool IsNoticeShown => _noticeVisible;
 
     /// <summary>是否处于收纳细条形态（诊断/自检用）。</summary>
@@ -998,6 +1069,9 @@ public partial class IslandWindow : Window
     /// <summary>分隔线只在音乐与任务两组同时可见时出现；歌词随音乐组一起出现。</summary>
     private void UpdateChrome()
     {
+        // 真实任务/通知出现 → 进程在线占位行让位（v0.2.11 需求 2）
+        UpdatePresenceRows();
+
         Divider.Visibility = _musicVisible && _statusVisible ? Visibility.Visible : Visibility.Collapsed;
         BalanceWidths();
         SyncStripState();
@@ -1092,7 +1166,14 @@ public partial class IslandWindow : Window
         }
 
         _strip.UpdateState(CurrentStripMode(), IsDoneState, CurrentAccentColor());
+
+        // 待机快捷模式 vs 信息展示模式（v0.2.11 需求 2/4）：
+        // 只有待机空闲时才有"左右分区配色 + 双击唤起"，其余情况窄条只负责展示状态。
+        SyncStripMode();
     }
+
+    /// <summary>把当前的"待机 / 信息"模式推给窄条（窄条可能刚创建，需要主动纠一次）。</summary>
+    private void SyncStripMode() => _strip?.SetStandbyMode(IsIdleStandby);
 
     /// <summary>
     /// 左右两栏宽度配平 + 自适应岛宽（v0.2.8 需求 5 的核心）。
@@ -1125,7 +1206,10 @@ public partial class IslandWindow : Window
         //    就比自然宽还窄 0.2px，会被跑马灯判成"超宽"从而把开头几个字滚掉（v0.2.8 实测坑）。
         var statusCap = (_musicVisible ? MaxStatusWidthWithMusic : MaxStatusWidthSolo)
                         * widthFactor * rightFactor;
-        var statusNatural = Math.Max(StatusText.NaturalWidth, NoticeText.NaturalWidth);
+        var statusNatural = Math.Max(
+            StatusText.NaturalWidth,
+            Math.Max(NoticeText.NaturalWidth,
+                Math.Max(PresenceMusicText.NaturalWidth, PresenceWbText.NaturalWidth)));
 
         // 单内容时不要 160 的下限：短消息被撑到 160 会在右侧留下一片空白，
         // 岛本身是居中的，那片空白就把可见文字"推"到左边去（需求 1 的观感来源之一）。
@@ -1143,6 +1227,13 @@ public partial class IslandWindow : Window
         if (double.IsNaN(NoticeText.Width) || Math.Abs(NoticeText.Width - statusWidth) > 0.5)
         {
             NoticeText.Width = statusWidth;
+        }
+
+        // 进程在线行同样按这一列宽（否则它固定 200 会把岛撑成别的宽度）
+        if (double.IsNaN(PresenceMusicText.Width) || Math.Abs(PresenceMusicText.Width - statusWidth) > 0.5)
+        {
+            PresenceMusicText.Width = statusWidth;
+            PresenceWbText.Width = statusWidth;
         }
 
         if (!_musicVisible)
@@ -1317,7 +1408,7 @@ public partial class IslandWindow : Window
         // 旧版把 _idleExpanded 也算成内容，于是空岛被 Show 出来：所有栏都 Collapsed，
         // 宽度塌到 40 左右、Pill 圆角 22 → 屏幕上就是一个竖立的白色/浅灰椭圆（用户截图里的那个）。
         // 待机态的正确形态只有一种：顶部窄条。
-        var hasContent = _statusVisible || _musicVisible || _noticeVisible;
+        var hasContent = _statusVisible || _musicVisible || _noticeVisible || _presenceVisible;
 
         if (hasContent)
         {
@@ -1360,6 +1451,10 @@ public partial class IslandWindow : Window
             _stripMode = true;
             _stripShownAtMs = Environment.TickCount64;
             EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState, CurrentAccentColor());
+
+            // 刚创建出来的细条默认是"待机快捷模式"，必须立刻按当前状态纠正，
+            // 否则信息展示模式下也会出现左右分区的待机配色（实测踩到）
+            SyncStripMode();
             return;
         }
 
@@ -1959,6 +2054,7 @@ public partial class IslandWindow : Window
         _stripMode = true;
         _stripShownAtMs = Environment.TickCount64;
         EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState, CurrentAccentColor());
+        SyncStripMode();
 
         var token = ++_animToken;
         BeginAnimation(OpacityProperty, null);
@@ -2058,6 +2154,15 @@ public partial class IslandWindow : Window
             };
 
             _strip.ZoneDoubleClicked += OnStripZoneDoubleClicked;
+
+            // 信息展示模式下，悬停窄条 260ms 就展开岛把内容显示出来（需求 2 补充规则）
+            _strip.HoverExpandRequested += (_, _) =>
+            {
+                if (_stripMode && !_dragging && !_sliding && !IsIdleStandby)
+                {
+                    ExpandFromStrip();
+                }
+            };
         }
 
         return _strip;
@@ -2071,29 +2176,44 @@ public partial class IslandWindow : Window
     {
         try
         {
-            if (zone == StripZone.Left)
+            // 需求 2：双击快捷唤起**只在待机空闲模式**生效；信息展示模式下不抢占双击
+            if (!IsIdleStandby)
             {
-                var running = _media?.ProcessName;
-                var ok = !string.IsNullOrWhiteSpace(running) && AppLauncher.TryActivate(running!);
-                if (!ok)
-                {
-                    ok = AppLauncher.TryActivateOrLaunch("Folia", AppLauncher.MusicAppCandidates());
-                }
-
                 LogService.Shared.Write(
-                    ok ? LogLevel.Info : LogLevel.Warn,
+                    LogLevel.Debug,
                     "IslandStrip",
-                    "双击左段：打开音乐播放器",
-                    $"ok={ok} process={running}");
+                    "非待机模式，忽略双击",
+                    $"zone={zone} standby={IsIdleStandby}");
                 return;
             }
 
-            var opened = AppLauncher.TryActivateOrLaunch("WorkBuddy", AppLauncher.WorkBuddyCandidates());
+            if (zone == StripZone.Left)
+            {
+                // 优先用当前在播的播放器；没有就按常见播放器名单找（进程在跑就直接激活，绝不重复启动）
+                var running = _media?.ProcessName;
+                var outcome = string.IsNullOrWhiteSpace(running)
+                    ? OpenOutcome.Failed
+                    : AppLauncher.Open(running!);
+
+                if (outcome is OpenOutcome.Failed)
+                {
+                    outcome = AppLauncher.Open("Folia", AppLauncher.MusicAppCandidates());
+                }
+
+                LogService.Shared.Write(
+                    outcome == OpenOutcome.Failed ? LogLevel.Warn : LogLevel.Info,
+                    "IslandStrip",
+                    "双击左段：打开音乐播放器",
+                    $"outcome={outcome} process={running}");
+                return;
+            }
+
+            var wb = AppLauncher.Open("WorkBuddy", AppLauncher.WorkBuddyCandidates());
             LogService.Shared.Write(
-                opened ? LogLevel.Info : LogLevel.Warn,
+                wb == OpenOutcome.Failed ? LogLevel.Warn : LogLevel.Info,
                 "IslandStrip",
                 "双击右段：打开 WorkBuddy",
-                $"ok={opened}");
+                $"outcome={wb}");
         }
         catch (Exception ex)
         {

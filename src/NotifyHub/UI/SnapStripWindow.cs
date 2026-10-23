@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
+using System.Windows.Threading;
 using NotifyHub.Interop;
 using NotifyHub.Services;
 
@@ -33,8 +34,17 @@ public enum StripZone
 /// </summary>
 public sealed class SnapStripWindow : Window
 {
-    /// <summary>双击某一段（左=音乐 / 右=WorkBuddy）。</summary>
+    /// <summary>双击某一段（左=音乐 / 右=WorkBuddy）。仅待机空闲模式会触发。</summary>
     public event EventHandler<StripZone>? ZoneDoubleClicked;
+
+    /// <summary>悬停一段时间后请求展开岛（信息展示模式用，v0.2.11 需求 2 的补充规则）。</summary>
+    public event EventHandler? HoverExpandRequested;
+
+    /// <summary>是否处于「待机快捷模式」：true=左右分区配色 + 双击唤起；false=纯信息态。</summary>
+    private bool _standbyMode = true;
+
+    /// <summary>悬停展开的延时（2023 手感的"意图停留"，避免路过就弹开）。</summary>
+    private const int HoverExpandDelayMs = 260;
 
     /// <summary>左右分段比例（百分比，来自设置里的"区域比例"滑块；50 = 对半）。</summary>
     public Func<int>? SplitRatioProvider { get; set; }
@@ -99,15 +109,39 @@ public sealed class SnapStripWindow : Window
         Opacity = 0;
         Cursor = Cursors.Hand;
 
-        MouseEnter += (_, _) => ApplyHover(true);
-        MouseLeave += (_, _) => ApplyHover(false);
-        MouseMove += (_, e) => UpdateHoverZone(e.GetPosition(this).X);
+        MouseEnter += (_, _) =>
+        {
+            ApplyHover(true);
+            ArmHoverExpand();
+        };
+
+        MouseLeave += (_, _) =>
+        {
+            ApplyHover(false);
+            DisarmHoverExpand();
+        };
+
+        MouseMove += (_, e) =>
+        {
+            // 需求 4：分区配色只在待机空闲模式生效
+            if (_standbyMode)
+            {
+                UpdateHoverZone(e.GetPosition(this).X);
+            }
+        };
 
         // 双击分区打开对应应用（单击不再承担"展开"职责，否则双击会被第一下打断）
         MouseLeftButtonDown += (_, e) =>
         {
             if (e.ClickCount < 2)
             {
+                return;
+            }
+
+            if (!_standbyMode)
+            {
+                // 信息展示模式不接管双击（需求 2：快捷唤起只在待机空闲模式生效）
+                LogService.Shared.Write(LogLevel.Debug, "IslandStrip", "信息模式忽略双击", "待机快捷唤起已关闭");
                 return;
             }
 
@@ -124,6 +158,62 @@ public sealed class SnapStripWindow : Window
 
     /// <summary>当前悬停分区（诊断用）。</summary>
     public StripZone HoverZone { get; private set; } = StripZone.None;
+
+    /// <summary>当前是否处于待机快捷模式（诊断用）。</summary>
+    public bool IsStandbyMode => _standbyMode;
+
+    private DispatcherTimer? _hoverExpandTimer;
+
+    /// <summary>
+    /// 切"待机快捷模式 / 信息展示模式"（v0.2.11 需求 2/4）。
+    /// 待机：悬停分区换色、双击唤起；信息：悬停只放大、停留片刻则展开看信息，不换待机配色。
+    /// </summary>
+    public void SetStandbyMode(bool standby)
+    {
+        if (_standbyMode == standby)
+        {
+            return;
+        }
+
+        _standbyMode = standby;
+
+        // 切到信息模式时立刻清掉待机配色，避免残留黄/琥珀块
+        if (!standby)
+        {
+            HoverZone = StripZone.None;
+            _indicator.HoverZone = StripZone.None;
+            _hoverExpandTimer?.Stop();
+        }
+    }
+
+    /// <summary>信息模式下，悬停停留 260ms 就请求展开岛（把音乐控制台/歌词/任务显示出来）。</summary>
+    private void ArmHoverExpand()
+    {
+        if (_standbyMode)
+        {
+            return;
+        }
+
+        _hoverExpandTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(HoverExpandDelayMs) };
+        _hoverExpandTimer.Stop();
+        _hoverExpandTimer.Tick -= OnHoverExpandTick;
+        _hoverExpandTimer.Tick += OnHoverExpandTick;
+        _hoverExpandTimer.Start();
+    }
+
+    private void DisarmHoverExpand() => _hoverExpandTimer?.Stop();
+
+    private void OnHoverExpandTick(object? sender, EventArgs e)
+    {
+        _hoverExpandTimer?.Stop();
+
+        if (_standbyMode || !IsMouseOver)
+        {
+            return;
+        }
+
+        HoverExpandRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     /// <summary>把窗口内 x 换算成左/右分区。</summary>
     public StripZone ZoneAt(double x) => ZoneAt(x, Width, SplitRatioProvider?.Invoke() ?? 50);

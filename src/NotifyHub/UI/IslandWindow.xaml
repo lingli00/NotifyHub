@@ -224,6 +224,61 @@
                 <StackPanel x:Name="RightPane" Grid.Column="2" Orientation="Vertical"
                             VerticalAlignment="Center" Margin="0,1,0,1">
 
+                    <!--
+                      进程在线行（v0.2.11 需求 2）：音乐播放器 / WorkBuddy **进程已打开**但还没内容时，
+                      岛不回到"待机快捷条"，而是切到信息展示状态，至少把"谁在线"显示出来。
+                      两行独立可见：两个都在线就显示两行（此时一定没有真实任务/通知，空间够）。
+                    -->
+                    <StackPanel x:Name="PresenceMusicRow" Orientation="Vertical" Visibility="Collapsed">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Grid.Column="0" Width="13" Height="13" VerticalAlignment="Center">
+                                <Ellipse x:Name="PresenceMusicDot" Width="7" Height="7" Fill="#FFD60A" />
+                            </Grid>
+
+                            <TextBlock x:Name="PresenceMusicTag" Grid.Row="0" Grid.Column="1" Text="音乐"
+                                       FontSize="10" Margin="6,0,0,0" Foreground="#FFD60A"
+                                       Opacity="0.95" VerticalAlignment="Center" />
+
+                            <local:MarqueeText x:Name="PresenceMusicText" Grid.Row="1" Grid.Column="1" Width="200"
+                                               FontSize="12.5" Foreground="{DynamicResource IslandFg}"
+                                               Margin="6,2,0,0" VerticalAlignment="Center" Text="" />
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel x:Name="PresenceWbRow" Orientation="Vertical" Visibility="Collapsed">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Grid.Column="0" Width="13" Height="13" VerticalAlignment="Center">
+                                <Ellipse x:Name="PresenceWbDot" Width="7" Height="7" Fill="#FFB020" />
+                            </Grid>
+
+                            <TextBlock x:Name="PresenceWbTag" Grid.Row="0" Grid.Column="1" Text="WorkBuddy"
+                                       FontSize="10" Margin="6,0,0,0" Foreground="#FFB020"
+                                       Opacity="0.95" VerticalAlignment="Center" />
+
+                            <local:MarqueeText x:Name="PresenceWbText" Grid.Row="1" Grid.Column="1" Width="200"
+                                               FontSize="12.5" Foreground="{DynamicResource IslandFg}"
+                                               Margin="6,2,0,0" VerticalAlignment="Center" Text="" />
+                        </Grid>
+                    </StackPanel>
+
                     <!--  任务行（琥珀状态点 + 来源标签 + 一行实时动作）  -->
                     <StackPanel x:Name="StatusGroup" Orientation="Vertical">
                         <Grid>

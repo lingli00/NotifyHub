@@ -5,6 +5,7 @@
         Title="NotifyHub 设置" Height="780" Width="920"
         MinHeight="620" MinWidth="840"
         WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="False"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ResizeMode="CanResize"
         FontFamily="Microsoft YaHei UI, Segoe UI"

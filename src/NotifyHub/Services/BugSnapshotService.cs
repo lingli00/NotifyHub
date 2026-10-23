@@ -64,8 +64,19 @@ public static class BugSnapshotService
         // 1) 截图（先抓，避免等待日志时界面又变了）
         var shot = ScreenCapture.CaptureToPng(Path.Combine(dir, "screen.png"));
 
-        // 2) 前 10 秒日志
+        // 2) 前 10 秒日志。若这段恰好没有任何核心模块日志（岛空闲、没在放歌），
+        //    回退到最近 60 秒 —— 交上来的快照里 0 行等于没有证据（v0.2.11 实测踩到）。
         var before = ReadModuleLogs(now.AddSeconds(-WindowSeconds), now);
+        var windowSeconds = WindowSeconds;
+        if (before.Count == 0)
+        {
+            var wider = ReadModuleLogs(now.AddSeconds(-60), now);
+            if (wider.Count > 0)
+            {
+                before = wider;
+                windowSeconds = 60;
+            }
+        }
         WriteLogFile(Path.Combine(dir, "logs.txt"), before);
         WriteLogFile(Path.Combine(dir, "logs-before.txt"), before);
 
@@ -86,6 +97,7 @@ public static class BugSnapshotService
                 ? null
                 : new[] { Math.Round(rect.Value.X), Math.Round(rect.Value.Y), Math.Round(rect.Value.Width), Math.Round(rect.Value.Height) },
             ModuleCounts = before.GroupBy(l => l.Module).ToDictionary(g => g.Key, g => g.Count()),
+            LogWindowSeconds = windowSeconds,
             Note = note ?? string.Empty,
         };
         WriteMeta(dir, meta);
@@ -473,6 +485,9 @@ public static class BugSnapshotService
         public double[]? IslandRect { get; set; }
 
         public Dictionary<string, int> ModuleCounts { get; set; } = new();
+
+        /// <summary>实际采集的日志时间窗（秒）：正常 10（前）+10（后），空闲回退时是 60。</summary>
+        public int LogWindowSeconds { get; set; } = WindowSeconds;
 
         public string Note { get; set; } = string.Empty;
     }

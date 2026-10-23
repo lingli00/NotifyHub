@@ -1114,6 +1114,101 @@ public static class SelfTest
             });
         });
 
+        Check("v0.2.11 需求1：进程在跑就不重复启动（双击唤起的黑窗/幽灵图标根因）", () =>
+        {
+            // 本机 WorkBuddy 一定在跑（它就是当前工作环境）
+            var running = AppLauncher.IsRunning("WorkBuddy");
+
+            // 不存在的进程：IsRunning=false，且 Open 在没有候选路径时必须立刻返回 Failed，
+            // 不能去 launch 任何东西（这条是"激活失败就再拉一个实例"的反向断言）
+            var ghost = "notifyhub-ghost-proc-12345";
+            var ghostRunning = AppLauncher.IsRunning(ghost);
+            var ghostOutcome = AppLauncher.Open(ghost, Array.Empty<string>());
+
+            return running && !ghostRunning && ghostOutcome == OpenOutcome.Failed;
+        });
+
+        Check("v0.2.11 需求1：隐藏启动参数（不弹黑命令行窗口的三件套）", () =>
+        {
+            var psi = AppLauncher.BuildHiddenStartInfo(@"C:/Windows/System32/notepad.exe");
+
+            // ShellExecute 路径会给控制台程序开黑窗；CreateNoWindow 不分配控制台；Hidden 兜底隐藏
+            return !psi.UseShellExecute
+                   && psi.CreateNoWindow
+                   && psi.WindowStyle == System.Diagnostics.ProcessWindowStyle.Hidden
+                   && psi.FileName.EndsWith("notepad.exe", StringComparison.OrdinalIgnoreCase);
+        });
+
+        Check("v0.2.11 需求2/4：待机空闲 ⇄ 信息展示 模式判定（进程在线即退出待机）", () =>
+        {
+            return RunSta(() =>
+            {
+                var island = new IslandWindow
+                {
+                    ModeProvider = () => "Fixed",
+                    MusicEnabledProvider = () => true,
+                    MarqueeSpeedProvider = () => 45,
+                    LyricsEnabledProvider = () => true,
+                    SavedPositionProvider = () => null,
+                };
+
+                try
+                {
+                    island.ApplyTheme(ThemePalette.Create(new AppConfig()));
+
+                    // 什么都没有：待机空闲
+                    island.SetPresence(false, false);
+                    var idle = island.IsIdleStandby;
+
+                    // 只开播放器（还没播放）：不再是待机
+                    island.SetPresence(true, false);
+                    var musicPresence = island.IsIdleStandby;
+
+                    // 只开 WorkBuddy（没有任务）：不再是待机
+                    island.SetPresence(false, true);
+                    var wbPresence = island.IsIdleStandby;
+
+                    // 两个都开：仍然不是待机
+                    island.SetPresence(true, true);
+                    var both = island.IsIdleStandby;
+
+                    // 全部关掉：回到待机
+                    island.SetPresence(false, false);
+                    var backToIdle = island.IsIdleStandby;
+
+                    return idle && !musicPresence && !wbPresence && !both && backToIdle;
+                }
+                finally
+                {
+                    island.Close();
+                }
+            });
+        });
+
+        Check("v0.2.11 需求2/4：窄条待机快捷模式开关（信息模式不换分区配色）", () =>
+        {
+            return RunSta(() =>
+            {
+                var strip = new SnapStripWindow();
+                try
+                {
+                    var standbyByDefault = strip.IsStandbyMode;
+
+                    strip.SetStandbyMode(false);
+                    var infoMode = !strip.IsStandbyMode && strip.HoverZone == StripZone.None;
+
+                    strip.SetStandbyMode(true);
+                    var backToStandby = strip.IsStandbyMode;
+
+                    return standbyByDefault && infoMode && backToStandby;
+                }
+                finally
+                {
+                    strip.Close();
+                }
+            });
+        });
+
         Check("v0.2.10 需求4：跑马灯重启滚动（收起期间换行后能重新判定并从头开始）", () =>
         {
             return RunSta(() =>

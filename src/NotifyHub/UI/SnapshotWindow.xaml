@@ -4,6 +4,7 @@
         Title="NotifyHub · Bug 快照" Height="720" Width="1180"
         MinHeight="520" MinWidth="900"
         WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="False"
         Background="#F7F7F9" FontFamily="Microsoft YaHei UI, Segoe UI"
         TextOptions.TextRenderingMode="ClearType">
 

@@ -50,6 +50,11 @@ public partial class SettingsWindow : Window
         // SelectionChanged，那时后面声明的命名元素还没建出来，处理器会踩 NRE。
         BrowserChoiceCombo.SelectionChanged += OnBrowserChoiceChanged;
 
+        // v0.2.7：两个滑块的 ValueChanged 同样延后挂载（加载期会强制把 Value 收敛到
+        // Minimum，早挂的话后面的数值 TextBlock 还是 null）
+        AutoCollapseSlider.ValueChanged += OnAutoCollapseSecondsChanged;
+        LyricsFontSizeSlider.ValueChanged += OnLyricsFontSizeChanged;
+
         LoadFromConfig();
         RefreshEvents();
         RefreshLogs();
@@ -125,6 +130,20 @@ public partial class SettingsWindow : Window
         SelectComboByTag(ThemeCombo, ThemePalette.NormalizeMode(config.ThemeMode));
         SelectComboByTag(TextToneCombo, config.TextTone);
         LyricsEnabledCheck.IsChecked = config.LyricsEnabled;
+
+        // v0.2.7 需求 1：歌词字号
+        var lyricSize = Math.Clamp(config.LyricsFontSize, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize);
+        LyricsFontSizeSlider.Value = lyricSize;
+        LyricsFontSizeText.Text = $"{lyricSize}";
+
+        // v0.2.7 需求 2：超时自动收纳（开关 + 时长 + 音乐播放例外）
+        AutoCollapseCheck.IsChecked = config.AutoCollapseEnabled;
+        var collapseSeconds = Math.Clamp(
+            config.AutoCollapseSeconds, AppConfig.MinAutoCollapseSeconds, AppConfig.MaxAutoCollapseSeconds);
+        AutoCollapseSlider.Value = collapseSeconds;
+        AutoCollapseText.Text = $"{collapseSeconds} 秒";
+        KeepOpenWhilePlayingCheck.IsChecked = config.KeepOpenWhilePlaying;
+        UpdateAutoCollapseEnabledState();
 
         MarqueeSpeedSlider.Value = Math.Clamp(config.MarqueeSpeed, 10, 120);
         MarqueeSpeedText.Text = $"{Math.Clamp(config.MarqueeSpeed, 10, 120)}";
@@ -456,6 +475,40 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>v0.2.7 需求 2：超时收纳时长滑动时同步数字（1~60 秒）。</summary>
+    private void OnAutoCollapseSecondsChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (AutoCollapseText is not null)
+        {
+            AutoCollapseText.Text = $"{(int)Math.Round(e.NewValue)} 秒";
+        }
+    }
+
+    /// <summary>v0.2.7 需求 1：歌词字号滑动时同步数字（10~22）。</summary>
+    private void OnLyricsFontSizeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LyricsFontSizeText is not null)
+        {
+            LyricsFontSizeText.Text = $"{(int)Math.Round(e.NewValue)}";
+        }
+    }
+
+    /// <summary>总开关关闭时，把时长滑块与音乐例外一起置灰（避免"调了不生效"的困惑）。</summary>
+    private void OnAutoCollapseToggled(object sender, RoutedEventArgs e) => UpdateAutoCollapseEnabledState();
+
+    private void UpdateAutoCollapseEnabledState()
+    {
+        if (AutoCollapseSlider is null)
+        {
+            return;
+        }
+
+        var enabled = AutoCollapseCheck.IsChecked == true;
+        AutoCollapseSlider.IsEnabled = enabled;
+        KeepOpenWhilePlayingCheck.IsEnabled = enabled;
+        AutoCollapseText.Opacity = enabled ? 1 : 0.45;
+    }
+
     private void OnMessageVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (MessageVolumeText is not null)
@@ -616,6 +669,14 @@ public partial class SettingsWindow : Window
         next.ThemeMode = ComboTag(ThemeCombo, "SolidDark");
         next.TextTone = ComboTag(TextToneCombo, "Auto");
         next.LyricsEnabled = LyricsEnabledCheck.IsChecked == true;
+        next.LyricsFontSize = (int)Math.Round(Math.Clamp(
+            LyricsFontSizeSlider.Value, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize));
+
+        // v0.2.7 需求 2：统一收纳（开关 + 时长 + 音乐播放例外）
+        next.AutoCollapseEnabled = AutoCollapseCheck.IsChecked == true;
+        next.AutoCollapseSeconds = (int)Math.Round(Math.Clamp(
+            AutoCollapseSlider.Value, AppConfig.MinAutoCollapseSeconds, AppConfig.MaxAutoCollapseSeconds));
+        next.KeepOpenWhilePlaying = KeepOpenWhilePlayingCheck.IsChecked == true;
 
         // 浏览器四选项（v0.2.4 需求 7）：前三项自动定位，Other 用用户提供的路径
         var browserChoice = AppConfig.NormalizeBrowserChoice(ComboTag(BrowserChoiceCombo, "System"));

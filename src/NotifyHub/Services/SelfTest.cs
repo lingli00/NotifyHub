@@ -6,6 +6,10 @@ using NotifyHub.Models;
 using NotifyHub.Services.Parsing;
 using NotifyHub.Services.Uia;
 using NotifyHub.UI;
+using Point = System.Windows.Point;
+using Rect = System.Windows.Rect;
+using Size = System.Windows.Size;
+using Visibility = System.Windows.Visibility;
 
 namespace NotifyHub.Services;
 
@@ -62,6 +66,40 @@ public static class SelfTest
             }
 
             Write($"{(ok ? "PASS" : "FAIL")}  {name}{(detail.Length > 0 ? "  → " + detail : string.Empty)}", ok);
+        }
+
+        // WPF 窗口必须 STA，而自检主体跑在 MTA 线程池上：单开一个 STA 线程执行，
+        // 只做 Measure/Arrange 不进消息循环（不 Show 也能拿到真实布局）。
+        // 线程内的异常写进 island-layout.txt，避免无提示地变成“线程挂了→FAIL”。
+        static bool RunSta(Func<bool> body, int timeoutSeconds = 15)
+        {
+            var result = false;
+            var worker = new System.Threading.Thread(
+                () =>
+                {
+                    try
+                    {
+                        result = body();
+                    }
+                    catch (Exception ex)
+                    {
+                        result = false;
+                        try
+                        {
+                            File.WriteAllText(
+                                Path.Combine(AppPaths.Root, "island-layout.txt"), ex.ToString(), Encoding.UTF8);
+                        }
+                        catch
+                        {
+                            // 忽略
+                        }
+                    }
+                },
+                8 * 1024 * 1024);
+
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+            return worker.Join(TimeSpan.FromSeconds(timeoutSeconds)) && result;
         }
 
         Check("配置区间收敛（10ms→300ms, 100ms→1000ms, 堆叠99→5）", () =>
@@ -689,6 +727,208 @@ public static class SelfTest
                 island.Close();
             }
         }
+
+        Check("v0.2.7 需求1：播放进度估算器（SMTC 陈旧上报值也能连续推进）", () =>
+        {
+            // SMTC 的 Position 在正常播放期间不刷新。旧实现直接返回它 → 歌词卡死。
+            // 这里验证 PlaybackClock：只要播放器"没刷新"，就以墙钟外推。
+            var freq = System.Diagnostics.Stopwatch.Frequency;
+            var clock = new PlaybackClock();
+
+            // 第一次上报 10s（播放中）
+            var first = clock.Update(10, playing: true, nowTicks: 0);
+
+            // 3 秒后播放器仍然只报 10s（典型陈旧值）：应外推成 ≈13s
+            var stale = clock.Update(10, playing: true, nowTicks: (long)(3 * freq));
+            var advanceOk = first == 10 && Math.Abs(stale - 13) < 0.05;
+
+            // 播放器刷新成 13.4s（略微超前）：温和收敛，不乱跳
+            var refreshed = clock.Update(13.4, playing: true, nowTicks: (long)(3.4 * freq));
+            var smoothOk = Math.Abs(refreshed - 13.4) < 0.6;
+
+            // 拖动进度到 60s：偏差 > 1.5s，直接采纳
+            var seek = clock.Update(60, playing: true, nowTicks: (long)(4 * freq));
+            var seekOk = Math.Abs(seek - 60) < 0.01;
+
+            // 暂停后过 5 秒：位置必须冻结在 60
+            var paused = clock.Update(60, playing: false, nowTicks: (long)(9 * freq));
+            var pauseOk = Math.Abs(paused - 60) < 0.01;
+
+            // 恢复播放且上报 61：从 61 继续
+            var resumed = clock.Update(61, playing: true, nowTicks: (long)(10 * freq));
+            var resumeOk = Math.Abs(resumed - 61) < 0.01;
+
+            return advanceOk && smoothOk && seekOk && pauseOk && resumeOk;
+        });
+
+        Check("v0.2.7 需求1/2：灵动岛两栏配平 + 歌词字号（离屏布局）", () =>
+        {
+            try
+            {
+                return RunSta(RunIslandLayoutTest);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    File.WriteAllText(
+                        Path.Combine(AppPaths.Root, "island-layout.txt"), ex.ToString(), Encoding.UTF8);
+                }
+                catch
+                {
+                    // 忽略
+                }
+
+                return false;
+            }
+        });
+
+        static bool RunIslandLayoutTest()
+        {
+            // 有音乐 + 歌词 + 任务（最拥挤的状态）：
+            //   ① 左栏与右栏宽度接近（不再左挤右空）
+            //   ② 整条宽度落在合理区间（不再被 440px 任务文字撑到 810）
+            //   ③ 歌词正文左边界与歌名左边界对齐
+            //   ④ 歌词字号 = 配置值 + 1.5
+            //   ⑤ 两侧都有内容时分隔线出现
+            var island = new IslandWindow
+            {
+                ModeProvider = () => "Fixed",
+                MusicEnabledProvider = () => true,
+                MarqueeSpeedProvider = () => 45,
+                LyricsEnabledProvider = () => true,
+                LyricsFontSizeProvider = () => 13,
+                AutoCollapseEnabledProvider = () => false,
+                SavedPositionProvider = () => null,
+            };
+
+            try
+            {
+                island.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                island.ApplyLyricsTypography();   // provider 注入后才能读到字号
+                island.SetMedia(new MediaInfo("侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 30, 200));
+                island.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+                island.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务", "WorkBuddy");
+
+                island.Measure(new Size(900, 300));
+                island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
+                island.RefreshLayoutMetrics();
+                island.Measure(new Size(900, 300));
+                island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
+
+                var left = island.LeftPaneWidth;
+                var right = island.RightPaneWidth;
+                var total = island.DesiredSize.Width;
+
+                var lyric = island.FindName("LyricLine1") as MarqueeText;
+                var title = island.FindName("MusicText") as MarqueeText;
+                var divider = island.FindName("Divider") as System.Windows.Controls.Border;
+                if (lyric is null || title is null || divider is null)
+                {
+                    return false;
+                }
+
+                var balanced = left > 260
+                               && right > 240
+                               && Math.Abs(left - right) <= Math.Max(left, right) * 0.18;
+
+                var fits = total > 520 && total <= 780;
+
+                var lyricLeft = lyric.TranslatePoint(new Point(0, 0), island).X;
+                var titleLeft = title.TranslatePoint(new Point(0, 0), island).X;
+                var aligned = Math.Abs(lyricLeft - titleLeft) <= 2.5;
+
+                var fontOk = Math.Abs(lyric.FontSize - 14.5) < 0.01;
+
+                var dividerOk = divider.Visibility == Visibility.Visible;
+
+                var diag = $"左栏={left:F1} 右栏={right:F1} 整条={total:F1} " +
+                           $"歌词左={lyricLeft:F1} 歌名左={titleLeft:F1} 歌词字号={lyric.FontSize:F1} " +
+                           $"分隔线={divider.Visibility} 歌词宽={lyric.ActualWidth:F1}";
+                try
+                {
+                    File.WriteAllText(Path.Combine(AppPaths.Root, "island-layout.txt"), diag, Encoding.UTF8);
+                }
+                catch
+                {
+                    // 诊断文件写不进去不影响判定
+                }
+
+                // 只有音乐（无任务）：右侧栏收起，整条自然变窄
+                var island2 = new IslandWindow
+                {
+                    ModeProvider = () => "Fixed",
+                    MusicEnabledProvider = () => true,
+                    MarqueeSpeedProvider = () => 45,
+                    LyricsEnabledProvider = () => true,
+                    LyricsFontSizeProvider = () => 16,
+                    AutoCollapseEnabledProvider = () => false,
+                    SavedPositionProvider = () => null,
+                };
+
+                try
+                {
+                    island2.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                    island2.ApplyLyricsTypography();
+                    island2.SetMedia(new MediaInfo("侧脸", "魏语诺", "FOLIA", true, "", "Folia", 30, 200));
+                    island2.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+                    island2.Measure(new Size(900, 300));
+                    island2.Arrange(new Rect(0, 0, island2.DesiredSize.Width, island2.DesiredSize.Height));
+                    island2.RefreshLayoutMetrics();
+                    island2.Measure(new Size(900, 300));
+                    island2.Arrange(new Rect(0, 0, island2.DesiredSize.Width, island2.DesiredSize.Height));
+
+                    var narrower = island2.DesiredSize.Width < total - 150;
+                    var font2 = island2.FindName("LyricLine1") as MarqueeText;
+                    var fontAdapt = font2 is not null && Math.Abs(font2.FontSize - 17.5) < 0.01;
+
+                    try
+                    {
+                        File.AppendAllText(
+                            Path.Combine(AppPaths.Root, "island-layout.txt"),
+                            $"{Environment.NewLine}仅音乐: 整条={island2.DesiredSize.Width:F1} " +
+                            $"字号={(font2?.FontSize ?? -1):F1} narrower={narrower} fontAdapt={fontAdapt}",
+                            Encoding.UTF8);
+                    }
+                    catch
+                    {
+                        // 忽略
+                    }
+
+                    return balanced && fits && aligned && fontOk && dividerOk && narrower && fontAdapt;
+                }
+                finally
+                {
+                    island2.Close();
+                }
+            }
+            finally
+            {
+                island.Close();
+            }
+        }
+
+        Check("v0.2.7 需求2：收纳配置默认 3 秒 / 区间收敛 / 音乐例外默认开", () =>
+        {
+            var defaults = new AppConfig();
+            var defaultsOk = defaults.AutoCollapseEnabled
+                             && defaults.AutoCollapseSeconds == 3
+                             && defaults.KeepOpenWhilePlaying
+                             && defaults.LyricsEnabled
+                             && defaults.LyricsFontSize == 13;
+
+            var high = new AppConfig { AutoCollapseSeconds = 999, LyricsFontSize = 99 };
+            high.Normalize();
+            var highOk = high.AutoCollapseSeconds == AppConfig.MaxAutoCollapseSeconds
+                         && high.LyricsFontSize == AppConfig.MaxLyricsFontSize;
+
+            var low = new AppConfig { AutoCollapseSeconds = 0, LyricsFontSize = 1 };
+            low.Normalize();
+            var lowOk = low.AutoCollapseSeconds == AppConfig.MinAutoCollapseSeconds
+                        && low.LyricsFontSize == AppConfig.MinLyricsFontSize;
+
+            return defaultsOk && highOk && lowOk;
+        });
 
         Check("v0.2.5：夸克浏览器定位（真实安装路径 + 注册表兜底）", () =>
         {

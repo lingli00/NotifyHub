@@ -204,14 +204,16 @@ public partial class App : Application
 
             case AppMode.IslandShot:
                 {
-                    // 灵动岛离屏渲染（排版核对用，v0.2.6）：
-                    // 桌面上常被“全屏应用自动隐藏”挡住，这里直接构造并渲染成 PNG，
-                    // 出两张：只有音乐+双行歌词 / 音乐+歌词+任务状态（L 形）。
+                    // 灵动岛离屏渲染（排版核对用）：桌面上常被“全屏应用自动隐藏”挡住，
+                    // 这里直接构造并渲染成 PNG。v0.2.7 出三张：
+                    //   island-music      只有音乐 + 双行歌词
+                    //   island-task       音乐 + 歌词 + 任务（两栏配平的新布局）
+                    //   island-task-only  只有任务（无音乐时的整条宽度）
                     var configService = new ConfigService(log);
                     configService.Load();
                     var config = configService.Current;
 
-                    void CaptureIsland(string fileName, bool withTask)
+                    void CaptureIsland(string fileName, bool withMusic, bool withTask)
                     {
                         var island = new IslandWindow
                         {
@@ -219,17 +221,24 @@ public partial class App : Application
                             MusicEnabledProvider = () => true,
                             MarqueeSpeedProvider = () => 45,
                             LyricsEnabledProvider = () => true,
+                            LyricsFontSizeProvider = () => AppConfig.MinLyricsFontSize + 3,
+                            AutoCollapseEnabledProvider = () => false,
                             SavedPositionProvider = () => null,
                         };
 
+                        island.ApplyLyricsTypography();
                         island.ApplyTheme(ThemePalette.Create(config));
-                        island.SetMedia(new MediaInfo(
-                            "侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 72, 214));
-                        island.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+
+                        if (withMusic)
+                        {
+                            island.SetMedia(new MediaInfo(
+                                "侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 72, 214));
+                            island.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+                        }
 
                         if (withTask)
                         {
-                            island.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务");
+                            island.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务", "WorkBuddy");
                         }
 
                         island.Left = 300;
@@ -247,21 +256,29 @@ public partial class App : Application
                         timer.Start();
                     }
 
-                    CaptureIsland("island-music.png", withTask: false);
+                    CaptureIsland("island-music.png", withMusic: true, withTask: false);
 
                     var second = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
                     second.Tick += (_, _) =>
                     {
                         second.Stop();
-                        CaptureIsland("island-task.png", withTask: true);
+                        CaptureIsland("island-task.png", withMusic: true, withTask: true);
 
-                        var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
-                        done.Tick += (_, _) =>
+                        var third = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
+                        third.Tick += (_, _) =>
                         {
-                            done.Stop();
-                            Shutdown();
+                            third.Stop();
+                            CaptureIsland("island-task-only.png", withMusic: false, withTask: true);
+
+                            var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+                            done.Tick += (_, _) =>
+                            {
+                                done.Stop();
+                                Shutdown();
+                            };
+                            done.Start();
                         };
-                        done.Start();
+                        third.Start();
                     };
                     second.Start();
                     return;
@@ -948,7 +965,13 @@ public partial class App : Application
             return;
         }
 
-        Dispatcher.BeginInvoke(new Action(() => _notifications?.Show(message)));
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _notifications?.Show(message);
+
+            // v0.2.7 需求 2：有新消息时把灵动岛弹出来，并按用户设定的时长自动收纳
+            _islandController?.PokeMessage(message);
+        }));
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Windows.Media.Control;
 using NotifyHub.Models;
 
@@ -77,9 +78,11 @@ public sealed class MediaPlayerMonitor : IDisposable
     };
     private readonly LogService _log;
     private readonly List<GlobalSystemMediaTransportControlsSession> _subscribed = new();
+    private readonly PlaybackClock _clock = new();
     private GlobalSystemMediaTransportControlsSessionManager? _manager;
     private MediaInfo? _last;
     private int _refreshing;
+    private string _trackKey = string.Empty;
 
     public MediaPlayerMonitor(LogService log) => _log = log;
 
@@ -275,23 +278,48 @@ public sealed class MediaPlayerMonitor : IDisposable
     /// <summary>
     /// 读取当前播放进度（秒）。歌词同步用——SMTC 的 MediaChanged 不会随时长推送，
     /// 只能由上层定时来问。取不到返回 -1。
+    ///
+    /// v0.2.7：改用 <see cref="PlaybackClock"/> 估算。SMTC 的 TimelineProperties.Position
+    /// 只是播放器最后一次上报的快照，正常播放期间是**陈旧**的；直接返回它会让歌词
+    /// 卡死在某一行（历史 Bug）。这里以它为锚点 + 墙钟外推，得到真实进度。
     /// </summary>
     public double GetPositionSeconds()
+        => TryGetPlayback(out var position, out _, out _) ? position : -1;
+
+    /// <summary>
+    /// 一次性读取播放进度 / 播放态 / 总时长（v0.2.7 歌词同步用）。
+    /// 三个值来自同一次会话读取，避免上层分三次调用读到互相矛盾的快照。
+    /// </summary>
+    public bool TryGetPlayback(out double positionSeconds, out bool playing, out double durationSeconds)
     {
+        positionSeconds = 0;
+        playing = false;
+        durationSeconds = 0;
+
         try
         {
             var session = PickSession();
             if (session is null)
             {
-                return -1;
+                _clock.Reset();
+                _trackKey = string.Empty;
+                return false;
             }
 
+            playing = session.GetPlaybackInfo().PlaybackStatus
+                == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
+
             var timeline = session.GetTimelineProperties();
-            return Math.Max(0, (timeline.Position - timeline.StartTime).TotalSeconds);
+            var reported = Math.Max(0, (timeline.Position - timeline.StartTime).TotalSeconds);
+            durationSeconds = Math.Max(0, (timeline.EndTime - timeline.StartTime).TotalSeconds);
+
+            positionSeconds = _clock.Update(reported, playing, Stopwatch.GetTimestamp());
+            return true;
         }
         catch
         {
-            return -1;
+            // 会话已失效（播放器退出）/ 该播放器不提供 timeline：上层按"取不到"处理
+            return false;
         }
     }
 
@@ -356,6 +384,14 @@ public sealed class MediaPlayerMonitor : IDisposable
 
         if (info is not null)
         {
+            // 换曲：播放进度估算器归零，避免把上一首的位置带到新歌上
+            var key = $"{info.Title}|{info.Artist}";
+            if (!string.Equals(key, _trackKey, StringComparison.Ordinal))
+            {
+                _trackKey = key;
+                _clock.Reset();
+            }
+
             _log.Info("Media", info.IsPlaying ? "正在播放" : "播放暂停/停止",
                 $"{info.AppName}: {info.Title} - {info.Artist}");
         }

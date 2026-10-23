@@ -45,8 +45,10 @@ public sealed class IslandController : IDisposable
         _media = new MediaPlayerMonitor(log);
         _fullscreen = new FullscreenWatcher(log);
 
-        // 歌词同步：250ms 问一次播放进度，行号变化才刷新岛（避免每帧重排跑马灯）
-        _lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        // 歌词同步：200ms 问一次播放进度，行号变化才刷新岛（避免每帧重排跑马灯）。
+        // 进度本身由 MediaPlayerMonitor 的 PlaybackClock 做墙钟外推，因此这里的间隔
+        // 只影响"换句延迟"，不影响准确性（旧版直接读 SMTC 陈旧值 = 歌词卡死）。
+        _lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         _lyricTimer.Tick += (_, _) => SyncLyricLine();
     }
 
@@ -113,7 +115,7 @@ public sealed class IslandController : IDisposable
     }
 
     /// <summary>显示任务状态（任意线程调用）。只取首行、压平空白、超长截断。</summary>
-    public void ShowTask(string text, bool done)
+    public void ShowTask(string text, bool done, string? tag = null)
     {
         // 手动/外部推送优先：15 秒内不被 WorkBuddy 自动监视的更新覆盖
         Interlocked.Exchange(ref _manualUntilMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 15_000);
@@ -129,11 +131,11 @@ public sealed class IslandController : IDisposable
             {
                 if (done)
                 {
-                    Island().ShowDone(single);
+                    Island().ShowDone(single, tag);
                 }
                 else
                 {
-                    Island().ShowRunning(single);
+                    Island().ShowRunning(single, tag);
                 }
             }
             catch (Exception ex)
@@ -142,6 +144,33 @@ public sealed class IslandController : IDisposable
             }
         }));
     }
+
+    /// <summary>
+    /// 新消息到达（v0.2.7 需求 2）：把灵动岛弹出来并按用户设定的时长自动收纳。
+    /// 由 App 在通知真正上屏时调用（被过滤/去重的消息不会走到这里）。
+    /// </summary>
+    public void PokeMessage(NotifyMessage message)
+    {
+        _dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                Island().PokeMessage(SourceName(message.Source), message.Sender, message.Content);
+            }
+            catch (Exception ex)
+            {
+                _log.Warn("Island", "新消息弹出灵动岛失败", ex.Message);
+            }
+        }));
+    }
+
+    private static string SourceName(MessageSource source) => source switch
+    {
+        MessageSource.WeChat => "微信",
+        MessageSource.QQ => "QQ",
+        MessageSource.Ntfy => "ntfy",
+        _ => "消息",
+    };
 
     /// <summary>
     /// 下行推送（v0.2.4 需求 3）：把灵动岛里 WorkBuddy 正在执行的中文过程信息
@@ -196,11 +225,11 @@ public sealed class IslandController : IDisposable
 
                     if (done)
                     {
-                        Island().ShowDone(single);
+                        Island().ShowDone(single, "WorkBuddy");
                     }
                     else
                     {
-                        Island().ShowRunning(single);
+                        Island().ShowRunning(single, "WorkBuddy");
                     }
                 }
                 catch (Exception ex)
@@ -251,6 +280,13 @@ public sealed class IslandController : IDisposable
         island.MusicEnabledProvider = () => _config.Current.MusicEnabled;
         island.MarqueeSpeedProvider = () => _config.Current.MarqueeSpeed;
         island.LyricsEnabledProvider = () => _config.Current.LyricsEnabled;
+        island.LyricsFontSizeProvider = () => _config.Current.LyricsFontSize;
+        island.AutoCollapseEnabledProvider = () => _config.Current.AutoCollapseEnabled;
+        island.AutoCollapseSecondsProvider = () => _config.Current.AutoCollapseSeconds;
+        island.KeepOpenWhilePlayingProvider = () => _config.Current.KeepOpenWhilePlaying;
+
+        // 字号依赖 provider，必须在注入之后刷一次（构造函数里读不到配置）
+        island.ApplyLyricsTypography();
         island.ApplyThemeWithBackdrop(_config.Current);
         island.SavedPositionProvider = () =>
         {
@@ -371,7 +407,11 @@ public sealed class IslandController : IDisposable
         }));
     }
 
-    /// <summary>按播放进度切换歌词行；行号没变就不动 UI（跑马灯不重排）。</summary>
+    /// <summary>
+    /// 按播放进度切换歌词行；行号没变就不动 UI（跑马灯不重排）。
+    /// v0.2.7：进度取自 TryGetPlayback（PlaybackClock 外推），不再直接读 SMTC 的
+    /// 陈旧 Position —— 那是"歌词卡死在某一行、暂停再播才跳"的根因。
+    /// </summary>
     private void SyncLyricLine()
     {
         if (_lyricLines is not { Count: > 0 })
@@ -380,10 +420,9 @@ public sealed class IslandController : IDisposable
             return;
         }
 
-        var position = _media.GetPositionSeconds();
-        if (position < 0)
+        if (!_media.TryGetPlayback(out var position, out _, out _))
         {
-            return;
+            return; // 会话暂时读不到（切歌间隙），下一拍再试
         }
 
         var index = LyricsService.IndexAt(_lyricLines, position);
@@ -428,12 +467,16 @@ public sealed class IslandController : IDisposable
 
                 // v0.2.6：主题（纯色/毛玻璃 + 文字配色）保存后立即生效
                 Island().ApplyThemeWithBackdrop(config);
+
+                // v0.2.7：歌词字号 / 总开关 / 收纳时长保存后立即生效
+                Island().ApplyLyricsTypography();
                 Island().ShowLyrics(CurrentLyricText(1), CurrentLyricText(2));
 
                 // 音乐开关/跑马灯速度等变更即时生效：
                 // 需求 8——此前只调 ApplyModeChange，音乐组可见性不会重算，
                 // 表现为“取消勾选保存后不消失、重新勾选反而消失”。
                 Island().RefreshMedia();
+                Island().PokeActivity();
             }
             catch (Exception ex)
             {

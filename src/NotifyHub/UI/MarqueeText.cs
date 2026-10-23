@@ -6,6 +6,13 @@ using System.Windows.Media.Animation;
 
 namespace NotifyHub.UI;
 
+/// <summary>跑马灯的短文本锚点：Center=水平居中（歌名等）｜Left=左对齐（歌词/状态行）。</summary>
+public enum TextAnchor
+{
+    Center,
+    Left,
+}
+
 /// <summary>
 /// 跑马灯文本（需求 1 + 需求 2）：
 ///   - 文本宽度 ≤ 可视区：不滚动，水平居中显示（禁止左对齐）；
@@ -104,6 +111,30 @@ public sealed class MarqueeText : Control
     }
 
     /// <summary>
+    /// 短文本的锚点（v0.2.7）：默认居中（歌名）；歌词行与任务状态行用 Left，
+    /// 两行左对齐才像"歌词/日志"，居中会显得散。
+    /// 长文本滚动时同样以它为滚动起点。
+    /// </summary>
+    public TextAnchor Anchor
+    {
+        get => _anchor;
+        set
+        {
+            if (_anchor == value)
+            {
+                return;
+            }
+
+            _anchor = value;
+            _scrolling = false;
+            _offset = 0;
+            InvalidateVisual();
+        }
+    }
+
+    private TextAnchor _anchor = TextAnchor.Center;
+
+    /// <summary>
     /// 截屏/自检时置 true：暂停逐帧推进与 InvalidateVisual。
     /// 否则 RenderTargetBitmap.Render 抓拍会被渲染帧中间的重绘打断，抓到空帧。
     /// </summary>
@@ -168,19 +199,19 @@ public sealed class MarqueeText : Control
 
         if (_textWidth <= view)
         {
-            // 短文本：不滚动，水平居中（需求 2：禁止左对齐）
+            // 短文本：居中（歌名）或左对齐（歌词/状态行）
             _scrolling = false;
             _offset = 0;
-            var x = Math.Max(0, (view - _textWidth) / 2);
+            var x = _anchor == TextAnchor.Left ? 0 : Math.Max(0, (view - _textWidth) / 2);
             dc.DrawText(formatted, new Point(x, y));
             return;
         }
 
-        // 长文本：无缝循环。起点 = 文本居中于可视区（中心锚点，两侧对称溢出）
+        // 长文本：无缝循环。起点 = 短文本同款锚点（居中时两侧对称溢出，左对齐时从左侧开始）
         if (!_scrolling)
         {
             _scrolling = true;
-            _offset = (view - _textWidth) / 2;
+            _offset = _anchor == TextAnchor.Left ? 0 : (view - _textWidth) / 2;
         }
 
         dc.DrawText(formatted, new Point(_offset, y));
@@ -213,7 +244,7 @@ public sealed class MarqueeText : Control
 
                 // 循环：位移越过“起点 + 一整份文本 + 间隙”后回到起点（副本严格接续，无缝）
                 var span = _textWidth + TextGap;
-                var start = (ViewWidth - _textWidth) / 2;
+                var start = _anchor == TextAnchor.Left ? 0 : (ViewWidth - _textWidth) / 2;
                 if (_offset <= start - span)
                 {
                     _offset += span;

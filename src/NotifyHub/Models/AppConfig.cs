@@ -151,10 +151,40 @@ public sealed class AppConfig
     public string TextTone { get; set; } = "Auto";
 
     /// <summary>
-    /// 双行歌词（v0.2.6，需求 5）：音乐播放时在音乐控制区下方显示两行歌词（跑马灯）。
-    /// 关掉则恢复 v0.2.5 的单行布局。
+    /// 双行歌词（v0.2.6，需求 5；v0.2.7 需求 1 明确为「歌词总开关」）：
+    /// 音乐播放时在音乐控制区下方显示两行歌词（跑马灯）。关掉则恢复单行布局。
     /// </summary>
     public bool LyricsEnabled { get; set; } = true;
+
+    /// <summary>歌词字号（v0.2.7 需求 1，DIP）：当前行取 size+1.5，下一行取 size-1.5。</summary>
+    public int LyricsFontSize { get; set; } = 13;
+
+    /// <summary>
+    /// 超时自动收纳总开关（v0.2.7 需求 2）。关闭后灵动岛在内容存在期间一直展开，
+    /// 不再收成顶部细条。
+    /// </summary>
+    public bool AutoCollapseEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 超时自动收纳时长（秒，v0.2.7 需求 2，默认 3 秒）。
+    /// 有新消息 / 新任务 / 状态更新时重新计时；固定与自由模式统一按它收纳。
+    /// </summary>
+    public int AutoCollapseSeconds { get; set; } = 3;
+
+    /// <summary>
+    /// 音乐播放期间保持展开（不做自动收纳）。默认开——否则 3 秒就收成细条，歌词没得看。
+    /// </summary>
+    public bool KeepOpenWhilePlaying { get; set; } = true;
+
+    /// <summary>歌词字号允许范围。</summary>
+    public const int MinLyricsFontSize = 10;
+
+    public const int MaxLyricsFontSize = 22;
+
+    /// <summary>自动收纳时长允许范围（秒）。</summary>
+    public const int MinAutoCollapseSeconds = 1;
+
+    public const int MaxAutoCollapseSeconds = 60;
 
     /// <summary>主题候选值（设置页下拉与此一致）。</summary>
     public static readonly string[] ThemeModes = { "SolidDark", "GlassDark", "GlassLight", "GlassAuto" };
@@ -218,6 +248,10 @@ public sealed class AppConfig
                     ?? "SolidDark";
         TextTone = TextTones.FirstOrDefault(t => string.Equals(t, TextTone, StringComparison.OrdinalIgnoreCase))
                    ?? "Auto";
+
+        // v0.2.7：歌词字号与自动收纳时长收敛到安全区间
+        LyricsFontSize = Math.Clamp(LyricsFontSize, MinLyricsFontSize, MaxLyricsFontSize);
+        AutoCollapseSeconds = Math.Clamp(AutoCollapseSeconds, MinAutoCollapseSeconds, MaxAutoCollapseSeconds);
     }
 
     /// <summary>浏览器选择收敛到合法值。</summary>

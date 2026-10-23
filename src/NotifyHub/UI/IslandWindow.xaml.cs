@@ -14,18 +14,19 @@ using NotifyHub.Services;
 namespace NotifyHub.UI;
 
 /// <summary>
-/// 灵动岛 / 悬浮条：单一深色圆角长条，同一面板内横排展示
-///   [App图标/♪] 歌名-歌手 | [上一首][播放/暂停][下一首] | 单行实时动作。
-/// 固定模式锁定屏幕顶部居中；自由模式下按住空白区可拖动（左键/右键都行），
-/// 拖动与吸附只允许顶部边缘：水平限中间 3/5（最左/最右 1/5 禁停），
-/// 10 秒无交互自动吸附到顶部并收成一条横细条（SnapStripWindow），
-/// 鼠标移入细条立即展开完整悬浮条，离开 1.4s 再收回细条。
+/// 灵动岛 / 悬浮条：单一圆角长条，两栏「等信息量」布局（v0.2.7）
+///   左栏：[App图标/♪] 歌名-歌手 + [上一首][播放/暂停][下一首]，下面挂双行歌词
+///   右栏：● WorkBuddy + 一行实时动作（跨两行垂直居中）
+/// 固定模式锁定屏幕顶部居中；自由模式下按住空白区可拖动（左键/右键都行）。
+/// 拖动与吸附只允许顶部边缘：水平限中间 3/5（最左/最右 1/5 禁停）。
 ///
-/// 长文本（歌名/任务状态）走跑马灯：超宽自动横滚、悬停暂停、速度可调；
-/// 短文本在容器内水平居中，滚动时可视区中心钉在岛中心（MarqueeText）。
+/// 收纳规则（v0.2.7 需求 2，已统一）：
+///   单一计时器 <c>_autoTimer</c> 管全部情形——新任务/状态更新/新消息/音乐变化会把岛
+///   弹出来并重置倒计时；超时（默认 3 秒，可配）后滑到顶部收成细条，鼠标移上去即展开。
+///   不再区分"有没有任务在跑"（旧版任务期间常驻、无任务才收纳，表现随机）。
+///   三条例外：鼠标停在岛上、完成态 600ms 收尾、音乐播放且开启了"播放时保持展开"。
 ///
-/// 动效参数（严格要求）：
-///   展开 180ms ease-out｜状态文字切换 120ms 淡入｜完成停留 600ms｜收缩 220ms ease-in。
+/// 长文本（歌名/歌词/任务状态）走跑马灯：超宽自动横滚、悬停暂停、速度可调。
 ///
 /// 拖拽为什么不走 WPF 的鼠标事件：
 ///   本窗是 WS_EX_NOACTIVATE + AllowsTransparency 的分层窗口，未激活时第一下点击
@@ -53,8 +54,13 @@ public partial class IslandWindow : Window
     /// <summary>音乐停止缓冲（换曲间隙防闪烁）。</summary>
     private static readonly TimeSpan MusicHideGrace = TimeSpan.FromMilliseconds(2200);
 
-    /// <summary>无交互多久后自动吸附到最近边。</summary>
-    private static readonly TimeSpan IdleSnapDelay = TimeSpan.FromSeconds(10);
+    /// <summary>超时自动收纳的默认时长（秒，v0.2.7 需求 2）。</summary>
+    public const int DefaultAutoCollapseSeconds = 3;
+
+    /// <summary>超时自动收纳允许范围（秒）。</summary>
+    public const int MinAutoCollapseSeconds = 1;
+
+    public const int MaxAutoCollapseSeconds = 60;
 
     /// <summary>吸附时条体与屏幕边之间的视觉缝隙。</summary>
     private const double EdgeGap = 8;
@@ -62,11 +68,26 @@ public partial class IslandWindow : Window
     /// <summary>滑入/滑出动画时长。</summary>
     private const int SlideDurationMs = 240;
 
+    /// <summary>
+    /// 歌词正文相对音乐行左边缘的缩进（DIP）：
+    /// 面板左距 2 + 竖条 2 + 竖条右边距 23 = 27，正好和歌名文字起点对齐。
+    /// </summary>
+    private const double LyricTextIndent = 27;
+
+    /// <summary>歌词切换的淡入时长（v0.2.7：新行出现时轻微上浮 + 淡入）。</summary>
+    private static readonly TimeSpan LyricSwapDuration = TimeSpan.FromMilliseconds(170);
+
     private readonly DispatcherTimer _statusTimer = new();
     private readonly DispatcherTimer _musicTimer = new();
-    private readonly DispatcherTimer _idleTimer = new();
     private readonly DispatcherTimer _slideTimer = new() { Interval = TimeSpan.FromMilliseconds(15) };
-    private readonly DispatcherTimer _returnTimer = new();
+
+    /// <summary>
+    /// 唯一的「超时自动收纳」计时器（v0.2.7 需求 2）。
+    /// 旧版有两个互相打架的计时器（10s 无交互吸附 + 1.4s 从细条收回），再加上
+    /// “有任务就不吸附”的分支，表现就是随机常驻 / 随机收起。现在所有情形都归它管：
+    /// 有新消息、新任务、状态更新、音乐变化时重置，超时统一收成顶部细条。
+    /// </summary>
+    private readonly DispatcherTimer _autoTimer = new();
 
     private bool _statusVisible;
     private bool _musicVisible;
@@ -77,12 +98,17 @@ public partial class IslandWindow : Window
     private bool _collapsing;
     private MediaInfo? _media;
 
+    /// <summary>当前状态行是否是“新消息提示”的临时内容（超时后整条收起，不留在细条里）。</summary>
+    private bool _statusTransient;
+
+    /// <summary>歌词区换句时的位移变换（只影响渲染，不影响布局）。</summary>
+    private readonly TranslateTransform _lyricShift = new();
+
     // 动画防粘连：每次显隐都递增令牌，过期动画的 Completed 不再动窗口状态
     private int _animToken;
 
     // 吸附状态
     private bool _snapped;
-    private bool _peeked;
     private bool _sliding;
     private Edge _snapEdge = Edge.None;
 
@@ -126,24 +152,20 @@ public partial class IslandWindow : Window
         MusicText.Speed = MarqueeSpeedProvider?.Invoke() ?? MarqueeText.DefaultSpeed;
         StatusText.Speed = MarqueeSpeedProvider?.Invoke() ?? MarqueeText.DefaultSpeed;
 
+        // 歌词与状态行左对齐（居中的歌词看起来是散的，左对齐才像歌词卡）；
+        // 歌名也左对齐，和下方歌词左边界齐平
+        MusicText.Anchor = TextAnchor.Left;
+        LyricLine1.Anchor = TextAnchor.Left;
+        LyricLine2.Anchor = TextAnchor.Left;
+        StatusText.Anchor = TextAnchor.Left;
+        LyricsPanel.RenderTransform = _lyricShift;
+
         _statusTimer.Tick += (_, _) => OnStatusHoldElapsed();
         _musicTimer.Tick += (_, _) => OnMusicGraceElapsed();
-        _idleTimer.Interval = IdleSnapDelay;
-        _idleTimer.Tick += (_, _) => OnIdleElapsed();
+        _autoTimer.Tick += (_, _) => OnAutoCollapseElapsed();
         _slideTimer.Tick += (_, _) => OnSlideTick();
 
-        // 从细条展开后，鼠标离开 1.4s 自动收回细条（比 10 秒无交互更快回到"条状"）
-        _returnTimer.Interval = TimeSpan.FromMilliseconds(1400);
-        _returnTimer.Tick += (_, _) =>
-        {
-            _returnTimer.Stop();
-
-            if (IsFreeMode() && !_hidden && !_dragging && !_sliding && _peeked && !_stripMode)
-            {
-                SnapToNearestEdge();
-            }
-        };
-
+        // 鼠标在岛上时不收纳（用户正在看歌词/状态），离开再重新计时
         Pill.MouseEnter += OnPillMouseEnter;
         Pill.MouseLeave += OnPillMouseLeave;
 
@@ -151,6 +173,11 @@ public partial class IslandWindow : Window
         // 固定模式必须跟着重量位置，否则岛会越来越偏（不再居中）；
         // 自由模式保持视觉中心不动，避免宽度变化时整条"往右窜"。
         SizeChanged += OnIslandSizeChanged;
+
+        // 构造函数里只有默认字号（provider 要等外部注入后才能读），首帧加载时再刷一次
+        Loaded += (_, _) => ApplyLyricsTypography();
+
+        ApplyLyricsTypography();
     }
 
     /// <summary>当前实例（整个应用一个小岛）。</summary>
@@ -182,11 +209,72 @@ public partial class IslandWindow : Window
     /// <summary>注入的配置读取：跑马灯滚动速度（DIP/秒）。</summary>
     public Func<int>? MarqueeSpeedProvider { get; set; }
 
-    /// <summary>注入的配置读取：双行歌词开关。</summary>
+    /// <summary>注入的配置读取：歌词总开关（v0.2.7 需求 1）。</summary>
     public Func<bool>? LyricsEnabledProvider { get; set; }
+
+    /// <summary>注入的配置读取：歌词字号（v0.2.7 需求 1，DIP）。</summary>
+    public Func<int>? LyricsFontSizeProvider { get; set; }
+
+    /// <summary>注入的配置读取：超时自动收纳总开关（v0.2.7 需求 2）。</summary>
+    public Func<bool>? AutoCollapseEnabledProvider { get; set; }
+
+    /// <summary>注入的配置读取：超时收纳时长（秒，v0.2.7 需求 2）。</summary>
+    public Func<int>? AutoCollapseSecondsProvider { get; set; }
+
+    /// <summary>注入的配置读取：音乐播放期间保持展开（不自动收纳）。</summary>
+    public Func<bool>? KeepOpenWhilePlayingProvider { get; set; }
 
     /// <summary>歌词区当前是否展开（诊断用）。</summary>
     public bool IsLyricsShown => LyricsPanel.Visibility == Visibility.Visible;
+
+    /// <summary>当前歌词字号（诊断用，DIP）。</summary>
+    public double LyricsFontSize => LyricLine1.FontSize;
+
+    /// <summary>自动收纳计时器是否在跑（诊断用）。</summary>
+    public bool IsAutoTimerRunning => _autoTimer.IsEnabled;
+
+    private bool AutoCollapseEnabled() => AutoCollapseEnabledProvider?.Invoke() ?? true;
+
+    private bool KeepOpenWhilePlaying() => KeepOpenWhilePlayingProvider?.Invoke() ?? true;
+
+    private int AutoCollapseSeconds()
+    {
+        var seconds = AutoCollapseSecondsProvider?.Invoke() ?? DefaultAutoCollapseSeconds;
+        return Math.Clamp(seconds, MinAutoCollapseSeconds, MaxAutoCollapseSeconds);
+    }
+
+    /// <summary>
+    /// 按配置刷新歌词排版（v0.2.7 需求 1）：当前行比设定字号大 1.5，下一行小 1.5 且更暗，
+    /// 形成明确的“当前 / 下一句”层次。
+    /// </summary>
+    public void ApplyLyricsTypography()
+    {
+        var size = LyricsFontSizeProvider?.Invoke() ?? 13;
+        size = Math.Clamp(size, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize);
+
+        LyricLine1.FontSize = size + 1.5;
+        LyricLine1.FontWeight = FontWeights.SemiBold;
+        LyricLine2.FontSize = Math.Max(9, size - 1.5);
+        LyricLine2.FontWeight = FontWeights.Normal;
+
+        UpdateChrome();
+    }
+
+    /// <summary>左栏（音乐 + 歌词）实际宽度，诊断/自检用。</summary>
+    public double LeftPaneWidth => LeftPane.ActualWidth;
+
+    /// <summary>右栏（任务）实际宽度，诊断/自检用。</summary>
+    public double RightPaneWidth => StatusGroup.ActualWidth;
+
+    /// <summary>
+    /// 按当前实际布局重算左右两栏配平（v0.2.7）。正常由 <see cref="UpdateChrome"/>
+    /// 自动调用；离屏自检需要显式触发一次（那时没有 Show，不会走 SizeChanged）。
+    /// </summary>
+    public void RefreshLayoutMetrics()
+    {
+        UpdateChrome();
+        UpdateLayout();
+    }
 
     /// <summary>
     /// 按当前屏幕背景重新取一次样并应用主题（v0.2.6 需求 4）。
@@ -245,26 +333,59 @@ public partial class IslandWindow : Window
     }
 
     /// <summary>
-    /// 更新双行歌词（v0.2.6 需求 5）：<paramref name="current"/> 为当前行，
+    /// 更新双行歌词（v0.2.7）：<paramref name="current"/> 为当前行，
     /// <paramref name="next"/> 为下一行；都为 null 表示无歌词（收起歌词区）。
+    /// 行内容变化时做 170ms 淡入 + 轻微上浮，让"换句"看得见而不是硬切。
     /// </summary>
     public void ShowLyrics(string? current, string? next)
     {
-        var enabled = LyricsEnabledProvider?.Invoke() ?? true;
-        var hasLyric = enabled
-                       && !string.IsNullOrWhiteSpace(current)
-                       && _musicVisible;
+        var line1 = current ?? string.Empty;
+        var line2 = next ?? string.Empty;
+        var changed = !string.Equals(LyricLine1.Text, line1, StringComparison.Ordinal);
+        var wasVisible = LyricsPanel.Visibility == Visibility.Visible;
 
-        LyricLine1.Text = current ?? string.Empty;
-        LyricLine2.Text = next ?? string.Empty;
+        LyricLine1.Text = line1;
+        LyricLine2.Text = line2;
 
-        var target = hasLyric ? Visibility.Visible : Visibility.Collapsed;
-        if (LyricsPanel.Visibility != target)
+        // 没词 / 关了开关 / 没音乐：一律收起（空面板会把岛撑高一小截）
+        var hasLyric = (LyricsEnabledProvider?.Invoke() ?? true)
+                       && _musicVisible
+                       && line1.Trim().Length > 0;
+
+        LyricsPanel.Visibility = hasLyric ? Visibility.Visible : Visibility.Collapsed;
+
+        if (hasLyric != wasVisible)
         {
-            LyricsPanel.Visibility = target;
             UpdateChrome();
             Evaluate();
         }
+        else if (hasLyric && changed)
+        {
+            // 只在"本来就显示、内容变了"时做动画：首次展开交给整岛动画，避免叠加发灰
+            AnimateLyricSwap();
+        }
+    }
+
+    /// <summary>换句动画：淡入 + 从下方 4px 归位（不动布局，只动渲染变换）。</summary>
+    private void AnimateLyricSwap()
+    {
+        LyricsPanel.BeginAnimation(OpacityProperty, null);
+        _lyricShift.BeginAnimation(TranslateTransform.YProperty, null);
+
+        LyricsPanel.Opacity = 1;
+
+        var fade = new DoubleAnimation(0.35, 1, LyricSwapDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+
+        var rise = new DoubleAnimation(4, 0, LyricSwapDuration)
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+
+        LyricsPanel.BeginAnimation(OpacityProperty, fade);
+        _lyricShift.BeginAnimation(TranslateTransform.YProperty, rise);
     }
 
     /// <summary>小岛当前是否可见（诊断用）。</summary>
@@ -277,17 +398,46 @@ public partial class IslandWindow : Window
     public string SnapEdgeName => _snapEdge.ToString();
 
     /// <summary>显示“任务执行中”状态（单行实时动作文字）。</summary>
-    public void ShowRunning(string text)
+    public void ShowRunning(string text, string? tag = null)
     {
         EnsureCreated();
-        SetStatus(text, done: false);
+        SetStatus(text, done: false, tag);
     }
 
     /// <summary>显示“任务完成”：对勾 + 完成文字，600ms 后 220ms 收缩。</summary>
-    public void ShowDone(string text)
+    public void ShowDone(string text, string? tag = null)
     {
         EnsureCreated();
-        SetStatus(text, done: true);
+        SetStatus(text, done: true, tag);
+    }
+
+    /// <summary>
+    /// 新消息提示（v0.2.7 需求 2）：有新消息时把灵动岛弹出来并显示一条临时状态，
+    /// 超时后整条收起。若此刻有真实任务状态在跑，只弹出/续时，不覆盖任务文字。
+    /// </summary>
+    public void PokeMessage(string source, string sender, string content)
+    {
+        EnsureCreated();
+
+        if (_statusVisible && !_statusTransient)
+        {
+            // 有真实任务在跑：只把岛弹出来 + 续时，不动任务文字
+            Evaluate();
+            RestartAutoCollapse();
+            return;
+        }
+
+        var who = string.IsNullOrWhiteSpace(sender) ? source : $"{source} · {sender}";
+        var line = string.IsNullOrWhiteSpace(content) ? who : $"{who}：{content}";
+
+        SetStatus(line, done: false, tag: source, transient: true);
+    }
+
+    /// <summary>外部事件（新任务/新状态）到达时把岛弹出来并重置收纳倒计时。</summary>
+    public void PokeActivity()
+    {
+        Evaluate();
+        RestartAutoCollapse();
     }
 
     /// <summary>
@@ -380,12 +530,10 @@ public partial class IslandWindow : Window
         {
             // 切回固定模式：清掉吸附/细条状态，回到顶部居中
             _snapped = false;
-            _peeked = false;
             _stripMode = false;
             _strip?.Collapse();
             _snapEdge = Edge.None;
-            _idleTimer.Stop();
-            _returnTimer.Stop();
+            _autoTimer.Stop();
         }
 
         if (!_hidden && IsVisible && !_dragging && !_sliding)
@@ -393,26 +541,32 @@ public partial class IslandWindow : Window
             PositionIsland();
         }
 
-        if (free && !_hidden)
+        if (!_hidden)
         {
-            RestartIdleTimer();
+            RestartAutoCollapse();
         }
     }
 
     // ---------------- 状态文字 ----------------
 
-    private void SetStatus(string text, bool done)
+    private void SetStatus(string text, bool done, string? tag = null, bool transient = false)
     {
         var fallback = done ? "完成" : "正在执行任务…";
         var display = string.IsNullOrWhiteSpace(text) ? fallback : text.Trim();
 
-        // 只许一行：任何换行/连续空白都压平，超长交给 TextTrimming 省略
+        // 只许一行：任何换行/连续空白都压平，超长交给跑马灯
         display = FlattenToSingleLine(display);
 
         var changed = !string.Equals(StatusText.Text, display, StringComparison.Ordinal);
         var firstShow = _hidden || !_statusVisible;
 
         StatusText.Text = display;
+
+        // 标签：执行中显示来源（WorkBuddy / 微信 …），完成态追加“· 完成”，配绿勾更易读
+        var label = string.IsNullOrWhiteSpace(tag) ? "WorkBuddy" : tag.Trim();
+        StatusTag.Text = done ? $"{label} · 完成" : label;
+        StatusTag.Opacity = done ? 1 : 0.85;
+        _statusTransient = transient;
 
         // 文字切换 120ms 淡入；首次出现交给整条展开动画，避免两层叠加发灰
         if (changed && !firstShow)
@@ -457,11 +611,8 @@ public partial class IslandWindow : Window
 
         Evaluate();
 
-        // 有任务在跑时不应该吸附到边上（用户正盯着看）
-        if (!done && IsFreeMode())
-        {
-            RestartIdleTimer();
-        }
+        // v0.2.7 需求 2：无论有没有任务在跑，都按用户设定的时长统一收纳
+        RestartAutoCollapse();
     }
 
     private static string FlattenToSingleLine(string text)
@@ -483,18 +634,13 @@ public partial class IslandWindow : Window
 
         MusicGroup.Visibility = _musicVisible ? Visibility.Visible : Visibility.Collapsed;
 
-        // 音乐收起时歌词必须一起收起（否则会留两行空行把岛撑高）
-        if (!_musicVisible)
-        {
-            LyricsPanel.Visibility = Visibility.Collapsed;
-        }
-        else if (LyricsPanel.Visibility == Visibility.Visible)
-        {
-            // 恢复播放时按开关重新展开歌词
-            LyricsPanel.Visibility = (LyricsEnabledProvider?.Invoke() ?? true)
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-        }
+        // 音乐收起时歌词必须一起收起（否则会留两行空行把岛撑高）；
+        // 恢复播放时按开关 + 是否真的有词重新判定
+        var keepLyrics = _musicVisible
+                         && (LyricsEnabledProvider?.Invoke() ?? true)
+                         && LyricLine1.Text.Trim().Length > 0;
+
+        LyricsPanel.Visibility = keepLyrics ? Visibility.Visible : Visibility.Collapsed;
 
         if (_media is not null)
         {
@@ -549,13 +695,52 @@ public partial class IslandWindow : Window
 
     /// <summary>分隔线只在音乐与任务两组同时可见时出现；歌词随音乐组一起出现。</summary>
     private void UpdateChrome()
-        => Divider.Visibility = _musicVisible && _statusVisible ? Visibility.Visible : Visibility.Collapsed;
+    {
+        Divider.Visibility = _musicVisible && _statusVisible ? Visibility.Visible : Visibility.Collapsed;
+        BalanceWidths();
+    }
+
+    /// <summary>
+    /// 左右两栏宽度配平（v0.2.7 需求 1 的核心）。
+    /// v0.2.6 的毛病：右侧任务文字固定 440px、左侧歌词固定 286px，一有任务岛就撑到 810px，
+    /// 左挤右空。现在两侧都按「标签 + 正文」组织，正文宽度按对方是否存在来配：
+    ///   有音乐 → 右侧 292（与左栏 ≈320 接近，视觉配平）
+    ///   无音乐 → 右侧 380（独占整条，避免又窄又空）
+    /// 歌词宽度则跟随左栏实际宽度，让两行的左右边界对齐。
+    /// </summary>
+    private void BalanceWidths()
+    {
+        var statusWidth = _musicVisible ? 262d : 360d;
+        if (double.IsNaN(StatusText.Width) || Math.Abs(StatusText.Width - statusWidth) > 0.5)
+        {
+            StatusText.Width = statusWidth;
+        }
+
+        if (!_musicVisible || MusicGroup.ActualWidth <= 60)
+        {
+            return;
+        }
+
+        // 歌词正文宽度 = 音乐行宽度 − 竖条与左边距（右边界与播放三键对齐，左边界与歌名对齐）
+        var lyricWidth = MusicGroup.ActualWidth - LyricTextIndent;
+        if (lyricWidth < 80)
+        {
+            return;
+        }
+
+        if (Math.Abs(LyricLine1.Width - lyricWidth) > 0.5)
+        {
+            LyricLine1.Width = lyricWidth;
+            LyricLine2.Width = lyricWidth;
+        }
+    }
 
     private void OnMusicGraceElapsed()
     {
         _musicTimer.Stop();
         UpdateMusicGroup();
         Evaluate();
+        RestartAutoCollapse();
     }
 
     private void OnStatusHoldElapsed()
@@ -568,13 +753,11 @@ public partial class IslandWindow : Window
         }
 
         _statusVisible = false;
+        _statusTransient = false;
         StopBreathing();
 
-        // 任务收尾后重新开始"无交互倒计时"，否则跑过一次任务就再也不吸附了
-        if (IsFreeMode())
-        {
-            RestartIdleTimer();
-        }
+        // 内容到期后重新计时（此时多半已经没有内容，计时器会在 Evaluate 后自行停掉）
+        RestartAutoCollapse();
 
         if (_musicVisible)
         {
@@ -621,7 +804,7 @@ public partial class IslandWindow : Window
             // 细条形态下内容全部消失（任务过期/音乐停止）：细条一并收掉
             _stripMode = false;
             _strip?.Collapse();
-            _returnTimer.Stop();
+            _autoTimer.Stop();
         }
     }
 
@@ -644,7 +827,6 @@ public partial class IslandWindow : Window
         if (wasHidden)
         {
             _snapped = false;
-            _peeked = false;
             PositionIsland();
             Show();
             UpdateLayout();
@@ -691,10 +873,8 @@ public partial class IslandWindow : Window
         };
         IslandShift.BeginAnimation(TranslateTransform.YProperty, drop);
 
-        if (IsFreeMode())
-        {
-            RestartIdleTimer();
-        }
+        // v0.2.7 需求 2：出现即开始收纳倒计时（固定/自由模式一视同仁）
+        RestartAutoCollapse();
     }
 
     /// <summary>收缩消失：220ms ease-in（淡出 + 微微上飘），动画确实结束后才 Hide。</summary>
@@ -706,8 +886,7 @@ public partial class IslandWindow : Window
         }
 
         _collapsing = true;
-        _idleTimer.Stop();
-        _returnTimer.Stop();
+        _autoTimer.Stop();
         _stripMode = false;
         _strip?.Collapse();
         StopBreathing();
@@ -741,7 +920,6 @@ public partial class IslandWindow : Window
             _collapsing = false;
             _hidden = true;
             _snapped = false;
-            _peeked = false;
             _snapEdge = Edge.None;
 
             BeginAnimation(OpacityProperty, null);
@@ -798,6 +976,9 @@ public partial class IslandWindow : Window
             return;
         }
 
+        // 首次布局拿到真实宽度后，重算左右两栏配平（内部有差值判断，不会反复触发布局）
+        BalanceWidths();
+
         if (!IsFreeMode())
         {
             RecenterFixed();
@@ -829,6 +1010,11 @@ public partial class IslandWindow : Window
         {
             Top -= deltaH / 2;
         }
+
+        // v0.2.7：宽度变化（歌词展开/任务文字变长）后仍要保证整条留在屏内
+        var (clampedLeft, clampedTop) = ClampToScreen(Left, Top);
+        Left = clampedLeft;
+        Top = clampedTop;
     }
 
     /// <summary>保持吸附边不变，按新的条体尺寸重新贴边（文字变长/变短时用）。</summary>
@@ -873,6 +1059,8 @@ public partial class IslandWindow : Window
     ///   垂直：只允许顶部一带（阴影留白可轻微出屏，不允许拖到屏幕中下部）；
     ///   水平：仅限中间 3/5，最左 1/5 与最右 1/5 禁停；
     ///   以"岛中心点"判定分区，长短不一的岛行为一致。
+    /// v0.2.7 附加硬约束：条体必须完整留在屏内（只有阴影留白允许出界）——
+    /// 两栏布局让岛变宽后，光靠"中心点分区"会让右侧伸出屏幕外。
     /// 固定模式钉死顶部正中间；自由模式保存的位置同样按此收敛。
     /// </summary>
     private (double Left, double Top) ClampToScreen(double left, double top)
@@ -883,8 +1071,22 @@ public partial class IslandWindow : Window
         var slack = PillPad + 2;
 
         var zoneInset = area.Width * 0.2;
-        var minLeft = area.Left + zoneInset - (w / 2);
-        var maxLeft = area.Right - zoneInset - (w / 2);
+        var zoneMin = area.Left + zoneInset - (w / 2);
+        var zoneMax = area.Right - zoneInset - (w / 2);
+
+        // 整条可见：左边缘最多到屏幕左沿（可再出一点点留给阴影），右边缘不越过屏幕右沿
+        var fitMin = area.Left - slack;
+        var fitMax = Math.Max(fitMin, area.Right - w + slack);
+
+        var minLeft = Math.Max(zoneMin, fitMin);
+        var maxLeft = Math.Min(zoneMax, fitMax);
+
+        if (maxLeft < minLeft)
+        {
+            // 屏太窄、两条约束打架时，以"完整可见"为准
+            minLeft = fitMin;
+            maxLeft = fitMax;
+        }
 
         var minTop = area.Top - slack;
         var maxTop = area.Top + 120;
@@ -892,25 +1094,90 @@ public partial class IslandWindow : Window
         return (Math.Clamp(left, minLeft, maxLeft), Math.Clamp(top, minTop, maxTop));
     }
 
-    // ---------------- 无交互自动吸附（四边） ----------------
+    // ---------------- 超时自动收纳（v0.2.7 需求 2：单一计时器） ----------------
 
-    private void RestartIdleTimer()
+    /// <summary>
+    /// 重置收纳倒计时。凡是"有新东西"的时机都调它：新任务、状态更新、新消息、音乐变化、
+    /// 从细条展开、鼠标离开、拖拽结束、配置变更。
+    /// 总开关关闭时直接不启动（岛会一直展开，直到内容自己过期）。
+    /// </summary>
+    private void RestartAutoCollapse()
     {
-        _idleTimer.Stop();
+        _autoTimer.Stop();
 
-        if (!IsFreeMode() || _hidden || _snapped)
+        if (!AutoCollapseEnabled())
         {
             return;
         }
 
-        _idleTimer.Start();
+        // 已经整岛收起（既没有岛也没有细条）：没有可收纳的东西
+        if (_hidden && !_stripMode)
+        {
+            return;
+        }
+
+        // 拖拽中不打扰，松手后 EndDrag 会重新计时
+        if (_dragging)
+        {
+            return;
+        }
+
+        _autoTimer.Interval = TimeSpan.FromSeconds(AutoCollapseSeconds());
+        _autoTimer.Start();
+
+        LogService.Shared.Write(
+            LogLevel.Debug, "IslandAuto",
+            $"收纳倒计时重置 {AutoCollapseSeconds()}s",
+            $"hidden={_hidden} strip={_stripMode} hover={Pill.IsMouseOver} music={_musicPlaying} status={_statusVisible}");
     }
 
-    private void OnIdleElapsed()
+    /// <summary>
+    /// 倒计时结束：统一收成屏幕顶部细条。
+    /// 三条豁免——鼠标停在岛上（用户正在看）、完成态（有自己 600ms 的收尾节奏）、
+    /// 音乐正在播放且用户开启了"播放时保持展开"（否则永远看不到歌词）。
+    /// </summary>
+    private void OnAutoCollapseElapsed()
     {
-        _idleTimer.Stop();
+        _autoTimer.Stop();
 
-        if (!IsFreeMode() || _hidden || _dragging || _snapped || _peeked || _sliding)
+        LogService.Shared.Write(
+            LogLevel.Debug, "IslandAuto", "收纳计时到点",
+            $"hidden={_hidden} drag={_dragging} sliding={_sliding} strip={_stripMode} " +
+            $"hover={Pill.IsMouseOver} done={IsDoneState} transient={_statusTransient} " +
+            $"music={_musicPlaying} keepOpen={KeepOpenWhilePlaying()}");
+
+        if (_hidden || _dragging || _sliding || _stripMode)
+        {
+            return;
+        }
+
+        if (Pill.IsMouseOver)
+        {
+            RestartAutoCollapse();
+            return;
+        }
+
+        if (IsDoneState)
+        {
+            return;
+        }
+
+        // 临时的新消息提示：超时后先撤掉提示文字（有音乐则继续显示音乐，不留残影）
+        if (_statusTransient)
+        {
+            _statusTransient = false;
+            _statusVisible = false;
+            _statusTimer.Stop();
+            StopBreathing();
+            StatusGroup.Visibility = Visibility.Collapsed;
+            UpdateChrome();
+            Evaluate();
+            RestartAutoCollapse();
+            return;
+        }
+
+        // 音乐正在播且允许保持展开 → 一直显示歌词
+        if (_musicPlaying && _musicVisible && KeepOpenWhilePlaying())
         {
             return;
         }
@@ -920,39 +1187,23 @@ public partial class IslandWindow : Window
 
     private void OnPillMouseEnter(object sender, MouseEventArgs e)
     {
-        _idleTimer.Stop();
-        _returnTimer.Stop();
-
-        if (!IsFreeMode() || _dragging || _sliding)
-        {
-            return;
-        }
-
-        // 细条形态下鼠标其实落不到岛上（岛已隐藏），这里主要防滑动途中抖动
+        // 鼠标进入：暂停收纳倒计时（正在看歌词 / 准备点按钮）
+        _autoTimer.Stop();
     }
 
     private void OnPillMouseLeave(object sender, MouseEventArgs e)
     {
-        if (!IsFreeMode())
+        if (_dragging || _sliding)
         {
             return;
         }
 
-        if (_peeked && !_stripMode)
-        {
-            // 从细条展开出来的：离开后 1.4s 收回细条
-            _returnTimer.Stop();
-            _returnTimer.Start();
-            return;
-        }
-
-        _peeked = false;
-        RestartIdleTimer();
+        RestartAutoCollapse();
     }
 
     /// <summary>
-    /// 吸附到顶部边缘（v0.2.3：彻底砍掉左/右/下边缘停靠，只允许顶部）。
-    /// 水平位置保留用户拖到的落点（收敛进中间 3/5），垂直贴顶。
+    /// 吸附到顶部边缘（v0.2.3：只允许顶部停靠）。
+    /// 水平位置保留用户拖到的落点（收敛进中间 3/5），垂直贴顶，落定后收成细条。
     /// </summary>
     private void SnapToNearestEdge()
     {
@@ -964,7 +1215,6 @@ public partial class IslandWindow : Window
 
         _snapEdge = Edge.Top;
         _snapped = true;
-        _peeked = false;
 
         // 先顺滑滑到顶部，落定后整岛收成细条
         SlideTo(targetLeft, targetTop, SlideDurationMs, SwitchToStrip);
@@ -1003,7 +1253,7 @@ public partial class IslandWindow : Window
         BeginAnimation(OpacityProperty, fade);
     }
 
-    /// <summary>细条被移入/点击（或吸附期间来了新状态）：整岛重新展开，1.4s 无鼠标再收回。</summary>
+    /// <summary>细条被移入/点击（或吸附期间来了新状态）：整岛重新展开，超时后再次收纳。</summary>
     private void ExpandFromStrip()
     {
         if (!_stripMode)
@@ -1011,11 +1261,12 @@ public partial class IslandWindow : Window
             return;
         }
 
+        LogService.Shared.Write(LogLevel.Debug, "IslandAuto", "从细条展开", $"status={_statusVisible} music={_musicPlaying}");
+
         var token = ++_animToken;
         _stripMode = false;
         _strip?.Collapse();
         _snapped = false;
-        _peeked = true;
 
         // 贴顶全展开：水平收敛进中间 3/5，垂直留出与吸附同款缝隙
         var (left, _) = ClampToScreen(Left, Top);
@@ -1036,18 +1287,9 @@ public partial class IslandWindow : Window
         };
         BeginAnimation(OpacityProperty, fade);
 
-        // 执行中有实时状态 → 保持展开（10 秒无新状态由闲置计时器收条）；
-        // 只有"无状态/完成态"的展开（比如用户点开看音乐）才 1.4s 自动收回
-        _returnTimer.Stop();
-
-        if (!_statusVisible || IsDoneState)
-        {
-            _returnTimer.Start();
-        }
-        else
-        {
-            RestartIdleTimer();
-        }
+        // 展开后按统一规则重新计时：鼠标不进来就等超时再收成细条
+        _autoTimer.Stop();
+        RestartAutoCollapse();
     }
 
     private SnapStripWindow EnsureStrip()
@@ -1182,19 +1424,19 @@ public partial class IslandWindow : Window
 
     private void OnPlayPauseClick(object sender, RoutedEventArgs e)
     {
-        RestartIdleTimer();
+        RestartAutoCollapse();
         PlayPauseRequested?.Invoke();
     }
 
     private void OnNextClick(object sender, RoutedEventArgs e)
     {
-        RestartIdleTimer();
+        RestartAutoCollapse();
         NextRequested?.Invoke();
     }
 
     private void OnPrevClick(object sender, RoutedEventArgs e)
     {
-        RestartIdleTimer();
+        RestartAutoCollapse();
         PreviousRequested?.Invoke();
     }
 
@@ -1298,16 +1540,14 @@ public partial class IslandWindow : Window
 
         _dragging = true;
         _dragMoved = false;
-        _idleTimer.Stop();
+        _autoTimer.Stop();
         StopSlide();
 
         // 吸附/细条态直接拖：先清状态，落手位置由用户决定
         _snapped = false;
-        _peeked = false;
         _stripMode = false;
         _strip?.Collapse();
         _snapEdge = Edge.None;
-        _returnTimer.Stop();
 
         NativeMethods.SetCapture(hwnd);
     }
@@ -1334,8 +1574,21 @@ public partial class IslandWindow : Window
         var height = _dragStartWindow.Bottom - _dragStartWindow.Top;
 
         var zoneInset = (int)(area.Width * 0.2 * sx);
-        var minX = (int)(area.Left * sx) + zoneInset - (width / 2);
-        var maxX = (int)(area.Right * sx) - zoneInset - (width / 2);
+        var zoneMin = (int)(area.Left * sx) + zoneInset - (width / 2);
+        var zoneMax = (int)(area.Right * sx) - zoneInset - (width / 2);
+
+        // 与 ClampToScreen 同款硬约束：整条必须留在屏内（只允许阴影留白出界）
+        var fitMin = (int)(area.Left * sx) - 20;
+        var fitMax = (int)(area.Right * sx) - width + 20;
+
+        var minX = Math.Max(zoneMin, fitMin);
+        var maxX = Math.Min(zoneMax, fitMax);
+        if (maxX < minX)
+        {
+            minX = fitMin;
+            maxX = fitMax;
+        }
+
         var minY = (int)(area.Top * sy) - 40;
         var maxY = (int)((area.Top + 120) * sy);
 
@@ -1351,7 +1604,7 @@ public partial class IslandWindow : Window
         if (!_dragMoved)
         {
             // 只是点了一下（没真正移动）：不改位置、不写配置，避免把脏坐标存进去
-            RestartIdleTimer();
+            RestartAutoCollapse();
             return;
         }
 
@@ -1363,7 +1616,7 @@ public partial class IslandWindow : Window
         Top = top;
 
         PositionCommitted?.Invoke(left, top);
-        RestartIdleTimer();
+        RestartAutoCollapse();
     }
 
     private static int CursorX(IntPtr lParam) => (short)(lParam.ToInt64() & 0xFFFF);
@@ -1495,9 +1748,8 @@ public partial class IslandWindow : Window
         _source = null;
         _statusTimer.Stop();
         _musicTimer.Stop();
-        _idleTimer.Stop();
+        _autoTimer.Stop();
         _slideTimer.Stop();
-        _returnTimer.Stop();
         _strip?.Close();
         _strip = null;
 

@@ -121,6 +121,11 @@ public partial class SettingsWindow : Window
         WeChatFilterCheck.IsChecked = config.WeChatFilterEnabled;
         FilterKeywordsBox.Text = config.WeChatBlockedKeywords;
 
+        // v0.2.6 外观：主题 / 文字配色 / 双行歌词
+        SelectComboByTag(ThemeCombo, ThemePalette.NormalizeMode(config.ThemeMode));
+        SelectComboByTag(TextToneCombo, config.TextTone);
+        LyricsEnabledCheck.IsChecked = config.LyricsEnabled;
+
         MarqueeSpeedSlider.Value = Math.Clamp(config.MarqueeSpeed, 10, 120);
         MarqueeSpeedText.Text = $"{Math.Clamp(config.MarqueeSpeed, 10, 120)}";
 
@@ -517,6 +522,40 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>
+    /// 主题预览（v0.2.6）：用当前下拉选择生成一张真实通知卡片，直接看到毛玻璃/文字效果；
+    /// 卡片本身也能拖动滑掉，等于同时演示了「滑动取消」。
+    /// </summary>
+    private void OnThemePreviewClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var preview = _config.Current.Clone();
+            preview.ThemeMode = ComboTag(ThemeCombo, "SolidDark");
+            preview.TextTone = ComboTag(TextToneCombo, "Auto");
+
+            var message = new NotifyMessage
+            {
+                Source = MessageSource.Ntfy,
+                Sender = $"外观预览 · {ThemePalette.DisplayName(preview.ThemeMode)}",
+                Content = "这是一张预览卡片：按住可以上下/左右拖动，超过阈值松手即带惯性收起。",
+                Time = DateTime.Now,
+                SourceLabel = "NotifyHub 预览",
+            };
+
+            var card = new NotificationWindow(message, 8000, preview.MarqueeSpeed, preview);
+            card.ShowAt(
+                SystemParameters.WorkArea.Right - 384 - 12,
+                SystemParameters.WorkArea.Top + 12,
+                animate: true);
+            _log.Info("Settings", "主题预览已弹出", $"mode={preview.ThemeMode} tone={preview.TextTone}");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "预览失败：" + ex.Message, "NotifyHub", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void OnSaveClick(object sender, RoutedEventArgs e)
     {
         if (!int.TryParse(IntervalBox.Text.Trim(), out var interval)
@@ -574,6 +613,9 @@ public partial class SettingsWindow : Window
         next.WeChatBlockedKeywords = FilterKeywordsBox.Text.Trim();
 
         next.MarqueeSpeed = (int)Math.Round(Math.Clamp(MarqueeSpeedSlider.Value, 10, 120));
+        next.ThemeMode = ComboTag(ThemeCombo, "SolidDark");
+        next.TextTone = ComboTag(TextToneCombo, "Auto");
+        next.LyricsEnabled = LyricsEnabledCheck.IsChecked == true;
 
         // 浏览器四选项（v0.2.4 需求 7）：前三项自动定位，Other 用用户提供的路径
         var browserChoice = AppConfig.NormalizeBrowserChoice(ComboTag(BrowserChoiceCombo, "System"));

@@ -5,6 +5,7 @@ using System.Windows.Automation;
 using NotifyHub.Models;
 using NotifyHub.Services.Parsing;
 using NotifyHub.Services.Uia;
+using NotifyHub.UI;
 
 namespace NotifyHub.Services;
 
@@ -519,6 +520,175 @@ public static class SelfTest
                    && WeChatFilter.ShouldBlock(articleLink, config, out _)
                    && !WeChatFilter.ShouldBlock(friend, config, out _);
         });
+
+        Check("v0.2.6：LRC 解析（多时间标签/毫秒位/元信息行）+ 当前行定位", () =>
+        {
+            var lrc = string.Join("\n",
+                "[ti:测试歌曲]",
+                "[ar:测试歌手]",
+                "[offset:0]",
+                "[00:01.20]第一行",
+                "[00:05.5][01:10.00]重复行",
+                "[00:12.345]第三行",
+                "[00:20.00]",
+                "[00:25.00]最后一行");
+
+            var lines = LyricsService.ParseLrc(lrc);
+
+            // 元信息行跳过、空行跳过，[00:05.5][01:10.00] 拆成两条
+            var okCount = lines.Count == 5;
+            var okSort = true;
+            for (var i = 1; i < lines.Count; i++)
+            {
+                okSort &= lines[i].Time >= lines[i - 1].Time;
+            }
+
+            // 毫秒位：两位 = 十分之一秒（05.5 → 5.5s），三位 = 原值（12.345）
+            var okTime = Math.Abs(lines[0].Time.TotalSeconds - 1.2) < 0.001
+                         && Math.Abs(lines[1].Time.TotalSeconds - 5.5) < 0.001
+                         && Math.Abs(lines[2].Time.TotalSeconds - 12.345) < 0.001
+                         && Math.Abs(lines[3].Time.TotalSeconds - 25.0) < 0.001;
+
+            // 当前行定位：3 秒落在 1.2s 与 5.5s 之间 → 下标 0；6 秒 → 下标 1；
+            // 0.5 秒还没到第一行 → -1；超过最后一行 → 最后一条
+            var okIndex = LyricsService.IndexAt(lines, 3) == 0
+                          && LyricsService.IndexAt(lines, 6) == 1
+                          && LyricsService.IndexAt(lines, 0.5) == -1
+                          && LyricsService.IndexAt(lines, 999) == lines.Count - 1;
+
+            return okCount && okSort && okTime && okIndex;
+        });
+
+        Check("v0.2.6：歌名/歌手匹配打分（防串词）", () =>
+        {
+            // 完全一致 + 歌手命中 → 1.0；仅歌名包含 → 0.55；完全无关 → 0
+            var exact = LyricsService.MatchScore("孤勇者", "陈奕迅", "孤勇者", "陈奕迅");
+            var loose = LyricsService.MatchScore("孤勇者", "陈奕迅", "孤勇者 (Live)", "陈奕迅");
+            var other = LyricsService.MatchScore("孤勇者", "陈奕迅", "晴天", "周杰伦");
+
+            return exact >= 0.99 && loose >= 0.99 && other < 0.6;
+        });
+
+        Check("v0.2.6：主题调色板四种组合的文字对比度都达标（WCAG ≥ 4.5）", () =>
+        {
+            var ok = true;
+            var details = new List<string>();
+
+            foreach (var mode in AppConfig.ThemeModes)
+            {
+                var config = new AppConfig { ThemeMode = mode, TextTone = "Auto" };
+                var palette = ThemePalette.Create(config);
+                var ratio = ThemePalette.ContrastRatio(palette.TextPrimary, palette.NominalBackground);
+                ok &= ratio >= 4.5;
+                details.Add($"{mode}={ratio:F1}");
+            }
+
+            // 强制白色文字放在浅色毛玻璃上必须被矫正（否则白字白底看不见）
+            var forcedWhiteOnLight = ThemePalette.Create(new AppConfig
+            {
+                ThemeMode = "GlassLight",
+                TextTone = "White",
+            });
+            var forcedBlackOnDark = ThemePalette.Create(new AppConfig
+            {
+                ThemeMode = "GlassDark",
+                TextTone = "Black",
+            });
+
+            var okForce = ThemePalette.ContrastRatio(
+                              forcedWhiteOnLight.TextPrimary, forcedWhiteOnLight.NominalBackground) >= 4.5
+                          && ThemePalette.ContrastRatio(
+                              forcedBlackOnDark.TextPrimary, forcedBlackOnDark.NominalBackground) >= 4.5;
+
+            if (!ok)
+            {
+                LogService.Shared.Warn("SelfTest", "对比度不足", string.Join(", ", details));
+            }
+
+            return ok && okForce;
+        });
+
+        Check("v0.2.6：主题/文字配色非法值回落默认", () =>
+        {
+            var config = new AppConfig { ThemeMode = "Neon", TextTone = "Rainbow" };
+            config.Normalize();
+            return config.ThemeMode == "SolidDark" && config.TextTone == "Auto";
+        });
+
+        Check("v0.2.6：固定岛只有播放三键可点，其余区域穿透（离屏命中测试）", () =>
+        {
+            // 自检跑在 MTA 线程池（UIA 需要），WPF 窗口必须 STA —— 单开一个 STA 线程跑，
+            // 只做 Measure/Arrange 不进消息循环，不 Show 也能拿到真实布局。
+            var ok = false;
+            var worker = new System.Threading.Thread(() =>
+            {
+                ok = RunIslandHitTest();
+            }, 8 * 1024 * 1024);
+
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+
+            if (!worker.Join(TimeSpan.FromSeconds(15)))
+            {
+                return false;
+            }
+
+            return ok;
+        });
+
+        static bool RunIslandHitTest()
+        {
+            // 构造一个真实布局的岛（不显示），验证：
+            //   播放按钮中心 → 命中 Button（WPF 接收）
+            //   歌词行 / 标题文字 / 空白 → 不命中 Button（该位置 HTTRANSPARENT 穿透）
+            var island = new IslandWindow
+            {
+                ModeProvider = () => "Fixed",
+                MusicEnabledProvider = () => true,
+                MarqueeSpeedProvider = () => 45,
+                LyricsEnabledProvider = () => true,
+                SavedPositionProvider = () => null,
+            };
+
+            try
+            {
+                island.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                island.SetMedia(new MediaInfo("侧脸", "魏语诺", "FOLIA", true, "", "Folia", 30, 200));
+                island.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+
+                // 离屏跑布局
+                island.Measure(new System.Windows.Size(900, 200));
+                island.Arrange(new System.Windows.Rect(0, 0, 900, 200));
+                island.UpdateLayout();
+
+                var play = island.FindName("PlayPauseButton") as System.Windows.Controls.Button;
+                if (play is null || play.ActualWidth <= 0)
+                {
+                    return false;
+                }
+
+                // 按钮中心（相对岛窗口的 DIP 坐标）
+                var center = play.TranslatePoint(
+                    new System.Windows.Point(play.ActualWidth / 2, play.ActualHeight / 2), island);
+                var overButton = island.HitTestInteractive(center);
+
+                // 岛体左上角内侧（图标/标题一带）应为穿透区
+                var overTitle = island.HitTestInteractive(new System.Windows.Point(40, 30));
+
+                // 歌词区（音乐行下方）应为穿透区
+                var lyrics = island.FindName("LyricLine1") as System.Windows.Controls.Control;
+                var overLyrics = lyrics is not null
+                                 && lyrics.ActualWidth > 0
+                                 && island.HitTestInteractive(
+                                     lyrics.TranslatePoint(new System.Windows.Point(lyrics.ActualWidth / 2, 6), island));
+
+                return overButton && !overTitle && !overLyrics;
+            }
+            finally
+            {
+                island.Close();
+            }
+        }
 
         Check("v0.2.5：夸克浏览器定位（真实安装路径 + 注册表兜底）", () =>
         {

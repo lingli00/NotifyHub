@@ -6,6 +6,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using NotifyHub.Interop;
 using NotifyHub.Models;
+using NotifyHub.Services;
 
 namespace NotifyHub.UI;
 
@@ -13,28 +14,59 @@ namespace NotifyHub.UI;
 /// 单条通知卡片：无边框透明、四角定位（由 NotificationManager 决定）、Topmost、
 /// 不抢焦点（WS_EX_NOACTIVATE）。180ms 柔和淡入 → 显示 durationMs → 180ms 淡出；
 /// 鼠标悬停暂停倒计时。
+///
+/// v0.2.6 新增：
+///   1) <b>滑动取消</b>：按住卡片上下/左右拖动，超过阈值松手即带惯性飞出并关闭，
+///      未过阈值则弹回原位；拖动过程中倒计时暂停。位移作用在窗口本身
+///      （SetWindowPos），所以卡片能真正滑出窗口边界，不会被裁剪。
+///   2) <b>主题</b>：背景与文字颜色由 <see cref="ThemePalette"/> 注入
+///      （纯色暗黑 / 深色毛玻璃 / 浅色毛玻璃）。
 /// </summary>
 public partial class NotificationWindow : Window
 {
+    private const double SwipeDistanceX = 88;      // 横向飞出阈值（DIP）
+    private const double SwipeDistanceUp = 46;     // 上滑收起阈值（DIP）
+    private const double SwipeVelocity = 620;      // 快速甩动阈值（DIP/秒）
+
     private readonly DispatcherTimer _timer = new();
+    private readonly DispatcherTimer _swipeTimer = new();
     private readonly int _durationMs;
     private readonly double _marqueeSpeed;
+    private readonly AppConfig _config;
 
     private double _remainingMs;
     private DateTime _segmentStart;
     private bool _closing;
 
-    public NotificationWindow(NotifyMessage message, int durationMs, double marqueeSpeed = MarqueeText.DefaultSpeed)
+    // ---- 滑动取消状态 ----
+    private bool _pressed;
+    private bool _swiping;
+    private double _startLeft;
+    private double _startTop;
+    private int _startCursorX;
+    private int _startCursorY;
+    private double _lastLeft;
+    private double _lastTop;
+    private DateTime _lastMoveAt;
+    private double _velocityX;      // DIP/秒
+    private double _velocityY;
+
+    public NotificationWindow(NotifyMessage message, int durationMs, double marqueeSpeed = MarqueeText.DefaultSpeed,
+        AppConfig? config = null)
     {
         InitializeComponent();
 
         Message = message;
         _durationMs = Math.Clamp(durationMs, AppConfig.MinDurationMs, AppConfig.MaxDurationMs);
         _marqueeSpeed = marqueeSpeed;
+        _config = config ?? new AppConfig();
 
+        ApplyTheme(ThemePalette.Create(_config));
         Fill(message);
 
         _timer.Tick += (_, _) => Dismiss();
+        _swipeTimer.Interval = TimeSpan.FromMilliseconds(16);
+        _swipeTimer.Tick += OnSwipeTick;
 
         Card.MouseEnter += OnCardMouseEnter;
         Card.MouseLeave += OnCardMouseLeave;
@@ -67,11 +99,40 @@ public partial class NotificationWindow : Window
     /// <summary>用户点击卡片。</summary>
     public event EventHandler? Clicked;
 
+    /// <summary>应用外观主题（毛玻璃/纯色 + 自动对比度文字）。</summary>
+    public void ApplyTheme(ThemePalette palette)
+    {
+        Card.Background = palette.Background;
+        Card.BorderBrush = ThemePalette.Brush(palette.Border);
+
+        HighlightLayer.Background = new LinearGradientBrush(palette.Highlight, Colors.Transparent, 90)
+        {
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(0, 1),
+        };
+
+        AppNameText.Foreground = ThemePalette.Brush(palette.TextSecondary);
+        SenderText.Foreground = ThemePalette.Brush(palette.TextPrimary);
+        ContentText.Foreground = ThemePalette.Brush(palette.TextSecondary);
+        TimeText.Foreground = ThemePalette.Brush(palette.TextTertiary);
+    }
+
     /// <summary>定位到目标位置并显示；animate=false 时直接显示最终状态。</summary>
     public void ShowAt(double left, double top, bool animate)
     {
         Left = left;
         Top = top;
+
+        // v0.2.6 需求 4：显示前对卡片背后的屏幕取样，按合成亮度重选文字色
+        // （深色毛玻璃压在白色网页上会自动转黑字，反之转白字）。
+        if (_config.TextTone.Equals("Auto", StringComparison.OrdinalIgnoreCase))
+        {
+            var backdrop = BackdropProbe.AverageLuminance(new Rect(left, top, Width, Height));
+            if (backdrop is not null)
+            {
+                ApplyTheme(ThemePalette.Create(_config, backdrop));
+            }
+        }
 
         if (!animate)
         {
@@ -128,6 +189,7 @@ public partial class NotificationWindow : Window
 
         _closing = true;
         _timer.Stop();
+        _swipeTimer.Stop();
 
         if (!animate || !IsVisible)
         {
@@ -159,12 +221,13 @@ public partial class NotificationWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
+        _swipeTimer.Stop();
         Dismissed?.Invoke(this, EventArgs.Empty);
     }
 
     private void Fill(NotifyMessage message)
     {
-        // 深色四段式：顶部来源、中间会话名、主体预览、底部时间
+        // 四段式：顶部来源、中间会话名、主体预览、底部时间
         AppNameText.Text = message.SourceLabel is { Length: > 0 } label ? label : message.SourceText;
         TimeText.Text = message.Time.ToString("HH:mm");
         SenderText.Text = string.IsNullOrWhiteSpace(message.Sender) ? message.SourceText : message.Sender;
@@ -178,7 +241,7 @@ public partial class NotificationWindow : Window
         if (message.Source == MessageSource.Ntfy && message.AccentIndex >= 0
             && message.AccentIndex < AppConfig.NtfyPalette.Count)
         {
-            // 需求 2：多 ntfy 订阅按订阅取色板颜色（低饱和度微调，与微信/QQ/ntfy 同风格）
+            // 多 ntfy 订阅按订阅取色板颜色（低饱和度微调，与微信/QQ/ntfy 同风格）
             var rgb = AppConfig.NtfyPalette[message.AccentIndex];
             iconColor = Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
             glyph = "N";
@@ -259,7 +322,8 @@ public partial class NotificationWindow : Window
 
     private void OnCardMouseLeave(object sender, MouseEventArgs e)
     {
-        if (_closing)
+        // 拖动中鼠标会“离开”卡片（窗口跟着手走，但离开事件仍会触发），此时不能恢复计时
+        if (_closing || _pressed)
         {
             return;
         }
@@ -267,8 +331,15 @@ public partial class NotificationWindow : Window
         StartCountdown(_remainingMs);
     }
 
-    private void OnCardClick(object sender, MouseButtonEventArgs e)
+    /// <summary>左键抬起：区分「滑动取消」与「点击」。</summary>
+    private void OnCardLeftUp(object sender, MouseButtonEventArgs e)
     {
+        if (_pressed)
+        {
+            FinishSwipe(e);
+            return;
+        }
+
         e.Handled = true;
         Clicked?.Invoke(this, EventArgs.Empty);
         Dismiss();
@@ -278,5 +349,206 @@ public partial class NotificationWindow : Window
     {
         e.Handled = true;
         Dismiss();
+    }
+
+    // ---------------- 滑动取消（上滑 / 侧滑，带惯性） ----------------
+
+    private void OnCardMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_closing)
+        {
+            return;
+        }
+
+        e.Handled = true;
+
+        if (!NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        _pressed = true;
+        _swiping = false;
+        _startCursorX = cursor.X;
+        _startCursorY = cursor.Y;
+        _startLeft = Left;
+        _startTop = Top;
+        _lastLeft = Left;
+        _lastTop = Top;
+        _lastMoveAt = DateTime.UtcNow;
+        _velocityX = 0;
+        _velocityY = 0;
+
+        // 拖动期间不计时（用户正在操作，不能被倒计时关掉）
+        _timer.Stop();
+        _remainingMs = Math.Max(400, _remainingMs - (DateTime.UtcNow - _segmentStart).TotalMilliseconds);
+
+        Card.CaptureMouse();
+    }
+
+    private void OnCardMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_pressed || _closing || e.LeftButton != MouseButtonState.Pressed)
+        {
+            return;
+        }
+
+        if (!NativeMethods.GetCursorPos(out var cursor))
+        {
+            return;
+        }
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        var dx = (cursor.X - _startCursorX) / dpi.DpiScaleX;
+        var dy = (cursor.Y - _startCursorY) / dpi.DpiScaleY;
+
+        // 8px 以内当点击，不算滑动（避免手抖把点击吃掉）
+        if (!_swiping)
+        {
+            if (Math.Abs(dx) < 8 && Math.Abs(dy) < 8)
+            {
+                return;
+            }
+
+            _swiping = true;
+        }
+
+        var left = _startLeft + dx;
+        var top = _startTop + dy;
+
+        // 速度采样（DIP/秒），松手时用于惯性初速度
+        var now = DateTime.UtcNow;
+        var dt = Math.Max(0.004, (now - _lastMoveAt).TotalSeconds);
+        _velocityX = (left - _lastLeft) / dt;
+        _velocityY = (top - _lastTop) / dt;
+        _lastLeft = left;
+        _lastTop = top;
+        _lastMoveAt = now;
+
+        MoveWindow(left, top);
+
+        // 拖得越远越透，形成“甩出去”的手感（最多减到 0.45）
+        var distance = Math.Sqrt(dx * dx + dy * dy);
+        Card.Opacity = Math.Clamp(1 - distance / 520, 0.45, 1);
+    }
+
+    private void FinishSwipe(MouseButtonEventArgs e)
+    {
+        _pressed = false;
+        e.Handled = true;
+        Card.ReleaseMouseCapture();
+
+        if (!_swiping)
+        {
+            // 位移不足 8px：当作点击
+            Clicked?.Invoke(this, EventArgs.Empty);
+            Dismiss();
+            return;
+        }
+
+        var dx = Left - _startLeft;
+        var dy = Top - _startTop;
+        var speed = Math.Sqrt(_velocityX * _velocityX + _velocityY * _velocityY);
+
+        var dismiss = Math.Abs(dx) > SwipeDistanceX
+                      || dy < -SwipeDistanceUp
+                      || speed > SwipeVelocity;
+
+        if (dismiss)
+        {
+            StartInertiaFlyOut();
+            return;
+        }
+
+        SpringBack();
+    }
+
+    /// <summary>松手后按当前速度继续滑出，同时淡出到 0（iOS 通知的上滑收起手感）。</summary>
+    private void StartInertiaFlyOut()
+    {
+        _closing = true;
+        _timer.Stop();
+
+        // 惯性初速度：取拖动速度，给一个下限保证“甩出去”的观感
+        var speed = Math.Sqrt(_velocityX * _velocityX + _velocityY * _velocityY);
+        var scale = speed < 260 ? 260 / Math.Max(1, speed) : 1;
+        _velocityX *= scale;
+        _velocityY *= scale;
+
+        _swipeTimer.Start();
+    }
+
+    private void OnSwipeTick(object? sender, EventArgs e)
+    {
+        const double dt = 0.016;
+
+        // 衰减：每帧 0.90（≈ 60 帧后速度剩 0.2%）
+        _velocityX *= 0.90;
+        _velocityY *= 0.90;
+
+        var left = Left + _velocityX * dt;
+        var top = Top + _velocityY * dt;
+        MoveWindow(left, top);
+
+        Card.Opacity = Math.Max(0, Card.Opacity - 0.062);
+
+        if (Card.Opacity <= 0.02 || Math.Abs(_velocityX) + Math.Abs(_velocityY) < 6)
+        {
+            _swipeTimer.Stop();
+            Close();
+        }
+    }
+
+    /// <summary>未过阈值：弹回原位并恢复不透明度与倒计时。</summary>
+    private void SpringBack()
+    {
+        var fromLeft = Left;
+        var fromTop = Top;
+        var fromOpacity = Card.Opacity;
+
+        var start = DateTime.UtcNow;
+        var duration = TimeSpan.FromMilliseconds(180);
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        timer.Tick += (_, _) =>
+        {
+            var t = Math.Min(1, (DateTime.UtcNow - start).TotalMilliseconds / duration.TotalMilliseconds);
+            var eased = 1 - Math.Pow(1 - t, 3); // ease-out cubic
+
+            MoveWindow(fromLeft + (_startLeft - fromLeft) * eased, fromTop + (_startTop - fromTop) * eased);
+            Card.Opacity = fromOpacity + (1 - fromOpacity) * eased;
+
+            if (t >= 1)
+            {
+                timer.Stop();
+                Card.Opacity = 1;
+                StartCountdown(_remainingMs);
+            }
+        };
+
+        timer.Start();
+    }
+
+    /// <summary>移动窗口（DIP）。走 SetWindowPos 而不是 Window.Left/Top，拖动更跟手。</summary>
+    private void MoveWindow(double left, double top)
+    {
+        Left = left;
+        Top = top;
+
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var dpi = VisualTreeHelper.GetDpi(this);
+        NativeMethods.SetWindowPos(
+            handle,
+            IntPtr.Zero,
+            (int)Math.Round(left * dpi.DpiScaleX),
+            (int)Math.Round(top * dpi.DpiScaleY),
+            0,
+            0,
+            NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE);
     }
 }

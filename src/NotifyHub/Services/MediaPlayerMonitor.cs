@@ -14,7 +14,9 @@ public sealed record MediaInfo(
     string AppName,
     bool IsPlaying,
     string AppId = "",
-    string ProcessName = "");
+    string ProcessName = "",
+    double PositionSeconds = 0,
+    double DurationSeconds = 0);
 
 /// <summary>
 /// 音乐播放器监控：基于 Windows 系统媒体传输控制（SMTC）聚合所有播放器，
@@ -238,18 +240,58 @@ public sealed class MediaPlayerMonitor : IDisposable
                 == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing;
             var props = await session0.TryGetMediaPropertiesAsync();
             var appId = session0.SourceAppUserModelId ?? string.Empty;
+
+            // v0.2.6 歌词同步需要播放进度（SMTC TimelineProperties）
+            var position = 0.0;
+            var duration = 0.0;
+            try
+            {
+                var timeline = session0.GetTimelineProperties();
+                position = Math.Max(0, (timeline.Position - timeline.StartTime).TotalSeconds);
+                duration = Math.Max(0, (timeline.EndTime - timeline.StartTime).TotalSeconds);
+            }
+            catch
+            {
+                // 部分播放器不提供 timeline，忽略（歌词退化为不跟随）
+            }
+
             var info = new MediaInfo(
                 props.Title ?? string.Empty,
                 props.Artist ?? string.Empty,
                 FriendlyName(appId),
                 playing,
                 appId,
-                ProcessNameOf(appId));
+                ProcessNameOf(appId),
+                position,
+                duration);
             Publish(info);
         }
         catch (Exception ex)
         {
             _log.Warn("Media", "读取媒体属性失败", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 读取当前播放进度（秒）。歌词同步用——SMTC 的 MediaChanged 不会随时长推送，
+    /// 只能由上层定时来问。取不到返回 -1。
+    /// </summary>
+    public double GetPositionSeconds()
+    {
+        try
+        {
+            var session = PickSession();
+            if (session is null)
+            {
+                return -1;
+            }
+
+            var timeline = session.GetTimelineProperties();
+            return Math.Max(0, (timeline.Position - timeline.StartTime).TotalSeconds);
+        }
+        catch
+        {
+            return -1;
         }
     }
 

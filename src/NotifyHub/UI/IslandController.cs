@@ -21,7 +21,14 @@ public sealed class IslandController : IDisposable
     private readonly MediaPlayerMonitor _media;
     private readonly FullscreenWatcher _fullscreen;
     private readonly NtfyPublisher _publisher;
+    private readonly LyricsService _lyrics;
+    private readonly DispatcherTimer _lyricTimer;
     private WorkBuddyWatcher? _workbuddy;
+
+    // 歌词状态：当前曲目的时间轴 + 已展示行号（行号不变就不刷新 UI）
+    private IReadOnlyList<LyricLine>? _lyricLines;
+    private string _lyricKey = string.Empty;
+    private int _lyricIndex = int.MinValue;
     private long _manualUntilMs; // 手动 --island 推送后的 15 秒内，自动监视不覆盖
     private IslandWindow? _island;
     private bool _started;
@@ -33,9 +40,14 @@ public sealed class IslandController : IDisposable
         _dispatcher = dispatcher;
         _sound = sound;
         _publisher = new NtfyPublisher(log);
+        _lyrics = new LyricsService(log);
 
         _media = new MediaPlayerMonitor(log);
         _fullscreen = new FullscreenWatcher(log);
+
+        // 歌词同步：250ms 问一次播放进度，行号变化才刷新岛（避免每帧重排跑马灯）
+        _lyricTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _lyricTimer.Tick += (_, _) => SyncLyricLine();
     }
 
     public void Start()
@@ -55,6 +67,7 @@ public sealed class IslandController : IDisposable
             try
             {
                 Island().SetMedia(info);
+                OnMediaForLyrics(info);
             }
             catch (Exception ex)
             {
@@ -237,6 +250,8 @@ public sealed class IslandController : IDisposable
         island.ModeProvider = () => _config.Current.IslandMode;
         island.MusicEnabledProvider = () => _config.Current.MusicEnabled;
         island.MarqueeSpeedProvider = () => _config.Current.MarqueeSpeed;
+        island.LyricsEnabledProvider = () => _config.Current.LyricsEnabled;
+        island.ApplyThemeWithBackdrop(_config.Current);
         island.SavedPositionProvider = () =>
         {
             var config = _config.Current;
@@ -292,9 +307,103 @@ public sealed class IslandController : IDisposable
         return firstLine.Length > 90 ? firstLine[..90] + "…" : firstLine;
     }
 
-    /// <summary>拖拽结束：位置写入配置自动保存。</summary>
-    private void SavePosition(double left, double top)
+    /// <summary>
+    /// 曲目变化 → 重新取歌词（同曲走缓存，不重复请求）。
+    /// 换歌瞬间先收起旧词，避免上一首的歌词短暂串到新歌上。
+    /// </summary>
+    private void OnMediaForLyrics(MediaInfo? info)
     {
+        var key = info is null ? string.Empty : $"{info.Title}|{info.Artist}";
+        if (string.Equals(key, _lyricKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lyricKey = key;
+        _lyricLines = null;
+        _lyricIndex = int.MinValue;
+
+        if (info is null || string.IsNullOrWhiteSpace(info.Title) || !_config.Current.LyricsEnabled)
+        {
+            _lyricTimer.Stop();
+            Island().ShowLyrics(null, null);
+            return;
+        }
+
+        Island().ShowLyrics(null, null);
+        _ = LoadLyricsAsync(info.Title, info.Artist);
+    }
+
+    private async Task LoadLyricsAsync(string title, string artist)
+    {
+        var key = $"{title}|{artist}";
+
+        IReadOnlyList<LyricLine>? lines;
+        try
+        {
+            lines = await _lyrics.GetAsync(title, artist).ConfigureAwait(false);
+        }
+        catch
+        {
+            lines = null;
+        }
+
+        _ = _dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!string.Equals(key, _lyricKey, StringComparison.Ordinal))
+            {
+                return; // 已经换歌，丢弃过期结果
+            }
+
+            _lyricLines = lines;
+            _lyricIndex = int.MinValue;
+
+            if (lines is { Count: > 0 })
+            {
+                SyncLyricLine();
+                _lyricTimer.Start();
+            }
+            else
+            {
+                _lyricTimer.Stop();
+                Island().ShowLyrics(null, null);
+            }
+        }));
+    }
+
+    /// <summary>按播放进度切换歌词行；行号没变就不动 UI（跑马灯不重排）。</summary>
+    private void SyncLyricLine()
+    {
+        if (_lyricLines is not { Count: > 0 })
+        {
+            _lyricTimer.Stop();
+            return;
+        }
+
+        var position = _media.GetPositionSeconds();
+        if (position < 0)
+        {
+            return;
+        }
+
+        var index = LyricsService.IndexAt(_lyricLines, position);
+        if (index == _lyricIndex)
+        {
+            return;
+        }
+
+        _lyricIndex = index;
+        Island().ShowLyrics(TextAt(index), TextAt(index + 1));
+    }
+
+    private string? TextAt(int index)
+        => _lyricLines is { } lines && index >= 0 && index < lines.Count ? lines[index].Text : null;
+
+    /// <summary>当前展示的第 n 行（1=当前行，2=下一行），配置变更后重放一次用。</summary>
+    private string? CurrentLyricText(int offset) => TextAt(_lyricIndex + offset - 1);
+
+    /// <summary>拖拽结束：位置写入配置自动保存。</summary>
+    private void SavePosition(double left, double top)    {
         try
         {
             var next = _config.Current.Clone();
@@ -317,6 +426,10 @@ public sealed class IslandController : IDisposable
             {
                 Island().ApplyModeChange();
 
+                // v0.2.6：主题（纯色/毛玻璃 + 文字配色）保存后立即生效
+                Island().ApplyThemeWithBackdrop(config);
+                Island().ShowLyrics(CurrentLyricText(1), CurrentLyricText(2));
+
                 // 音乐开关/跑马灯速度等变更即时生效：
                 // 需求 8——此前只调 ApplyModeChange，音乐组可见性不会重算，
                 // 表现为“取消勾选保存后不消失、重新勾选反而消失”。
@@ -332,6 +445,7 @@ public sealed class IslandController : IDisposable
     public void Dispose()
     {
         _config.Changed -= OnConfigChanged;
+        _lyricTimer.Stop();
         _media.Dispose();
         _fullscreen.Dispose();
         _workbuddy?.Dispose();

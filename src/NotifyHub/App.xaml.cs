@@ -202,6 +202,71 @@ public partial class App : Application
                     return;
                 }
 
+            case AppMode.IslandShot:
+                {
+                    // 灵动岛离屏渲染（排版核对用，v0.2.6）：
+                    // 桌面上常被“全屏应用自动隐藏”挡住，这里直接构造并渲染成 PNG，
+                    // 出两张：只有音乐+双行歌词 / 音乐+歌词+任务状态（L 形）。
+                    var configService = new ConfigService(log);
+                    configService.Load();
+                    var config = configService.Current;
+
+                    void CaptureIsland(string fileName, bool withTask)
+                    {
+                        var island = new IslandWindow
+                        {
+                            ModeProvider = () => "Fixed",
+                            MusicEnabledProvider = () => true,
+                            MarqueeSpeedProvider = () => 45,
+                            LyricsEnabledProvider = () => true,
+                            SavedPositionProvider = () => null,
+                        };
+
+                        island.ApplyTheme(ThemePalette.Create(config));
+                        island.SetMedia(new MediaInfo(
+                            "侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 72, 214));
+                        island.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+
+                        if (withTask)
+                        {
+                            island.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务");
+                        }
+
+                        island.Left = 300;
+                        island.Top = 220;
+                        island.Show();
+                        island.UpdateLayout();
+
+                        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
+                        timer.Tick += (_, _) =>
+                        {
+                            timer.Stop();
+                            CaptureWindow(island, fileName, log);
+                            island.Close();
+                        };
+                        timer.Start();
+                    }
+
+                    CaptureIsland("island-music.png", withTask: false);
+
+                    var second = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
+                    second.Tick += (_, _) =>
+                    {
+                        second.Stop();
+                        CaptureIsland("island-task.png", withTask: true);
+
+                        var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
+                        done.Tick += (_, _) =>
+                        {
+                            done.Stop();
+                            Shutdown();
+                        };
+                        done.Start();
+                    };
+                    second.Start();
+                    return;
+                }
+
             case AppMode.MarqueeTest:
                 {
                     // 跑马灯离屏自检：各形态离屏渲染成 PNG，并按“非背景像素数”判定文字是否真的画出来了。
@@ -861,6 +926,16 @@ public partial class App : Application
     {
         LogService.Shared.Info("App", $"配置已更新: 间隔={config.PollIntervalMs}ms 时长={config.NotificationDurationMs}ms");
         _soundMuter?.Apply(ShouldMuteAppSounds());
+
+        // v0.2.6：外观主题全局生效——已弹出的卡片立即换装（岛由 IslandController 处理）
+        try
+        {
+            _notifications?.ApplyTheme(ThemePalette.Create(config));
+        }
+        catch (Exception ex)
+        {
+            LogService.Shared.Warn("App", "应用通知卡片主题失败", ex.Message);
+        }
     }
 
     private bool ShouldMuteAppSounds()

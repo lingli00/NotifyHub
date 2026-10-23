@@ -9,6 +9,7 @@ public enum AppMode
     Dump,
     Locate,
     Sessions,
+    IslandShot,
     Island,
     IslandDone,
     Media,
@@ -46,6 +47,9 @@ public sealed record CommandLineOptions(
                 // --locate 联系人名：激活微信并搜索定位到该聊天（测试/手动用）
                 var target = i + 1 < args.Length ? args[i + 1]?.Trim() : null;
                 return new CommandLineOptions(AppMode.Locate, 0, string.IsNullOrEmpty(target) ? null : target);
+                case "--island-shot":
+                // --island-shot：灵动岛离屏渲染成 island-music.png / island-task.png（排版核对）
+                return new CommandLineOptions(AppMode.IslandShot, 0);
                 case "--sessions":
                 // --sessions：读一次微信会话列表并打印解析结果（FromSelf/未读/免打扰），
                 // 用于真机核验“自己发的消息不推 / 好友消息能识别”（需求 4/5）

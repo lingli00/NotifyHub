@@ -16,7 +16,15 @@ public sealed class NtfySubscriber : IDisposable
     private readonly LogService _log;
     private readonly ConfigService _config;
     private readonly NtfySubscription _subscription;
-    private readonly HttpClient _http = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private readonly HttpClient _http = new(new HttpClientHandler
+    {
+        // 本机/局域网 ntfy 直连，其余走系统代理（v0.2.6：否则 127.0.0.1 会被代理回 502）
+        Proxy = new LoopbackDirectProxy(),
+        UseProxy = true,
+    })
+    {
+        Timeout = Timeout.InfiniteTimeSpan,
+    };
     private readonly HashSet<string> _seenIds = new(StringComparer.Ordinal);
     private readonly Queue<string> _seenOrder = new();
 

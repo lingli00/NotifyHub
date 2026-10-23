@@ -262,6 +262,54 @@
                             </Grid>
                         </GroupBox>
 
+                        <!--  外观主题（v0.2.6 需求 3/4/5）  -->
+                        <GroupBox Header="外观（通知弹窗 + 灵动岛）">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="86" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="主题" Margin="0,0,10,0" VerticalAlignment="Center" />
+                                <ComboBox Grid.Row="0" Grid.Column="1" x:Name="ThemeCombo" Width="200" Height="26"
+                                          FontSize="12.5" HorizontalAlignment="Left">
+                                    <ComboBoxItem Content="纯色暗黑" Tag="SolidDark" />
+                                    <ComboBoxItem Content="毛玻璃 · 深色" Tag="GlassDark" />
+                                    <ComboBoxItem Content="毛玻璃 · 浅色" Tag="GlassLight" />
+                                    <ComboBoxItem Content="毛玻璃 · 跟随系统" Tag="GlassAuto" />
+                                </ComboBox>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="文字配色" Margin="0,10,10,0" VerticalAlignment="Center" />
+                                <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
+                                    <ComboBox x:Name="TextToneCombo" Width="140" Height="26" FontSize="12.5">
+                                        <ComboBoxItem Content="自动（按背景对比度）" Tag="Auto" />
+                                        <ComboBoxItem Content="强制白色" Tag="White" />
+                                        <ComboBoxItem Content="强制黑色" Tag="Black" />
+                                    </ComboBox>
+                                    <Button Content="预览" Height="26" MinWidth="0" Padding="12,2" Margin="8,0,0,0"
+                                            Click="OnThemePreviewClick" />
+                                </StackPanel>
+
+                                <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,10,0,0"
+                                          x:Name="LyricsEnabledCheck" Content="音乐区下方显示双行歌词（跑马灯）" />
+
+                                <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                           Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                           Text="毛玻璃为半透明效果，能看到下层内容（Win10 分层窗口不支持 DWM 真模糊，因此用高透明渐变+高光描边等效实现）。文字配色「自动」会按背景亮度选对比度更高的颜色，保证深/浅玻璃下都清晰。" />
+
+                                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
+                                           Style="{StaticResource HintText}" Margin="0,4,0,0" TextWrapping="Wrap"
+                                           Text="通知弹窗支持按住拖动（上滑/左右滑超过阈值松手即带惯性收起），不用等倒计时。固定模式下灵动岛只有三个播放键可点，其余区域点按穿透到下层窗口。" />
+                            </Grid>
+                        </GroupBox>
+
                         <!--  浏览器选择（v0.2.4 需求 7：四选项）  -->
                         <GroupBox Header="浏览器（点击 ntfy 通知时打开主题网页）">
                             <Grid>

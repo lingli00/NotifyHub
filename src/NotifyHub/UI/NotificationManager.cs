@@ -123,7 +123,11 @@ public sealed class NotificationManager
         }
 
         var message = _pending.Dequeue();
-        var window = new NotificationWindow(message, config.NotificationDurationMs, config.MarqueeSpeed);
+        var window = new NotificationWindow(
+            message,
+            config.NotificationDurationMs,
+            config.MarqueeSpeed,
+            config);
         window.Dismissed += OnWindowDismissed;
         window.Clicked += OnWindowClicked;
 
@@ -139,6 +143,22 @@ public sealed class NotificationManager
 
         // 消息通知提示音：真正上屏时才响，被过滤的消息不会走到这里
         _sound?.PlayMessage(config);
+    }
+
+    /// <summary>主题变更：把所有还在屏上的卡片一起换装（需求 3 全局生效）。</summary>
+    public void ApplyTheme(ThemePalette palette)
+    {
+        foreach (var window in _windows)
+        {
+            try
+            {
+                window.ApplyTheme(palette);
+            }
+            catch
+            {
+                // 单张刷新失败不影响其他卡片
+            }
+        }
     }
 
     private void OnWindowDismissed(object? sender, EventArgs e)

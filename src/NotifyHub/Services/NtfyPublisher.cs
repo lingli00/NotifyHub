@@ -14,7 +14,14 @@ namespace NotifyHub.Services;
 public sealed class NtfyPublisher : IDisposable
 {
     private readonly LogService _log;
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private readonly HttpClient _http = new(new HttpClientHandler
+    {
+        Proxy = new LoopbackDirectProxy(),
+        UseProxy = true,
+    })
+    {
+        Timeout = TimeSpan.FromSeconds(10),
+    };
     private string _lastSent = string.Empty;
     private long _lastSentMs;
 

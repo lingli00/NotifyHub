@@ -8,6 +8,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Media3D;
 using System.Windows.Threading;
 using NotifyHub.Interop;
+using NotifyHub.Models;
 using NotifyHub.Services;
 
 namespace NotifyHub.UI;
@@ -180,6 +181,91 @@ public partial class IslandWindow : Window
 
     /// <summary>注入的配置读取：跑马灯滚动速度（DIP/秒）。</summary>
     public Func<int>? MarqueeSpeedProvider { get; set; }
+
+    /// <summary>注入的配置读取：双行歌词开关。</summary>
+    public Func<bool>? LyricsEnabledProvider { get; set; }
+
+    /// <summary>歌词区当前是否展开（诊断用）。</summary>
+    public bool IsLyricsShown => LyricsPanel.Visibility == Visibility.Visible;
+
+    /// <summary>
+    /// 按当前屏幕背景重新取一次样并应用主题（v0.2.6 需求 4）。
+    /// 只在岛出现时调用——毛玻璃后的内容会变，取样一次足够。
+    /// </summary>
+    public void ApplyThemeWithBackdrop(AppConfig config)
+    {
+        var palette = ThemePalette.Create(config);
+        if (config.TextTone.Equals("Auto", StringComparison.OrdinalIgnoreCase) && palette.IsGlass && IsLoaded)
+        {
+            try
+            {
+                var origin = PointToScreen(new Point(0, 0));
+                var dpi = VisualTreeHelper.GetDpi(this);
+                var rect = new Rect(
+                    origin.X / dpi.DpiScaleX + Pill.Margin.Left,
+                    origin.Y / dpi.DpiScaleY + Pill.Margin.Top,
+                    Math.Max(1, Pill.ActualWidth),
+                    Math.Max(1, Pill.ActualHeight));
+
+                if (BackdropProbe.AverageLuminance(rect) is { } backdrop)
+                {
+                    palette = ThemePalette.Create(config, backdrop);
+                }
+            }
+            catch
+            {
+                // 取样失败就用默认调色板
+            }
+        }
+
+        ApplyTheme(palette);
+    }
+
+    /// <summary>
+    /// 应用外观主题（v0.2.6 需求 3/4）：替换窗口资源里的画刷，DynamicResource 会立即刷新
+    /// 按钮图标、分隔线、文字色；岛体背景与描边直接赋值。
+    /// </summary>
+    public void ApplyTheme(ThemePalette palette)
+    {
+        Resources["IslandFg"] = ThemePalette.Brush(palette.TextPrimary);
+        Resources["IslandSubFg"] = ThemePalette.Brush(palette.TextSecondary);
+        Resources["IslandGlyph"] = ThemePalette.Brush(palette.Glyph);
+        Resources["IslandHover"] = ThemePalette.Brush(palette.HoverBackground);
+        Resources["IslandPress"] = ThemePalette.Brush(palette.PressBackground);
+        Resources["IslandDivider"] = ThemePalette.Brush(palette.Divider);
+
+        Pill.Background = palette.Background;
+        Pill.BorderBrush = ThemePalette.Brush(palette.Border);
+
+        HighlightLayer.Background = new LinearGradientBrush(palette.Highlight, Colors.Transparent, 90)
+        {
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(0, 1),
+        };
+    }
+
+    /// <summary>
+    /// 更新双行歌词（v0.2.6 需求 5）：<paramref name="current"/> 为当前行，
+    /// <paramref name="next"/> 为下一行；都为 null 表示无歌词（收起歌词区）。
+    /// </summary>
+    public void ShowLyrics(string? current, string? next)
+    {
+        var enabled = LyricsEnabledProvider?.Invoke() ?? true;
+        var hasLyric = enabled
+                       && !string.IsNullOrWhiteSpace(current)
+                       && _musicVisible;
+
+        LyricLine1.Text = current ?? string.Empty;
+        LyricLine2.Text = next ?? string.Empty;
+
+        var target = hasLyric ? Visibility.Visible : Visibility.Collapsed;
+        if (LyricsPanel.Visibility != target)
+        {
+            LyricsPanel.Visibility = target;
+            UpdateChrome();
+            Evaluate();
+        }
+    }
 
     /// <summary>小岛当前是否可见（诊断用）。</summary>
     public bool IsShowing => !_hidden && IsVisible;
@@ -397,6 +483,19 @@ public partial class IslandWindow : Window
 
         MusicGroup.Visibility = _musicVisible ? Visibility.Visible : Visibility.Collapsed;
 
+        // 音乐收起时歌词必须一起收起（否则会留两行空行把岛撑高）
+        if (!_musicVisible)
+        {
+            LyricsPanel.Visibility = Visibility.Collapsed;
+        }
+        else if (LyricsPanel.Visibility == Visibility.Visible)
+        {
+            // 恢复播放时按开关重新展开歌词
+            LyricsPanel.Visibility = (LyricsEnabledProvider?.Invoke() ?? true)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+
         if (_media is not null)
         {
             var title = string.IsNullOrWhiteSpace(_media.Title) ? "未知曲目" : _media.Title;
@@ -448,7 +547,7 @@ public partial class IslandWindow : Window
         Evaluate();
     }
 
-    /// <summary>分隔线只在音乐与任务两组同时可见时出现。</summary>
+    /// <summary>分隔线只在音乐与任务两组同时可见时出现；歌词随音乐组一起出现。</summary>
     private void UpdateChrome()
         => Divider.Visibility = _musicVisible && _statusVisible ? Visibility.Visible : Visibility.Collapsed;
 
@@ -1113,15 +1212,28 @@ public partial class IslandWindow : Window
                 return new IntPtr(NativeMethods.MA_NOACTIVATE);
 
             case NativeMethods.WM_NCHITTEST:
+            {
+                var screenPoint = ScreenPointOf(lParam);
+
                 // 阴影留白（Pill 以外的透明区）一律放行给下层窗口，
                 // 否则一条 14px 的隐形边框会挡住桌面/其他程序的点击。
-                if (!IsInsidePill(ScreenPointOf(lParam)))
+                if (!IsInsidePill(screenPoint))
+                {
+                    handled = true;
+                    return new IntPtr(NativeMethods.HTTRANSPARENT);
+                }
+
+                // v0.2.6 需求 2：固定岛只让播放三键可点，其余区域点按穿透——
+                // 用户能直接透过岛点到下层的 App 按钮，不用先等倒计时/拖动。
+                // 自由模式保留整条可拖（否则没法移动），所以只在固定模式下穿透。
+                if (!IsFreeMode() && !IsOverButton(screenPoint))
                 {
                     handled = true;
                     return new IntPtr(NativeMethods.HTTRANSPARENT);
                 }
 
                 return IntPtr.Zero;
+            }
 
             case NativeMethods.WM_LBUTTONDOWN:
             case NativeMethods.WM_RBUTTONDOWN:
@@ -1291,15 +1403,15 @@ public partial class IslandWindow : Window
         }
     }
 
-    /// <summary>命中测试：是否落在播放按钮等交互控件上（这些位置不参与拖拽）。</summary>
-    private bool HitIsInteractive(double clientX, double clientY)
+    /// <summary>
+    /// 本地坐标（DIP）是否落在某个 Button 上——点按穿透判定的唯一事实来源。
+    /// WM_NCHITTEST、拖拽判定、自检都走这里，避免三处逻辑漂移。
+    /// </summary>
+    internal bool HitTestInteractive(Point localDip)
     {
         try
         {
-            var dpi = VisualTreeHelper.GetDpi(this);
-            var dip = new Point(clientX / dpi.DpiScaleX, clientY / dpi.DpiScaleY);
-
-            var hit = InputHitTest(dip) as DependencyObject;
+            var hit = InputHitTest(localDip) as DependencyObject;
             while (hit is not null)
             {
                 if (hit is Button)
@@ -1314,10 +1426,46 @@ public partial class IslandWindow : Window
         }
         catch
         {
-            // 忽略：拿不到就当成空白区，允许拖
+            // 忽略：拿不到就当成空白区
         }
 
         return false;
+    }
+
+    /// <summary>命中测试（拖拽用）：是否落在播放按钮等交互控件上（这些位置不参与拖拽）。</summary>
+    private bool HitIsInteractive(double clientX, double clientY)
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        return HitTestInteractive(new Point(clientX / dpi.DpiScaleX, clientY / dpi.DpiScaleY));
+    }
+
+    /// <summary>
+    /// 屏幕坐标（物理像素）是否落在某个 Button 上。
+    /// 与 <see cref="HitIsInteractive"/> 的区别：这里做完整的 屏幕→窗口→DIP 换算，
+    /// 供 WM_NCHITTEST 判定“该不该让鼠标穿透”使用。
+    /// 取不到布局时返回 true（宁可让点击进来，也不要让按钮失灵）。
+    /// </summary>
+    private bool IsOverButton(Point screenPoint)
+    {
+        if (!IsLoaded)
+        {
+            return true;
+        }
+
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this);
+            var origin = PointToScreen(new Point(0, 0));
+            var local = new Point(
+                (screenPoint.X - origin.X) / dpi.DpiScaleX,
+                (screenPoint.Y - origin.Y) / dpi.DpiScaleY);
+
+            return HitTestInteractive(local);
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     private void EnsureCreated() => Current ??= this;

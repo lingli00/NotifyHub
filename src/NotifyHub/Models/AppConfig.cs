@@ -135,6 +135,33 @@ public sealed class AppConfig
     /// </summary>
     public string LogDir { get; set; } = string.Empty;
 
+    /// <summary>
+    /// 外观主题（v0.2.6，需求 3）：
+    ///   SolidDark  = 纯色暗黑（原有视觉，完全不透明感）
+    ///   GlassDark  = 深色毛玻璃（半透明，深色背景下用）
+    ///   GlassLight = 浅色/白色毛玻璃（半透明，浅色背景下用）
+    ///   GlassAuto  = 毛玻璃 + 跟随 Windows 应用主题自动选深/浅
+    /// </summary>
+    public string ThemeMode { get; set; } = "GlassAuto";
+
+    /// <summary>
+    /// 文字配色（v0.2.6，需求 4）：Auto = 按背景深浅自动取对比度更高的颜色；
+    /// White / Black = 用户强制指定（毛玻璃背景不确定时的兜底）。
+    /// </summary>
+    public string TextTone { get; set; } = "Auto";
+
+    /// <summary>
+    /// 双行歌词（v0.2.6，需求 5）：音乐播放时在音乐控制区下方显示两行歌词（跑马灯）。
+    /// 关掉则恢复 v0.2.5 的单行布局。
+    /// </summary>
+    public bool LyricsEnabled { get; set; } = true;
+
+    /// <summary>主题候选值（设置页下拉与此一致）。</summary>
+    public static readonly string[] ThemeModes = { "SolidDark", "GlassDark", "GlassLight", "GlassAuto" };
+
+    /// <summary>文字配色候选值。</summary>
+    public static readonly string[] TextTones = { "Auto", "White", "Black" };
+
     public AppConfig Clone() => (AppConfig)MemberwiseClone();
 
     public void Normalize()
@@ -185,6 +212,12 @@ public sealed class AppConfig
         BrowserChoice = NormalizeBrowserChoice(BrowserChoice);
         BrowserPath = (BrowserPath ?? string.Empty).Trim();
         LogDir = (LogDir ?? string.Empty).Trim();
+
+        // v0.2.6 外观：非法值回落默认（纯色暗黑 / 自动文字色）
+        ThemeMode = ThemeModes.FirstOrDefault(m => string.Equals(m, ThemeMode, StringComparison.OrdinalIgnoreCase))
+                    ?? "SolidDark";
+        TextTone = TextTones.FirstOrDefault(t => string.Equals(t, TextTone, StringComparison.OrdinalIgnoreCase))
+                   ?? "Auto";
     }
 
     /// <summary>浏览器选择收敛到合法值。</summary>

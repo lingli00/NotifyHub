@@ -27,6 +27,10 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 | --- | --- |
 | ![设置](docs/settings.png) | ![浏览器与订阅](docs/settings-music.png) |
 
+| 收纳细条：仅音乐 / 仅任务 / 两者同跑 / 完成态 |
+| --- |
+| ![细条四态](docs/strip-states.png) |
+
 | 运行日志（原独立控制台已并入） | AI 任务进度实时上岛 |
 | --- | --- |
 | ![运行日志](docs/logs.png) | ![WorkBuddy 任务实时进度](docs/workbuddy-live.png) |

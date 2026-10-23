@@ -34,6 +34,16 @@ public sealed class MarqueeText : Control
     /// <summary>两份文本之间的间隙（DIP）。</summary>
     private const double TextGap = 28;
 
+    /// <summary>
+    /// 判定"是否需要滚动"的亚像素容差（DIP）。
+    /// 坑（v0.2.8 实测）：FormattedText 量出的自然宽带小数（如 172.2），
+    /// 视口宽度经布局取整后变成 172 —— 两者只差 0.2px，却被 `_textWidth &lt;= view`
+    /// 判成"超宽"，于是立刻进入跑马灯分支并把 offset 推成负值，
+    /// 视觉结果就是**开头的几个字被滚出可视区**（歌名缺前半截、歌词缺"关于"）。
+    /// 差 1px 以内按"刚好放得下"处理，不启动滚动。
+    /// </summary>
+    private const double FitTolerance = 1.0;
+
     private double _textWidth;
     private double _offset;
     private bool _scrolling;
@@ -140,8 +150,34 @@ public sealed class MarqueeText : Control
     /// </summary>
     public bool SuspendRendering { get; set; }
 
-    /// <summary>当前是否处于滚动状态（诊断用，实时计算）。</summary>
-    public bool IsScrolling => _textWidth > 0 && _textWidth > ViewWidth;
+    /// <summary>
+    /// 文本的自然宽度（DIP，不含可视区限制）。
+    /// v0.2.8：岛的自适应宽度靠它——先量出这句话真实有多宽，再决定歌词区和岛宽，
+    /// 而不是像以前那样写死 270 让短歌词右侧留白。
+    /// </summary>
+    public double NaturalWidth
+    {
+        get
+        {
+            var text = Text ?? string.Empty;
+            if (text.Length == 0 || ActualHeight < 0)
+            {
+                return 0;
+            }
+
+            try
+            {
+                return BuildFormattedText(text).Width;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+    }
+
+    /// <summary>当前是否处于滚动状态（诊断用，实时计算；含亚像素容差）。</summary>
+    public bool IsScrolling => _textWidth > 0 && _textWidth - ViewWidth > FitTolerance;
 
     /// <summary>当前滚动位移（诊断/自检用，实时值）。</summary>
     public double Offset => _offset;
@@ -197,9 +233,9 @@ public sealed class MarqueeText : Control
         var formatted = BuildFormattedText(text);
         var y = Math.Max(0, (ActualHeight - formatted.Height) / 2);
 
-        if (_textWidth <= view)
+        if (_textWidth - view <= FitTolerance)
         {
-            // 短文本：居中（歌名）或左对齐（歌词/状态行）
+            // 短文本（含"刚好放得下、只差不到 1px"）：居中（歌名）或左对齐（歌词/状态行）
             _scrolling = false;
             _offset = 0;
             var x = _anchor == TextAnchor.Left ? 0 : Math.Max(0, (view - _textWidth) / 2);

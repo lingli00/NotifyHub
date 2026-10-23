@@ -1,26 +1,41 @@
+using System.Diagnostics;
 using System.Windows;
+using System.Windows.Media;
 using NotifyHub.Models;
 using NotifyHub.Services;
 
 namespace NotifyHub.UI;
 
 /// <summary>
-/// 通知堆叠管理：按配置的四角位置纵向排列，新通知在最上方；
-/// 消息进入队列逐条弹出（间隔 320ms，不瞬间批量轰炸），
-/// 超出堆叠上限时等待前面的卡片关闭后再放行。
-/// 所有方法必须在 UI 线程调用。
+/// 通知堆叠管理（v0.2.8 需求 1 重写）。
+///
+/// 位置：
+///   * 四角锚点由 <see cref="NotificationLayout"/> 以**卡片本体**几何算出，
+///     工作区每次实时向 Win32 取（<see cref="ScreenMetrics"/>），不再依赖会被
+///     缓存的 <c>SystemParameters.WorkArea</c>——改缩放/换分辨率都不会错位；
+///   * 底部两角以卡片底边为基准，卡片完整落在任务栏之上（旧版会被压下去 8px）。
+///
+/// 堆叠顺序：
+///   * 上角：最新在最上方，旧消息向下；
+///   * 下角：最新在最下方，旧消息向上。
+///   实现上 index 0 永远是「贴着锚定边的最新一张」，ComputePosition 负责把它映射到上或下。
+///
+/// 动画：
+///   旧版给每张卡片的 Window.Top 挂 DoubleAnimation，多张卡在同一帧重排时
+///   动画互相打断，实测出现 118/54/94 这种不等步进（卡片重叠）。
+///   现在由一个帧驱动的小引擎统一推进（CompositionTarget.Rendering），
+///   位移是集合级计算，步进恒定、不会互相踩。
 /// </summary>
 public sealed class NotificationManager
 {
-    /// <summary>窗口宽度（含左右阴影留白 14+14，卡片本体 356）。</summary>
-    public const double CardWidth = 384;
+    /// <summary>窗口宽度（含左右阴影留白）。</summary>
+    public const double CardWidth = NotificationLayout.WindowWidth;
 
-    /// <summary>卡片视觉高度（不含阴影留白），决定纵向堆叠步进。</summary>
-    public const double CardHeight = 110;
+    /// <summary>卡片本体高度，决定纵向堆叠步进。</summary>
+    public const double CardHeight = NotificationLayout.CardBodyHeight;
 
-    private const double Gap = 8;
-    private const double EdgeMargin = 8;
     private static readonly TimeSpan PopInterval = TimeSpan.FromMilliseconds(320);
+    private static readonly TimeSpan MoveDuration = TimeSpan.FromMilliseconds(190);
 
     private readonly List<NotificationWindow> _windows = new();
     private readonly Queue<NotifyMessage> _pending = new();
@@ -28,6 +43,20 @@ public sealed class NotificationManager
     private readonly LogService _log;
     private readonly Func<AppConfig> _configProvider;
     private readonly SoundService? _sound;
+
+    // ---- 帧驱动重排 ----
+    private readonly Dictionary<NotificationWindow, MoveState> _moves = new();
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private bool _ticking;
+
+    private sealed class MoveState
+    {
+        public double FromLeft;
+        public double FromTop;
+        public double ToLeft;
+        public double ToTop;
+        public double StartMs;
+    }
 
     public NotificationManager(LogService log, Func<AppConfig> configProvider, SoundService? sound = null)
     {
@@ -75,34 +104,127 @@ public sealed class NotificationManager
         }
 
         _windows.Clear();
+        _moves.Clear();
+        StopTicking();
     }
 
+    /// <summary>按当前四角配置与屏幕重新摆放所有卡片（配置/DPI/分辨率变化时调用）。</summary>
     public void Relayout(bool animate = true)
     {
+        if (_windows.Count == 0)
+        {
+            return;
+        }
+
+        var work = CurrentWorkArea();
+        var corner = NotificationLayout.Parse(_configProvider().NotificationCorner);
+
         for (var i = 0; i < _windows.Count; i++)
         {
-            var (left, top) = ComputePosition(i);
-            _windows[i].MoveTo(left, top, animate);
+            var (left, top) = NotificationLayout.WindowOrigin(work, corner, i);
+            MoveTo(_windows[i], left, top, animate);
         }
     }
 
-    /// <summary>按当前四角配置计算第 index 张卡片的位置。</summary>
-    private (double Left, double Top) ComputePosition(int index)
+    /// <summary>当前主屏工作区（DIP，实时 DPI）。</summary>
+    private Rect CurrentWorkArea()
     {
-        var area = SystemParameters.WorkArea;
-        var corner = AppConfig.NormalizeCorner(_configProvider().NotificationCorner);
-        var leftAligned = corner is "TopLeft" or "BottomLeft";
-        var bottomUp = corner is "BottomLeft" or "BottomRight";
+        // 用已在屏上的窗口取 DPI 最准（Per-Monitor V2 下窗口自己知道所在屏的缩放）
+        var reference = _windows.FirstOrDefault(w => w.IsLoaded) as Visual;
+        return ScreenMetrics.PrimaryWorkAreaDip(reference);
+    }
 
-        var left = leftAligned
-            ? area.Left + EdgeMargin
-            : area.Right - CardWidth - EdgeMargin;
+    private void MoveTo(NotificationWindow window, double left, double top, bool animate)
+    {
+        if (!animate || !window.IsVisible)
+        {
+            _moves.Remove(window);
+            window.MoveTo(left, top, animate: false);
+            return;
+        }
 
-        var top = bottomUp
-            ? area.Bottom - EdgeMargin - CardHeight - (index * (CardHeight + Gap))
-            : area.Top + EdgeMargin + (index * (CardHeight + Gap));
+        var current = window.CurrentOrigin;
+        if (Math.Abs(current.Left - left) < 0.5 && Math.Abs(current.Top - top) < 0.5)
+        {
+            _moves.Remove(window);
+            return;
+        }
 
-        return (left, top);
+        _moves[window] = new MoveState
+        {
+            FromLeft = current.Left,
+            FromTop = current.Top,
+            ToLeft = left,
+            ToTop = top,
+            StartMs = _clock.Elapsed.TotalMilliseconds,
+        };
+
+        StartTicking();
+    }
+
+    private void StartTicking()
+    {
+        if (_ticking)
+        {
+            return;
+        }
+
+        _ticking = true;
+        CompositionTarget.Rendering += OnFrame;
+    }
+
+    private void StopTicking()
+    {
+        if (!_ticking)
+        {
+            return;
+        }
+
+        _ticking = false;
+        CompositionTarget.Rendering -= OnFrame;
+    }
+
+    /// <summary>每帧推进所有待移动的卡片（缓动 190ms，ease-out cubic）。</summary>
+    private void OnFrame(object? sender, EventArgs e)
+    {
+        if (_moves.Count == 0)
+        {
+            StopTicking();
+            return;
+        }
+
+        var now = _clock.Elapsed.TotalMilliseconds;
+        var duration = MoveDuration.TotalMilliseconds;
+        List<NotificationWindow>? finished = null;
+
+        foreach (var pair in _moves.ToList())
+        {
+            var window = pair.Key;
+            var move = pair.Value;
+
+            var t = Math.Clamp((now - move.StartMs) / duration, 0, 1);
+            var eased = 1 - Math.Pow(1 - t, 3);
+
+            var left = move.FromLeft + ((move.ToLeft - move.FromLeft) * eased);
+            var top = move.FromTop + ((move.ToTop - move.FromTop) * eased);
+
+            if (t >= 1)
+            {
+                (finished ??= new List<NotificationWindow>()).Add(window);
+                window.MoveTo(move.ToLeft, move.ToTop, animate: false);
+                continue;
+            }
+
+            window.MoveTo(left, top, animate: false);
+        }
+
+        if (finished is not null)
+        {
+            foreach (var window in finished)
+            {
+                _moves.Remove(window);
+            }
+        }
     }
 
     private void PumpNext()
@@ -115,6 +237,8 @@ public sealed class NotificationManager
 
         var config = _configProvider();
         var max = Math.Clamp(config.MaxStack, 1, AppConfig.MaxStackLimit);
+        var work = CurrentWorkArea();
+        max = Math.Min(max, NotificationLayout.MaxFit(work));
 
         if (_windows.Count >= max)
         {
@@ -130,16 +254,19 @@ public sealed class NotificationManager
             config);
         window.Dismissed += OnWindowDismissed;
         window.Clicked += OnWindowClicked;
+        window.DisplayChanged += OnWindowDisplayChanged;
 
-        // 新通知在最上方
+        var corner = NotificationLayout.Parse(config.NotificationCorner);
+
+        // index 0 = 贴着锚定边的最新一张（上角=最上，下角=最下）
         _windows.Insert(0, window);
         Relayout(animate: true);
 
-        // 直接用计算坐标（Window.Left 未设置时是 NaN，不能拿来当参数）
-        var (left, top) = ComputePosition(0);
-        window.ShowAt(left, top, animate: true);
+        var (left, top) = NotificationLayout.WindowOrigin(work, corner, 0);
+        window.ShowAt(left, top, animate: true, fromLeft: NotificationLayout.IsLeftAligned(corner));
 
-        _log.Info("通知", $"弹出第 {_windows.Count} 张卡", $"corner={config.NotificationCorner} pos={left:F0},{top:F0}");
+        _log.Info("通知", $"弹出第 {_windows.Count} 张卡",
+            $"corner={corner} pos={left:F0},{top:F0} stack={(NotificationLayout.StacksUpward(corner) ? "向上" : "向下")}");
 
         // 消息通知提示音：真正上屏时才响，被过滤的消息不会走到这里
         _sound?.PlayMessage(config);
@@ -161,6 +288,14 @@ public sealed class NotificationManager
         }
     }
 
+    /// <summary>屏幕 DPI / 分辨率变化后按新几何重摆（Per-Monitor V2 会发 DpiChanged）。</summary>
+    public void OnDisplayChanged()
+    {
+        Relayout(animate: false);
+    }
+
+    private void OnWindowDisplayChanged(object? sender, EventArgs e) => OnDisplayChanged();
+
     private void OnWindowDismissed(object? sender, EventArgs e)
     {
         if (sender is not NotificationWindow window)
@@ -170,7 +305,9 @@ public sealed class NotificationManager
 
         window.Dismissed -= OnWindowDismissed;
         window.Clicked -= OnWindowClicked;
+        window.DisplayChanged -= OnWindowDisplayChanged;
         _windows.Remove(window);
+        _moves.Remove(window);
         Relayout();
 
         if (_pending.Count > 0)

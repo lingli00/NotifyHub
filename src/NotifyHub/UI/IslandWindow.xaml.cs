@@ -69,17 +69,31 @@ public partial class IslandWindow : Window
     private const int SlideDurationMs = 240;
 
     /// <summary>
-    /// 歌词正文相对音乐行左边缘的缩进（DIP）：
-    /// 面板左距 2 + 竖条 2 + 竖条右边距 23 = 27，正好和歌名文字起点对齐。
+    /// 歌词宽度下限 / 上限（DIP，v0.2.8 自适应宽度）。
+    /// 有任务时歌词最多 330（左右两栏配平）；只有音乐+歌词时放宽到 560，
+    /// 长歌词可以把岛拉长，而不是挤在 270 里滚动。
     /// </summary>
-    private const double LyricTextIndent = 27;
+    private const double MinLyricWidth = 150;
+    private const double MaxLyricWidthWithTask = 330;
+    private const double MaxLyricWidthSolo = 560;
+
+    /// <summary>歌名区宽度上下限（DIP）：太短会把标题挤成跑马灯，太长会把岛撑宽。</summary>
+    private const double MinTitleWidth = 104;
+    private const double MaxTitleWidthWithTask = 200;
+    private const double MaxTitleWidthSolo = 280;
+
+    /// <summary>任务正文宽度上下限（DIP）。</summary>
+    private const double MinStatusWidth = 160;
+    private const double MaxStatusWidthWithMusic = 330;
+    private const double MaxStatusWidthSolo = 460;
 
     /// <summary>歌词切换的淡入时长（v0.2.7：新行出现时轻微上浮 + 淡入）。</summary>
     private static readonly TimeSpan LyricSwapDuration = TimeSpan.FromMilliseconds(170);
 
     private readonly DispatcherTimer _statusTimer = new();
     private readonly DispatcherTimer _musicTimer = new();
-    private readonly DispatcherTimer _slideTimer = new() { Interval = TimeSpan.FromMilliseconds(15) };
+    /// <summary>滑动动画是否挂在 CompositionTarget.Rendering 上（v0.2.8：帧同步，替代 15ms 计时器）。</summary>
+    private bool _slideFrameHooked;
 
     /// <summary>
     /// 唯一的「超时自动收纳」计时器（v0.2.7 需求 2）。
@@ -156,6 +170,7 @@ public partial class IslandWindow : Window
         // 歌名也左对齐，和下方歌词左边界齐平
         MusicText.Anchor = TextAnchor.Left;
         LyricLine1.Anchor = TextAnchor.Left;
+        LyricTrans.Anchor = TextAnchor.Left;
         LyricLine2.Anchor = TextAnchor.Left;
         StatusText.Anchor = TextAnchor.Left;
         LyricsPanel.RenderTransform = _lyricShift;
@@ -163,7 +178,6 @@ public partial class IslandWindow : Window
         _statusTimer.Tick += (_, _) => OnStatusHoldElapsed();
         _musicTimer.Tick += (_, _) => OnMusicGraceElapsed();
         _autoTimer.Tick += (_, _) => OnAutoCollapseElapsed();
-        _slideTimer.Tick += (_, _) => OnSlideTick();
 
         // 鼠标在岛上时不收纳（用户正在看歌词/状态），离开再重新计时
         Pill.MouseEnter += OnPillMouseEnter;
@@ -230,6 +244,21 @@ public partial class IslandWindow : Window
     /// <summary>当前歌词字号（诊断用，DIP）。</summary>
     public double LyricsFontSize => LyricLine1.FontSize;
 
+    /// <summary>译文行是否正在显示（诊断用）。</summary>
+    public bool IsTranslationShown => LyricTrans.Visibility == Visibility.Visible;
+
+    /// <summary>岛当前的实际宽度（诊断/自检用，DIP）。</summary>
+    public double IslandWidth => ActualWidth > 1 ? ActualWidth : 0;
+
+    /// <summary>排版诊断快照（--island-shot / 排障日志用）。</summary>
+    public string LayoutDebug =>
+        $"岛宽={ActualWidth:F0} 歌名宽={MusicText.Width:F0}/自然{MusicText.NaturalWidth:F0} " +
+        $"歌词宽={LyricLine1.Width:F0}/自然1={LyricLine1.NaturalWidth:F0}/自然2={LyricLine2.NaturalWidth:F0} " +
+        $"任务宽={StatusText.Width:F0}/自然{StatusText.NaturalWidth:F0} " +
+        $"左栏={LeftPane.ActualWidth:F0} 右栏={StatusGroup.ActualWidth:F0} " +
+        $"歌词可见={LyricsPanel.Visibility} 译文={LyricTrans.Visibility} " +
+        $"| 歌名[{MusicText.DebugState}] 歌词1[{LyricLine1.DebugState}]";
+
     /// <summary>自动收纳计时器是否在跑（诊断用）。</summary>
     public bool IsAutoTimerRunning => _autoTimer.IsEnabled;
 
@@ -252,9 +281,11 @@ public partial class IslandWindow : Window
         var size = LyricsFontSizeProvider?.Invoke() ?? 13;
         size = Math.Clamp(size, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize);
 
-        LyricLine1.FontSize = size + 1.5;
+        LyricLine1.FontSize = size + 1;
         LyricLine1.FontWeight = FontWeights.SemiBold;
-        LyricLine2.FontSize = Math.Max(9, size - 1.5);
+        LyricTrans.FontSize = Math.Max(9, size - 2);
+        LyricTrans.FontWeight = FontWeights.Normal;
+        LyricLine2.FontSize = Math.Max(9, size - 2);
         LyricLine2.FontWeight = FontWeights.Normal;
 
         UpdateChrome();
@@ -333,19 +364,30 @@ public partial class IslandWindow : Window
     }
 
     /// <summary>
-    /// 更新双行歌词（v0.2.7）：<paramref name="current"/> 为当前行，
-    /// <paramref name="next"/> 为下一行；都为 null 表示无歌词（收起歌词区）。
+    /// 更新歌词区（v0.2.8）：<paramref name="current"/> 当前行，
+    /// <paramref name="translation"/> 该行的译文（歌词源自带才有的，没有就传 null），
+    /// <paramref name="next"/> 下一行。全为 null 表示无歌词（收起歌词区）。
+    ///
     /// 行内容变化时做 170ms 淡入 + 轻微上浮，让"换句"看得见而不是硬切。
+    /// 宽度不在这里定：交给 <see cref="BalanceWidths"/> 按实测文本算，
+    /// 避免"歌词两个字却占 270 宽"这种右侧大片空白的观感。
     /// </summary>
-    public void ShowLyrics(string? current, string? next)
+    public void ShowLyrics(string? current, string? next, string? translation = null)
     {
         var line1 = current ?? string.Empty;
         var line2 = next ?? string.Empty;
-        var changed = !string.Equals(LyricLine1.Text, line1, StringComparison.Ordinal);
+        var trans = translation ?? string.Empty;
+
+        var changed = !string.Equals(LyricLine1.Text, line1, StringComparison.Ordinal)
+                      || !string.Equals(LyricTrans.Text, trans, StringComparison.Ordinal);
         var wasVisible = LyricsPanel.Visibility == Visibility.Visible;
 
         LyricLine1.Text = line1;
+        LyricTrans.Text = trans;
         LyricLine2.Text = line2;
+
+        // 译文行只在真的有译文时占位（中文歌 / 译文与原文相同 → 整行收起，不留空档）
+        LyricTrans.Visibility = trans.Trim().Length > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         // 没词 / 关了开关 / 没音乐：一律收起（空面板会把岛撑高一小截）
         var hasLyric = (LyricsEnabledProvider?.Invoke() ?? true)
@@ -363,6 +405,7 @@ public partial class IslandWindow : Window
         {
             // 只在"本来就显示、内容变了"时做动画：首次展开交给整岛动画，避免叠加发灰
             AnimateLyricSwap();
+            UpdateChrome();
         }
     }
 
@@ -557,6 +600,19 @@ public partial class IslandWindow : Window
         // 只许一行：任何换行/连续空白都压平，超长交给跑马灯
         display = FlattenToSingleLine(display);
 
+        // 去重（v0.2.8）：正文常以来源名开头（"WorkBuddy 正在梳理…"），而左侧标签已经写了
+        // 来源，再重复一遍既占宽度又啰嗦 —— 剥掉，但剥完为空（正文就是来源名）则保留原样。
+        var sourceTag = string.IsNullOrWhiteSpace(tag) ? "WorkBuddy" : tag.Trim();
+        if (display.Length > sourceTag.Length + 1
+            && display.StartsWith(sourceTag, StringComparison.OrdinalIgnoreCase))
+        {
+            var rest = display[sourceTag.Length..].TrimStart(' ', '-', '·', ':', '：', '｜', '|');
+            if (rest.Length > 0)
+            {
+                display = rest;
+            }
+        }
+
         var changed = !string.Equals(StatusText.Text, display, StringComparison.Ordinal);
         var firstShow = _hidden || !_statusVisible;
 
@@ -698,40 +754,142 @@ public partial class IslandWindow : Window
     {
         Divider.Visibility = _musicVisible && _statusVisible ? Visibility.Visible : Visibility.Collapsed;
         BalanceWidths();
+        SyncStripState();
     }
 
     /// <summary>
-    /// 左右两栏宽度配平（v0.2.7 需求 1 的核心）。
-    /// v0.2.6 的毛病：右侧任务文字固定 440px、左侧歌词固定 286px，一有任务岛就撑到 810px，
-    /// 左挤右空。现在两侧都按「标签 + 正文」组织，正文宽度按对方是否存在来配：
-    ///   有音乐 → 右侧 292（与左栏 ≈320 接近，视觉配平）
-    ///   无音乐 → 右侧 380（独占整条，避免又窄又空）
-    /// 歌词宽度则跟随左栏实际宽度，让两行的左右边界对齐。
+    /// 收纳细条当前应该显示哪种形态（v0.2.8 需求 4）：
+    /// 仅音乐 / 仅任务 / 音乐+任务 三种，靠轨道里光块的颜色与运动方式区分。
+    /// </summary>
+    private StripMode CurrentStripMode()
+    {
+        if (_musicVisible && _statusVisible)
+        {
+            return StripMode.Both;
+        }
+
+        if (_musicVisible)
+        {
+            return StripMode.Music;
+        }
+
+        return _statusVisible ? StripMode.Task : StripMode.None;
+    }
+
+    /// <summary>细条已显示时，随内容变化刷新指示器（音乐停、任务开始/完成…）。</summary>
+    private void SyncStripState()
+    {
+        if (!_stripMode || _strip is null)
+        {
+            return;
+        }
+
+        _strip.UpdateState(CurrentStripMode(), IsDoneState);
+    }
+
+    /// <summary>
+    /// 左右两栏宽度配平 + 自适应岛宽（v0.2.8 需求 5 的核心）。
+    ///
+    /// 旧版是把歌词写死 270、任务写死 262/360：歌词短的时候右侧留一大片黑，
+    /// 岛却按「270 + 分隔线 + 262」的固定宽度居中，观感就是**明显靠左、右边空**。
+    ///
+    /// 现在一切按**文本实测宽度**推：
+    ///   · 歌名区：clamp(实测, 104, 有任务 200 / 无任务 280)
+    ///   · 歌词区：clamp(三行里最宽的一行, 150, 有任务 330 / 无任务 560)
+    ///   · 任务区：clamp(实测, 160, 有音乐 330 / 无音乐 460)
+    /// 内容短 → 岛自然收窄（居中后两侧留白对称）；歌词长 → 岛适度拉长（上限 560）。
+    /// 只有任务没有音乐时不再预留左侧空位（左栏直接 Collapsed），所以任务区独占整条。
     /// </summary>
     private void BalanceWidths()
     {
-        var statusWidth = _musicVisible ? 262d : 360d;
+        // 1) 任务正文
+        //    宽度一律**向上取整**：FormattedText 的自然宽带小数（172.2），若四舍五入成 172
+        //    就比自然宽还窄 0.2px，会被跑马灯判成"超宽"从而把开头几个字滚掉（v0.2.8 实测坑）。
+        var statusCap = _musicVisible ? MaxStatusWidthWithMusic : MaxStatusWidthSolo;
+        var statusNatural = StatusText.NaturalWidth;
+        var statusWidth = Math.Ceiling(Math.Clamp(
+            statusNatural <= 0 ? MinStatusWidth : statusNatural,
+            MinStatusWidth, statusCap));
+
         if (double.IsNaN(StatusText.Width) || Math.Abs(StatusText.Width - statusWidth) > 0.5)
         {
             StatusText.Width = statusWidth;
         }
 
-        if (!_musicVisible || MusicGroup.ActualWidth <= 60)
+        if (!_musicVisible)
+        {
+            // 无音乐：左栏整体收起，任务区独占（不预留任何音乐/歌词空位）
+            LeftPane.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        LeftPane.Visibility = Visibility.Visible;
+
+        // 2) 歌名区
+        var titleCap = _statusVisible ? MaxTitleWidthWithTask : MaxTitleWidthSolo;
+        var titleNatural = MusicText.NaturalWidth;
+        var titleWidth = Math.Ceiling(Math.Clamp(
+            titleNatural <= 0 ? MinTitleWidth : titleNatural,
+            MinTitleWidth, titleCap));
+
+        if (double.IsNaN(MusicText.Width) || Math.Abs(MusicText.Width - titleWidth) > 0.5)
+        {
+            MusicText.Width = titleWidth;
+        }
+
+        // 3) 歌词区：取三行里最宽的一行（译文/下一句通常更短，不参与决定）
+        if (LyricsPanel.Visibility != Visibility.Visible)
         {
             return;
         }
 
-        // 歌词正文宽度 = 音乐行宽度 − 竖条与左边距（右边界与播放三键对齐，左边界与歌名对齐）
-        var lyricWidth = MusicGroup.ActualWidth - LyricTextIndent;
-        if (lyricWidth < 80)
-        {
-            return;
-        }
+        AlignLyricIndent();
 
-        if (Math.Abs(LyricLine1.Width - lyricWidth) > 0.5)
+        var lyricCap = _statusVisible ? MaxLyricWidthWithTask : MaxLyricWidthSolo;
+        var lyricNatural = Math.Max(
+            LyricLine1.NaturalWidth,
+            Math.Max(LyricTrans.NaturalWidth, LyricLine2.NaturalWidth));
+
+        var lyricWidth = Math.Ceiling(Math.Clamp(
+            lyricNatural <= 0 ? MinLyricWidth : lyricNatural,
+            MinLyricWidth, lyricCap));
+
+        if (double.IsNaN(LyricLine1.Width) || Math.Abs(LyricLine1.Width - lyricWidth) > 0.5)
         {
             LyricLine1.Width = lyricWidth;
+            LyricTrans.Width = lyricWidth;
             LyricLine2.Width = lyricWidth;
+        }
+    }
+
+    /// <summary>
+    /// 歌词块左缩进 = 歌名正文相对内容列的偏移（v0.2.8：让"当前歌词"和"歌名"共用一条左边界）。
+    ///
+    /// 为什么运行时算：歌名左边的装饰是「App 图标 17+7」或「♪ 字形 + 间距」，两者宽度不同；
+    /// 写死一个数值在换用 ♪ 兜底时会差 10px，看起来就是"歌词缩进错了"。
+    /// 带 0.5px 容差，不会因为反复布局而抖动。
+    /// </summary>
+    private void AlignLyricIndent()
+    {
+        if (MusicGroup.ActualWidth <= 1 || MusicText.ActualWidth <= 1)
+        {
+            return;
+        }
+
+        try
+        {
+            var paneLeft = MusicGroup.TranslatePoint(new Point(0, 0), LeftPane).X;
+            var titleLeft = MusicText.TranslatePoint(new Point(0, 0), LeftPane).X;
+            var indent = Math.Max(0, Math.Round(titleLeft - paneLeft));
+
+            if (indent > 0 && Math.Abs(LyricsPanel.Margin.Left - indent) > 0.5)
+            {
+                LyricsPanel.Margin = new Thickness(indent, LyricsPanel.Margin.Top, 0, LyricsPanel.Margin.Bottom);
+            }
+        }
+        catch
+        {
+            // 布局尚未完成时 TranslatePoint 可能抛，忽略即可（下一帧会再对齐）
         }
     }
 
@@ -1022,18 +1180,36 @@ public partial class IslandWindow : Window
     {
         // v0.2.3 起只吸附顶部：水平位置按中间 3/5 重新收敛，垂直贴顶
         var (left, _) = ClampToScreen(Left, Top);
+        var work = WorkArea();
         Left = left;
-        Top = SystemParameters.WorkArea.Top + EdgeGap - PillPad;
+        Top = work.Top + EdgeGap - PillPad;
     }
 
-    /// <summary>固定模式：水平居中、贴顶（视觉缝隙 = EdgeGap）。可重复调用（尺寸变化后纠偏）。</summary>
+    /// <summary>
+    /// 固定模式：**按最终尺寸真居中**、贴顶（视觉缝隙 = EdgeGap）。
+    ///
+    /// v0.2.8 需求 5：以前这里读 SystemParameters.WorkArea（可能是缓存的旧 DPI），
+    /// 且只在 Show 前后各调一次——SizeToContent 让宽度在随后几帧才稳定，
+    /// 结果就是「只有播放器+歌词时岛偏左、右边一大片空白」。
+    /// 现在：工作区实时取（ScreenMetrics），并且 SizeChanged 每帧都会再纠一次偏。
+    /// </summary>
     private void RecenterFixed()
     {
-        var area = SystemParameters.WorkArea;
+        var work = WorkArea();
         var w = ActualWidth > 1 ? ActualWidth : 420;
-        Left = Math.Round(area.Left + ((area.Width - w) / 2));
-        Top = Math.Round(area.Top + EdgeGap - PillPad);
+        Left = CenteredLeft(work, w);
+        Top = Math.Round(work.Top + EdgeGap - PillPad);
     }
+
+    /// <summary>
+    /// 固定模式水平居中的窗口左边界（DIP）。抽成纯函数便于自检：
+    /// 断言「左右两侧留白相等」，这是需求 5 里"不能明显靠左"的硬指标。
+    /// </summary>
+    public static double CenteredLeft(Rect work, double width)
+        => Math.Round(work.Left + ((work.Width - width) / 2));
+
+    /// <summary>主屏工作区（DIP，实时 DPI；不再用会过期的 SystemParameters.WorkArea）。</summary>
+    private Rect WorkArea() => ScreenMetrics.PrimaryWorkAreaDip(this);
 
     /// <summary>按模式定位：Free=已保存位置（有效时），否则顶部居中。</summary>
     private void PositionIsland()
@@ -1065,7 +1241,7 @@ public partial class IslandWindow : Window
     /// </summary>
     private (double Left, double Top) ClampToScreen(double left, double top)
     {
-        var area = SystemParameters.WorkArea;
+        var area = WorkArea();
         var w = ActualWidth > 1 ? ActualWidth : Width;
         var h = ActualHeight > 1 ? ActualHeight : 76;
         var slack = PillPad + 2;
@@ -1207,7 +1383,7 @@ public partial class IslandWindow : Window
     /// </summary>
     private void SnapToNearestEdge()
     {
-        var area = SystemParameters.WorkArea;
+        var area = WorkArea();
         var pad = PillPad;
 
         var (targetLeft, _) = ClampToScreen(Left, Top);
@@ -1229,7 +1405,7 @@ public partial class IslandWindow : Window
         }
 
         _stripMode = true;
-        EnsureStrip().ShowFor("Top", IsDoneState);
+        EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState);
 
         var token = ++_animToken;
         BeginAnimation(OpacityProperty, null);
@@ -1271,7 +1447,7 @@ public partial class IslandWindow : Window
         // 贴顶全展开：水平收敛进中间 3/5，垂直留出与吸附同款缝隙
         var (left, _) = ClampToScreen(Left, Top);
         Left = left;
-        Top = SystemParameters.WorkArea.Top + EdgeGap - PillPad;
+        Top = WorkArea().Top + EdgeGap - PillPad;
 
         Show();
         UpdateLayout();
@@ -1344,11 +1520,44 @@ public partial class IslandWindow : Window
 
         _sliding = true;
         _slideWatch.Restart();
-        _slideTimer.Start();
+        HookSlideFrame();
     }
 
-    private void OnSlideTick()
+    /// <summary>
+    /// 把滑动动画挂到渲染帧回调上（每帧一次，和显示器刷新同步）。
+    /// 旧版用 15ms 的 DispatcherTimer：既不是 16.67ms，也不跟垂直同步，
+    /// 每帧位置会抖 1px 左右，肉眼看就是"滑得不顺"。帧回调没有这个问题。
+    /// </summary>
+    private void HookSlideFrame()
     {
+        if (_slideFrameHooked)
+        {
+            return;
+        }
+
+        _slideFrameHooked = true;
+        CompositionTarget.Rendering += OnSlideTick;
+    }
+
+    private void UnhookSlideFrame()
+    {
+        if (!_slideFrameHooked)
+        {
+            return;
+        }
+
+        _slideFrameHooked = false;
+        CompositionTarget.Rendering -= OnSlideTick;
+    }
+
+    private void OnSlideTick(object? sender, EventArgs e)
+    {
+        if (!_sliding)
+        {
+            UnhookSlideFrame();
+            return;
+        }
+
         var elapsed = _slideWatch.ElapsedMilliseconds;
         var t = Math.Clamp(elapsed / (double)_slideDuration, 0, 1);
 
@@ -1365,7 +1574,7 @@ public partial class IslandWindow : Window
             return;
         }
 
-        _slideTimer.Stop();
+        UnhookSlideFrame();
         _slideWatch.Stop();
         _sliding = false;
         SyncWpfPositionFromHwnd();
@@ -1377,7 +1586,7 @@ public partial class IslandWindow : Window
 
     private void StopSlide()
     {
-        _slideTimer.Stop();
+        UnhookSlideFrame();
         _slideWatch.Stop();
         _sliding = false;
         _slideDone = null;
@@ -1565,7 +1774,7 @@ public partial class IslandWindow : Window
         var y = _dragStartWindow.Top + (cursor.Y - _dragStartCursor.Y);
 
         // 别让用户把条拖出允许停靠区（需求 4）：水平限中间 3/5，垂直限顶部一带
-        var area = SystemParameters.WorkArea;
+        var area = WorkArea();
         var dpi = VisualTreeHelper.GetDpi(this);
         var sx = dpi.DpiScaleX <= 0 ? 1 : dpi.DpiScaleX;
         var sy = dpi.DpiScaleY <= 0 ? 1 : dpi.DpiScaleY;
@@ -1749,7 +1958,9 @@ public partial class IslandWindow : Window
         _statusTimer.Stop();
         _musicTimer.Stop();
         _autoTimer.Stop();
-        _slideTimer.Stop();
+        UnhookSlideFrame();
+        _slideWatch.Stop();
+        _sliding = false;
         _strip?.Close();
         _strip = null;
 

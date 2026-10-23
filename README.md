@@ -5,8 +5,8 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
-**下载**：[Release v0.2.7](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.7)
-→ `NotifyHub-v0.2.7-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.7-source.zip`（完整工程）。
+**下载**：[Release v0.2.8](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.8)
+→ `NotifyHub-v0.2.8-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.8-source.zip`（完整工程）。
 
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
@@ -92,7 +92,7 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 
 ```
 NotifyHub.exe                      托盘常驻运行
-NotifyHub.exe --selftest           无界面逻辑自检（退出码 0=通过，49 项）
+NotifyHub.exe --selftest           无界面逻辑自检（退出码 0=通过，52 项）
 NotifyHub.exe --selftest-ui        通知层自检（堆叠/位置/不抢焦点）
 NotifyHub.exe --demo               弹 6 条演示通知并生成抓图
 NotifyHub.exe --dump               导出微信/QQ 的 UIA 树（适配新版界面用）
@@ -101,7 +101,8 @@ NotifyHub.exe --sessions           读一次微信会话列表，打印解析结
 NotifyHub.exe --island "文本"      灵动岛：显示一行执行中动作
 NotifyHub.exe --island-done "文本" 灵动岛：完成态 + 完成提示音后收起
 NotifyHub.exe --island-stream      从标准输入逐行读状态（长连接，更新延迟 <100ms）
-NotifyHub.exe --island-shot        离屏渲染三张岛截图（音乐 / 音乐+任务 / 仅任务）
+NotifyHub.exe --island-shot        离屏渲染四张岛截图（仅音乐 / 带译文 / 音乐+任务 / 仅任务）
+NotifyHub.exe --strip-shot        离屏渲染四张收纳细条截图（仅音乐 / 仅任务 / 两者同时 / 完成态）
 NotifyHub.exe --marquee-test       跑马灯离屏自检（5 项，出 PNG 并按非背景像素判定）
 NotifyHub.exe --media toggle       控制播放器（play/pause/toggle/next/prev）
 NotifyHub.exe --settings           只打开设置窗口并出三张截图（排版检查）
@@ -235,7 +236,7 @@ NotifyHub/
 │  │  ├─ StartupService.cs      开机自启注册表
 │  │  ├─ WindowActivator.cs     点击通知 → 激活微信/QQ 并定位聊天
 │  │  ├─ ConsoleBridge.cs       无控制台进程的 stdout 输出
-│  │  ├─ SelfTest.cs            自检用例（解析/差分/去重/配置/过滤/歌词进度/收纳等 49 项）
+│  │  ├─ SelfTest.cs            自检用例（解析/差分/去重/配置/过滤/歌词进度/收纳/四角几何/自适应宽度等 52 项）
 │  │  ├─ Parsing/
 │  │  │  ├─ MessageTextParser.cs  UIA 文本 → (联系人, 摘要)，剥离置顶/未读前缀/噪声
 │  │  │  └─ NtfySseParser.cs      SSE 帧与 ntfy JSON 解析
@@ -297,7 +298,7 @@ dotnet publish src/NotifyHub/NotifyHub.csproj -c Release -o dist
 自检与验证：
 
 ```powershell
-.\dist\NotifyHub.exe --selftest        # 20 项逻辑自检
+.\dist\NotifyHub.exe --selftest        # 52 项逻辑自检
 .\dist\NotifyHub.exe --selftest-ui     # 通知层自检（0=通过）
 .\dist\NotifyHub.exe --demo            # 弹 6 条演示通知并抓图
 python tools\island_probe.py info      # 读灵动岛位置/样式
@@ -324,6 +325,17 @@ python tools\stream_latency.py         # 状态流延迟
 ---
 
 ## 八、版本
+
+**v0.2.8** — 四角通知修复 / 播放器歌词区重做 / 岛 60 帧 / 细条跑道指示器 / 真居中与自适应宽度
+
+* **修四角坐标**（核心 Bug）：`SystemParameters.WorkArea` 是**启动时按系统缩放缓存的 DIP 值**，运行期改缩放不刷新，导致右上/左下/右下三个角全错。新增 `ScreenMetrics`（实时 `MonitorFromPoint` + `GetMonitorInfo` + `GetDpiForSystem`）替代全部定位；新增 `NotificationLayout` 纯函数统一"窗口 384×140 / 本体 356×112 / 步进 120 / 边距 8"，四角一律实测边距 8
+* **修堆叠方向**：`index 0` 恒为"最新且贴锚定边"——上角最新在最上向下堆、下角最新在最下向上堆
+* **歌词独立开关 + 自带翻译**：关掉歌词后即使勾着「保持展开」也不显示；外文歌词按时间点合并 `tlyric` 译文，译文与原文相同则不占位
+* **播放器 + 歌词区重做**：3px 贯穿脊线 + 统一缩进内容列，歌名与三行歌词共用一条左边界（运行时实测对齐），删掉旧固定行高与死空白
+* **动画改帧驱动**：`DispatcherTimer(15ms)` → `CompositionTarget.Rendering`，动画里去掉 `DropShadowEffect`
+* **细条跑道指示器**：12×124，仅音乐黄色来回 / 仅任务琥珀单向带拖尾 / 同时上下两条轨道 / 完成绿块居中，保留整条呼吸
+* **岛真居中 + 自适应宽度**：三块宽度都按实测自然宽 `clamp`，仅音乐 304、长歌词 540、仅任务 261（左栏不占位）；固定模式左右留白实测差 1px
+* 新增自检 4 项（四角几何 / 译文合并 / 自适应宽度与真居中 / 细条指示器），总计 52 项；新增 `--strip-shot`、`tools/corner_probe.py`、`tools/island_probe.py center`
 
 **v0.2.7** — 灵动岛两栏配平 / 歌词实时同步 / 歌词字号与总开关 / 统一自动收纳
 

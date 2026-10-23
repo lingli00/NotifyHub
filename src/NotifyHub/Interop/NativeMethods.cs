@@ -52,6 +52,17 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
 
+    /// <summary>MonitorFromPoint：按坐标取显示器（0,0 + DEFAULTTOPRIMARY = 主屏）。</summary>
+    [DllImport("user32.dll")]
+    public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+
+    /// <summary>主屏。</summary>
+    public const uint MONITOR_DEFAULTTOPRIMARY = 1;
+
+    /// <summary>系统 DPI（v0.2.8）：96 = 100%。</summary>
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForSystem();
+
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
@@ -59,6 +70,14 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetCursorPos(out POINT point);
+
+    /// <summary>
+    /// 挪动鼠标指针（离屏截图前把指针挪到角落，避免鼠标恰好压住某个播放键，
+    /// 把 hover 底色一起拍进 PNG —— v0.2.8 实拍就踩到过这个假 bug）。
+    /// </summary>
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetCursorPos(int x, int y);
 
     // ---- 悬浮窗口拖拽 / 吸附所需（分层窗口不能用 WPF 的 DragMove） ----
 

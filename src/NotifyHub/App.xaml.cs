@@ -202,18 +202,68 @@ public partial class App : Application
                     return;
                 }
 
+            case AppMode.StripShot:
+                {
+                    // 收纳细条离屏渲染（需求 4 验收）：四种指示器形态各出一张 PNG——
+                    // 仅音乐（黄色来回）/ 仅任务（琥珀单向+拖尾）/ 两者同跑（上下两条）/
+                    // 完成态（绿色静止光块）。每张间隔 450ms 抓拍，相位不同 → 看得出在动。
+                    var stripJobs = new (string File, StripMode Mode, bool Done)[]
+                    {
+                        ("strip-music.png", StripMode.Music, false),
+                        ("strip-task.png", StripMode.Task, false),
+                        ("strip-both.png", StripMode.Both, false),
+                        ("strip-done.png", StripMode.Task, true),
+                    };
+
+                    var stripIndex = 0;
+
+                    void RunNextStrip()
+                    {
+                        if (stripIndex >= stripJobs.Length)
+                        {
+                            Shutdown();
+                            return;
+                        }
+
+                        var job = stripJobs[stripIndex];
+                        stripIndex++;
+
+                        var strip = new SnapStripWindow();
+                        strip.ShowFor(job.Mode, job.Done);
+                        strip.UpdateLayout();
+                        log.Info("StripShot", job.File, $"w={strip.Width:F0} h={strip.Height:F0} {strip.IndicatorDebug}");
+
+                        var shotTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+                        shotTimer.Tick += (_, _) =>
+                        {
+                            shotTimer.Stop();
+                            log.Info("StripShot", job.File + " @capture", strip.IndicatorDebug);
+                            CaptureWindow(strip, job.File, log);
+                            strip.Close();
+                            RunNextStrip();
+                        };
+                        shotTimer.Start();
+                    }
+
+                    RunNextStrip();
+                    return;
+                }
+
             case AppMode.IslandShot:
                 {
                     // 灵动岛离屏渲染（排版核对用）：桌面上常被“全屏应用自动隐藏”挡住，
-                    // 这里直接构造并渲染成 PNG。v0.2.7 出三张：
-                    //   island-music      只有音乐 + 双行歌词
-                    //   island-task       音乐 + 歌词 + 任务（两栏配平的新布局）
-                    //   island-task-only  只有任务（无音乐时的整条宽度）
+                    // 这里直接构造并渲染成 PNG。v0.2.8 出四张：
+                    //   island-music        只有音乐 + 歌词（无任务，岛应按内容收窄并居中）
+                    //   island-translation  外文歌词 + 自带中文翻译（多一行译文）
+                    //   island-task         音乐 + 歌词 + 任务（两栏配平）
+                    //   island-task-only    只有任务（左栏不占位）
                     var configService = new ConfigService(log);
                     configService.Load();
                     var config = configService.Current;
 
-                    void CaptureIsland(string fileName, bool withMusic, bool withTask)
+                    void CaptureIsland(string fileName, bool withMusic, bool withTask,
+                        string? trans = null, string title = "侧脸", string artist = "魏语诺, 五毛",
+                        string line1 = "关于你的一切 我都想要了解", string line2 = "陪伴三个季节 还是承受决裂")
                     {
                         var island = new IslandWindow
                         {
@@ -232,8 +282,8 @@ public partial class App : Application
                         if (withMusic)
                         {
                             island.SetMedia(new MediaInfo(
-                                "侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 72, 214));
-                            island.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+                                title, artist, "FOLIA", true, "", "Folia", 72, 214));
+                            island.ShowLyrics(line1, line2, trans);
                         }
 
                         if (withTask)
@@ -241,46 +291,56 @@ public partial class App : Application
                             island.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务", "WorkBuddy");
                         }
 
+                        // 指针挪到右上角再显示：否则鼠标若正好压在某个播放键上，
+                        // hover 底色会被一起拍进 PNG（看着像"按钮被高亮"的假 bug）
+                        Interop.NativeMethods.SetCursorPos(1880, 8);
+
                         island.Left = 300;
                         island.Top = 220;
                         island.Show();
                         island.UpdateLayout();
+                        log.Info("Shot", fileName, island.LayoutDebug);
 
                         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
                         timer.Tick += (_, _) =>
                         {
                             timer.Stop();
+                            log.Info("Shot", fileName + " @capture", island.LayoutDebug);
                             CaptureWindow(island, fileName, log);
                             island.Close();
                         };
                         timer.Start();
                     }
 
-                    CaptureIsland("island-music.png", withMusic: true, withTask: false);
-
-                    var second = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
-                    second.Tick += (_, _) =>
+                    var jobs = new (string File, Action Run)[]
                     {
-                        second.Stop();
-                        CaptureIsland("island-task.png", withMusic: true, withTask: true);
-
-                        var third = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1400) };
-                        third.Tick += (_, _) =>
-                        {
-                            third.Stop();
-                            CaptureIsland("island-task-only.png", withMusic: false, withTask: true);
-
-                            var done = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
-                            done.Tick += (_, _) =>
-                            {
-                                done.Stop();
-                                Shutdown();
-                            };
-                            done.Start();
-                        };
-                        third.Start();
+                        ("island-music.png", () => CaptureIsland("island-music.png", true, false)),
+                        ("island-translation.png", () => CaptureIsland("island-translation.png", true, false,
+                            trans: "我用尽一生寻找你的踪迹", title: "Runaway",
+                            artist: "AURORA", line1: "I keep the light on for you",
+                            line2: "Even when the city sleeps")),
+                        ("island-task.png", () => CaptureIsland("island-task.png", true, true)),
+                        ("island-task-only.png", () => CaptureIsland("island-task-only.png", false, true)),
                     };
-                    second.Start();
+
+                    // 顺序跑：每张渲染完 1.4s 再启动下一张，最后一张后收尾退出
+                    var index = 0;
+                    var step = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.4) };
+                    step.Tick += (_, _) =>
+                    {
+                        if (index >= jobs.Length)
+                        {
+                            step.Stop();
+                            Shutdown();
+                            return;
+                        }
+
+                        jobs[index].Run();
+                        index++;
+                    };
+                    jobs[0].Run();
+                    index = 1;
+                    step.Start();
                     return;
                 }
 

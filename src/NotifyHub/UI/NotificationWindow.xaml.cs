@@ -28,6 +28,9 @@ public partial class NotificationWindow : Window
     private const double SwipeDistanceUp = 46;     // 上滑收起阈值（DIP）
     private const double SwipeVelocity = 620;      // 快速甩动阈值（DIP/秒）
 
+    /// <summary>入场时的水平滑入距离（DIP），方向由所在角落决定。</summary>
+    private const double EntrySlide = 22;
+
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _swipeTimer = new();
     private readonly int _durationMs;
@@ -37,6 +40,7 @@ public partial class NotificationWindow : Window
     private double _remainingMs;
     private DateTime _segmentStart;
     private bool _closing;
+    private double _entryOffset = EntrySlide;
 
     // ---- 滑动取消状态 ----
     private bool _pressed;
@@ -86,6 +90,9 @@ public partial class NotificationWindow : Window
         };
 
         Loaded += (_, _) => StartFadeIn();
+
+        // Per-Monitor V2：窗口跨屏或系统缩放变化时会走这里
+        DpiChanged += (_, _) => DisplayChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public NotifyMessage Message { get; }
@@ -93,11 +100,18 @@ public partial class NotificationWindow : Window
     /// <summary>卡片当前不透明度（诊断用）。</summary>
     public double CardOpacity => Card.Opacity;
 
+    /// <summary>当前窗口原点（DIP）；尚未定位（NaN）时返回屏幕外哨兵值。</summary>
+    public (double Left, double Top) CurrentOrigin
+        => (double.IsNaN(Left) ? -9999 : Left, double.IsNaN(Top) ? -9999 : Top);
+
     /// <summary>窗口关闭后触发（管理器据此重排剩余卡片）。</summary>
     public event EventHandler? Dismissed;
 
     /// <summary>用户点击卡片。</summary>
     public event EventHandler? Clicked;
+
+    /// <summary>所在显示器 DPI 变化（拖动到另一屏、或系统改了缩放）——管理器据此重排。</summary>
+    public event EventHandler? DisplayChanged;
 
     /// <summary>应用外观主题（毛玻璃/纯色 + 自动对比度文字）。</summary>
     public void ApplyTheme(ThemePalette palette)
@@ -117,11 +131,16 @@ public partial class NotificationWindow : Window
         TimeText.Foreground = ThemePalette.Brush(palette.TextTertiary);
     }
 
-    /// <summary>定位到目标位置并显示；animate=false 时直接显示最终状态。</summary>
-    public void ShowAt(double left, double top, bool animate)
+    /// <summary>
+    /// 定位到目标位置并显示；animate=false 时直接显示最终状态。
+    /// <paramref name="fromLeft"/> 决定入场滑动方向：左角从左侧滑入、右角从右侧滑入
+    /// （旧版一律从右侧滑入，左上/左下角看起来像"从屏幕中间飞出来"）。
+    /// </summary>
+    public void ShowAt(double left, double top, bool animate, bool fromLeft = false)
     {
         Left = left;
         Top = top;
+        _entryOffset = fromLeft ? -EntrySlide : EntrySlide;
 
         // v0.2.6 需求 4：显示前对卡片背后的屏幕取样，按合成亮度重选文字色
         // （深色毛玻璃压在白色网页上会自动转黑字，反之转白字）。
@@ -143,40 +162,23 @@ public partial class NotificationWindow : Window
         Show();
     }
 
-    /// <summary>重排时移动到新的纵向位置。</summary>
+    /// <summary>
+    /// 直接设置位置（DIP），不做 WPF 属性动画。
+    /// v0.2.8 起重排动画上移到 <see cref="NotificationManager"/>，用帧驱动统一推进：
+    /// 多张卡片在同一帧重排时，各自的 DoubleAnimation 会互相打断，
+    /// 实测出现 118 / 54 / 94 这种不等步进（卡片叠在一起）。
+    /// </summary>
     public void MoveTo(double left, double top, bool animate)
     {
-        // 注意：Window.Left/Top 初始是 NaN，NaN 的比较恒为 false，必须先判 NaN
-        if (double.IsNaN(Left) || Math.Abs(Left - left) > 0.5)
+        if (double.IsNaN(Left) || Math.Abs(Left - left) > 0.05)
         {
             Left = left;
         }
 
-        if (double.IsNaN(Top) || Math.Abs(Top - top) < 0.5)
+        if (double.IsNaN(Top) || Math.Abs(Top - top) > 0.05)
         {
             Top = top;
-            return;
         }
-
-        if (!animate || !IsVisible)
-        {
-            Top = top;
-            return;
-        }
-
-        var animation = new DoubleAnimation(Top, top, TimeSpan.FromMilliseconds(180))
-        {
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-            FillBehavior = FillBehavior.Stop,
-        };
-
-        animation.Completed += (_, _) =>
-        {
-            Top = top;
-            BeginAnimation(TopProperty, null);
-        };
-
-        BeginAnimation(TopProperty, animation);
     }
 
     /// <summary>关闭卡片（默认 180ms 淡出）。</summary>
@@ -291,7 +293,7 @@ public partial class NotificationWindow : Window
         };
         Card.BeginAnimation(OpacityProperty, fade);
 
-        var slide = new DoubleAnimation(24, 0, TimeSpan.FromMilliseconds(180))
+        var slide = new DoubleAnimation(_entryOffset, 0, TimeSpan.FromMilliseconds(180))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
         };

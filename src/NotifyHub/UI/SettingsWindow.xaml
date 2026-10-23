@@ -324,7 +324,7 @@
                                             IsSnapToTickEnabled="True" TickFrequency="1" />
                                     <TextBlock x:Name="LyricsFontSizeText" Width="48" Margin="8,0,0,0"
                                                Foreground="#8A8F98" Text="13" />
-                                    <TextBlock Style="{StaticResource HintText}" Text="保存后在灵动岛立即生效" />
+                                    <TextBlock Style="{StaticResource HintText}" Text="关掉后即使保持展开也不显示歌词（与上面的保持展开互相独立）" />
                                 </StackPanel>
 
                                 <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"

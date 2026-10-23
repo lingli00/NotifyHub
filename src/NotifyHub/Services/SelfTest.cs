@@ -761,7 +761,132 @@ public static class SelfTest
             return advanceOk && smoothOk && seekOk && pauseOk && resumeOk;
         });
 
-        Check("v0.2.7 需求1/2：灵动岛两栏配平 + 歌词字号（离屏布局）", () =>
+        Check("v0.2.8 需求1：四角通知坐标（本体几何 / 步进 / 堆叠方向 / 任务栏）", () =>
+        {
+            // 用两种工作区各算一遍：100% 缩放（1920×1040）与「曾经被缓存成 150%」的
+            // 1280×693 —— 后者正是历史 bug 的场景（右下角算到屏幕中间偏右）。
+            var cases = new[]
+            {
+                new Rect(0, 0, 1920, 1040),
+                new Rect(0, 0, 1280, 693),
+            };
+
+            foreach (var work in cases)
+            {
+                foreach (var corner in new[]
+                         {
+                             NotifyCorner.TopLeft, NotifyCorner.TopRight,
+                             NotifyCorner.BottomLeft, NotifyCorner.BottomRight,
+                         })
+                {
+                    var rects = NotificationLayout.CardRects(work, corner, 3);
+                    if (rects.Count != 3)
+                    {
+                        return false;
+                    }
+
+                    var leftAligned = NotificationLayout.IsLeftAligned(corner);
+                    var stacksUp = NotificationLayout.StacksUpward(corner);
+
+                    // ① 水平锚点：左右各留 VisualMargin，卡片本体宽 356
+                    var expectLeft = leftAligned
+                        ? work.Left + NotificationLayout.VisualMargin
+                        : work.Right - NotificationLayout.VisualMargin - NotificationLayout.CardBodyWidth;
+                    if (Math.Abs(rects[0].Left - expectLeft) > 0.6)
+                    {
+                        return false;
+                    }
+
+                    // ② 垂直锚点：上角贴顶、下角贴底（卡片本体，不含阴影）
+                    var expectTop = stacksUp
+                        ? work.Bottom - NotificationLayout.VisualMargin - NotificationLayout.CardBodyHeight
+                        : work.Top + NotificationLayout.VisualMargin;
+                    if (Math.Abs(rects[0].Top - expectTop) > 0.6)
+                    {
+                        return false;
+                    }
+
+                    // ③ 底部角最下面那张必须完整落在任务栏之上（旧版会压下去 16px）
+                    if (stacksUp && rects[0].Bottom > work.Bottom - NotificationLayout.VisualMargin + 0.6)
+                    {
+                        return false;
+                    }
+
+                    // ④ 步进恒定 = 本体高 + 间距，既不重叠也不留大缝
+                    for (var i = 1; i < rects.Count; i++)
+                    {
+                        var step = Math.Abs(rects[i].Top - rects[i - 1].Top);
+                        if (Math.Abs(step - NotificationLayout.StackStep) > 0.6)
+                        {
+                            return false;
+                        }
+                    }
+
+                    // ⑤ 堆叠方向：index 0 = 最新，上角在最上、下角在最下
+                    var newer = rects[0];
+                    var older = rects[1];
+                    if (stacksUp ? newer.Top <= older.Top : newer.Top >= older.Top)
+                    {
+                        return false;
+                    }
+
+                    // ⑥ 本体尺寸与窗口几何自洽
+                    if (Math.Abs(rects[0].Width - NotificationLayout.CardBodyWidth) > 0.01
+                        || Math.Abs(rects[0].Height - NotificationLayout.CardBodyHeight) > 0.01
+                        || Math.Abs(NotificationLayout.WindowWidth
+                                    - (NotificationLayout.CardBodyWidth + (NotificationLayout.ShadowPad * 2))) > 0.01)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            // ⑦ 极端矮屏：MaxFit 至少给 1 张，且不超过堆叠上限
+            var tiny = new Rect(0, 0, 1280, 130);
+            return NotificationLayout.MaxFit(tiny) >= 1
+                   && NotificationLayout.MaxFit(new Rect(0, 0, 1920, 1040)) >= AppConfig.MaxStackLimit - 1;
+        });
+
+        Check("v0.2.8 需求2：歌词自带翻译的合并（时点匹配 / 去重 / 缺行丢弃）", () =>
+        {
+            var lrc = "[00:01.00]Runaway\n[00:05.00]I keep the light on\n[00:09.00]For you";
+            var tlyric = "[00:01.00]逃离\n[00:05.00]我一直留着那盏灯\n";
+
+            var lines = LyricsService.ParseLrc(lrc);
+            var merged = LyricsService.MergeTranslation(lines, tlyric);
+
+            if (merged.Count != 3
+                || merged[0].Translation != "逃离"
+                || merged[1].Translation != "我一直留着那盏灯")
+            {
+                return false;
+            }
+
+            // 第 3 行没有译文 → 必须留空（绝不能把上一句的翻译串到下一句）
+            if (merged[2].HasTranslation)
+            {
+                return false;
+            }
+
+            // 译文与原文相同（中文歌 / 接口把原文当译文）→ 视为没有译文
+            var chinese = LyricsService.ParseLrc("[00:02.00]简单爱");
+            var sameAsText = LyricsService.MergeTranslation(chinese, "[00:02.00]简单爱");
+            if (sameAsText[0].HasTranslation)
+            {
+                return false;
+            }
+
+            // 没有译文资源 / 时点差太大 → 不硬塞
+            if (LyricsService.MergeTranslation(lines, null).Count != 3
+                || LyricsService.MergeTranslation(lines, "[00:30.00]完全对不上")[0].HasTranslation)
+            {
+                return false;
+            }
+
+            return true;
+        });
+
+        Check("v0.2.8 需求2/5：岛自适应宽度 + 固定模式真居中（离屏布局）", () =>
         {
             try
             {
@@ -785,128 +910,202 @@ public static class SelfTest
 
         static bool RunIslandLayoutTest()
         {
-            // 有音乐 + 歌词 + 任务（最拥挤的状态）：
-            //   ① 左栏与右栏宽度接近（不再左挤右空）
-            //   ② 整条宽度落在合理区间（不再被 440px 任务文字撑到 810）
-            //   ③ 歌词正文左边界与歌名左边界对齐
-            //   ④ 歌词字号 = 配置值 + 1.5
-            //   ⑤ 两侧都有内容时分隔线出现
-            var island = new IslandWindow
-            {
-                ModeProvider = () => "Fixed",
-                MusicEnabledProvider = () => true,
-                MarqueeSpeedProvider = () => 45,
-                LyricsEnabledProvider = () => true,
-                LyricsFontSizeProvider = () => 13,
-                AutoCollapseEnabledProvider = () => false,
-                SavedPositionProvider = () => null,
-            };
+            var report = new StringBuilder();
 
-            try
-            {
-                island.ApplyTheme(ThemePalette.Create(new AppConfig()));
-                island.ApplyLyricsTypography();   // provider 注入后才能读到字号
-                island.SetMedia(new MediaInfo("侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 30, 200));
-                island.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
-                island.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务", "WorkBuddy");
-
-                island.Measure(new Size(900, 300));
-                island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
-                island.RefreshLayoutMetrics();
-                island.Measure(new Size(900, 300));
-                island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
-
-                var left = island.LeftPaneWidth;
-                var right = island.RightPaneWidth;
-                var total = island.DesiredSize.Width;
-
-                var lyric = island.FindName("LyricLine1") as MarqueeText;
-                var title = island.FindName("MusicText") as MarqueeText;
-                var divider = island.FindName("Divider") as System.Windows.Controls.Border;
-                if (lyric is null || title is null || divider is null)
-                {
-                    return false;
-                }
-
-                var balanced = left > 260
-                               && right > 240
-                               && Math.Abs(left - right) <= Math.Max(left, right) * 0.18;
-
-                var fits = total > 520 && total <= 780;
-
-                var lyricLeft = lyric.TranslatePoint(new Point(0, 0), island).X;
-                var titleLeft = title.TranslatePoint(new Point(0, 0), island).X;
-                var aligned = Math.Abs(lyricLeft - titleLeft) <= 2.5;
-
-                var fontOk = Math.Abs(lyric.FontSize - 14.5) < 0.01;
-
-                var dividerOk = divider.Visibility == Visibility.Visible;
-
-                var diag = $"左栏={left:F1} 右栏={right:F1} 整条={total:F1} " +
-                           $"歌词左={lyricLeft:F1} 歌名左={titleLeft:F1} 歌词字号={lyric.FontSize:F1} " +
-                           $"分隔线={divider.Visibility} 歌词宽={lyric.ActualWidth:F1}";
-                try
-                {
-                    File.WriteAllText(Path.Combine(AppPaths.Root, "island-layout.txt"), diag, Encoding.UTF8);
-                }
-                catch
-                {
-                    // 诊断文件写不进去不影响判定
-                }
-
-                // 只有音乐（无任务）：右侧栏收起，整条自然变窄
-                var island2 = new IslandWindow
+            IslandWindow MakeIsland(int lyricSize = 13)
+                => new()
                 {
                     ModeProvider = () => "Fixed",
                     MusicEnabledProvider = () => true,
                     MarqueeSpeedProvider = () => 45,
                     LyricsEnabledProvider = () => true,
-                    LyricsFontSizeProvider = () => 16,
+                    LyricsFontSizeProvider = () => lyricSize,
                     AutoCollapseEnabledProvider = () => false,
                     SavedPositionProvider = () => null,
                 };
 
+            static double Layout(IslandWindow island)
+            {
+                island.Measure(new Size(900, 300));
+                island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
+                island.RefreshLayoutMetrics();
+                island.Measure(new Size(900, 300));
+                island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
+                return island.DesiredSize.Width;
+            }
+
+            var withTask = MakeIsland();
+            var solo = MakeIsland();
+            var soloLong = MakeIsland();
+            var taskOnly = MakeIsland();
+            var translated = MakeIsland();
+
+            try
+            {
+                // ---------- ① 音乐 + 歌词 + 任务：两栏配平、分隔线出现 ----------
+                withTask.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                withTask.ApplyLyricsTypography();
+                withTask.SetMedia(new MediaInfo("侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 30, 200));
+                withTask.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+                withTask.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务", "WorkBuddy");
+                var totalBoth = Layout(withTask);
+
+                var left = withTask.LeftPaneWidth;
+                var right = withTask.RightPaneWidth;
+                var lyric = withTask.FindName("LyricLine1") as MarqueeText;
+                var title = withTask.FindName("MusicText") as MarqueeText;
+                var divider = withTask.FindName("Divider") as System.Windows.Controls.Border;
+                if (lyric is null || title is null || divider is null)
+                {
+                    return false;
+                }
+
+                var balanced = left > 240 && right > 200 && Math.Abs(left - right) <= Math.Max(left, right) * 0.30;
+                var dividerOk = divider.Visibility == Visibility.Visible;
+
+                // 歌词与歌名同一左边界（同一内容列，误差 ≤2px）
+                var lyricLeft = lyric.TranslatePoint(new Point(0, 0), withTask).X;
+                var titleLeft = title.TranslatePoint(new Point(0, 0), withTask).X;
+                var aligned = Math.Abs(lyricLeft - titleLeft) <= 2.0;
+
+                // 字号 = 配置值 + 1
+                var fontOk = Math.Abs(lyric.FontSize - 14) < 0.01;
+
+                report.Append($"有任务: 整条={totalBoth:F1} 左={left:F1} 右={right:F1} " +
+                              $"歌词左={lyricLeft:F1} 歌名左={titleLeft:F1} 字号={lyric.FontSize:F1} " +
+                              $"分隔线={divider.Visibility} 歌词宽={lyric.ActualWidth:F1}");
+
+                // ---------- ② 无任务时左栏不预留空位、整条更窄 ----------
+                solo.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                solo.ApplyLyricsTypography();
+                solo.SetMedia(new MediaInfo("侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 30, 200));
+                solo.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
+                var totalSolo = Layout(solo);
+                var statusHidden = (solo.FindName("StatusGroup") as System.Windows.Controls.StackPanel)?.Visibility
+                                   == Visibility.Collapsed;
+
+                report.Append($"{Environment.NewLine}仅音乐: 整条={totalSolo:F1} 任务组隐藏={statusHidden}");
+
+                // ---------- ③ 长歌词可以把岛拉长（不被 270 卡死），但有上限 ----------
+                soloLong.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                soloLong.ApplyLyricsTypography();
+                soloLong.SetMedia(new MediaInfo("侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 30, 200));
+                soloLong.ShowLyrics(
+                    "我曾经跨过山和大海也穿过人山人海我曾经拥有着的一切转眼都飘散如烟",
+                    "我曾经失落失望失掉所有方向直到看见平凡才是唯一的答案");
+                var totalLong = Layout(soloLong);
+                var lyricLong = soloLong.FindName("LyricLine1") as MarqueeText;
+                var longWidened = totalLong > totalSolo + 60;
+                var longCapped = totalLong <= 900;
+
+                report.Append($"{Environment.NewLine}长歌词: 整条={totalLong:F1} 歌词宽={lyricLong?.ActualWidth:F1} " +
+                              $"加宽={longWidened} 未超上限={longCapped}");
+
+                // ---------- ④ 只有任务：左栏收起，任务区独占（不预留歌词空位） ----------
+                taskOnly.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                taskOnly.ApplyLyricsTypography();
+                taskOnly.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务", "WorkBuddy");
+                var totalTaskOnly = Layout(taskOnly);
+                var leftCollapsed = (taskOnly.FindName("LeftPane") as System.Windows.Controls.Grid)?.Visibility
+                                    == Visibility.Collapsed;
+                var taskOnlyOk = leftCollapsed && totalTaskOnly < totalBoth - 80;
+
+                report.Append($"{Environment.NewLine}仅任务: 整条={totalTaskOnly:F1} 左栏收起={leftCollapsed}");
+
+                // ---------- ⑤ 译文行：有译文才占位，且字比当前行小 ----------
+                translated.ApplyTheme(ThemePalette.Create(new AppConfig()));
+                translated.ApplyLyricsTypography();
+                translated.SetMedia(new MediaInfo("Runaway", "AURORA", "FOLIA", true, "", "Folia", 30, 200));
+                translated.ShowLyrics("I keep the light on", "For you", "我一直留着那盏灯");
+                Layout(translated);
+
+                var trans = translated.FindName("LyricTrans") as MarqueeText;
+                var transShown = translated.IsTranslationShown
+                                 && trans is not null
+                                 && trans.FontSize < (translated.FindName("LyricLine1") as MarqueeText)!.FontSize;
+
+                translated.ShowLyrics("I keep the light on", "For you", null);
+                Layout(translated);
+                var transHidden = !translated.IsTranslationShown;
+
+                report.Append($"{Environment.NewLine}译文行: 有译文显示={transShown} 无译文隐藏={transHidden}");
+
+                // ---------- ⑥ 固定模式真居中：左右留白相等 ----------
+                var work = new Rect(0, 0, 1920, 1040);
+                var centeredOk = true;
+                foreach (var width in new[] { 320d, 659d, 880d })
+                {
+                    var x = IslandWindow.CenteredLeft(work, width);
+                    var leftGap = x - work.Left;
+                    var rightGap = work.Right - (x + width);
+                    if (Math.Abs(leftGap - rightGap) > 1.0)
+                    {
+                        centeredOk = false;
+                    }
+                }
+
+                report.Append($"{Environment.NewLine}居中: 左右留白相等={centeredOk}");
+
                 try
                 {
-                    island2.ApplyTheme(ThemePalette.Create(new AppConfig()));
-                    island2.ApplyLyricsTypography();
-                    island2.SetMedia(new MediaInfo("侧脸", "魏语诺", "FOLIA", true, "", "Folia", 30, 200));
-                    island2.ShowLyrics("关于你的一切 我都想要了解", "陪伴三个季节 还是承受决裂");
-                    island2.Measure(new Size(900, 300));
-                    island2.Arrange(new Rect(0, 0, island2.DesiredSize.Width, island2.DesiredSize.Height));
-                    island2.RefreshLayoutMetrics();
-                    island2.Measure(new Size(900, 300));
-                    island2.Arrange(new Rect(0, 0, island2.DesiredSize.Width, island2.DesiredSize.Height));
-
-                    var narrower = island2.DesiredSize.Width < total - 150;
-                    var font2 = island2.FindName("LyricLine1") as MarqueeText;
-                    var fontAdapt = font2 is not null && Math.Abs(font2.FontSize - 17.5) < 0.01;
-
-                    try
-                    {
-                        File.AppendAllText(
-                            Path.Combine(AppPaths.Root, "island-layout.txt"),
-                            $"{Environment.NewLine}仅音乐: 整条={island2.DesiredSize.Width:F1} " +
-                            $"字号={(font2?.FontSize ?? -1):F1} narrower={narrower} fontAdapt={fontAdapt}",
-                            Encoding.UTF8);
-                    }
-                    catch
-                    {
-                        // 忽略
-                    }
-
-                    return balanced && fits && aligned && fontOk && dividerOk && narrower && fontAdapt;
+                    File.WriteAllText(
+                        Path.Combine(AppPaths.Root, "island-layout.txt"), report.ToString(), Encoding.UTF8);
                 }
-                finally
+                catch
                 {
-                    island2.Close();
+                    // 忽略
                 }
+
+                return balanced && dividerOk && aligned && fontOk && statusHidden
+                       && longWidened && longCapped && taskOnlyOk && transShown && transHidden && centeredOk;
             }
             finally
             {
-                island.Close();
+                withTask.Close();
+                solo.Close();
+                soloLong.Close();
+                taskOnly.Close();
+                translated.Close();
             }
         }
+
+        Check("v0.2.8 需求4：收纳细条跑道指示器（撑满轨道 / 四形态可切 / 新几何）", () =>
+        {
+            return RunSta(() =>
+            {
+                // 直接量“裸 FrameworkElement 放进 Border”能否撑开 —— 这正是 v0.2.8 实拍
+                // 发现指示器完全不可见的根因（默认 MeasureOverride 返回 0×0，
+                // OnRender 里的 h<=2 早退，整条只剩灰底）。
+                var indicator = new StripIndicator { Mode = StripMode.Both };
+                var host = new System.Windows.Controls.Border
+                {
+                    Width = 112,
+                    Height = 10,
+                    Background = System.Windows.Media.Brushes.Transparent,
+                    Child = indicator,
+                };
+
+                host.Measure(new Size(112, 10));
+                host.Arrange(new Rect(0, 0, 112, 10));
+
+                var sized = indicator.ActualWidth > 105 && indicator.ActualHeight > 7;
+
+                var switched = true;
+                foreach (var mode in new[] { StripMode.Music, StripMode.Task, StripMode.Both })
+                {
+                    indicator.Mode = mode;
+                    switched &= indicator.Mode == mode;
+                }
+
+                indicator.IsDone = true;
+                var doneOk = indicator.IsDone;
+
+                // 细条几何（v0.2.8 放大到 12×124）与"三种状态 + 完成态"的形态枚举齐全
+                var geometry = SnapStripWindow.UsesNewGeometry;
+
+                return sized && switched && doneOk && geometry;
+            });
+        });
 
         Check("v0.2.7 需求2：收纳配置默认 3 秒 / 区间收敛 / 音乐例外默认开", () =>
         {

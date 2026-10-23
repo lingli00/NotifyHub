@@ -11,10 +11,18 @@
 
 import ctypes
 import ctypes.wintypes as w
+import os
+import subprocess
 import sys
 import time
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+# 物理像素读数：否则 150% 缩放下 GetWindowRect 返回的是 DPI 虚拟化坐标，居中判断会错
+try:
+    user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+except Exception:
+    pass
 
 TITLE = "NotifyHub 灵动岛"
 
@@ -61,6 +69,20 @@ def rect_of(hwnd):
     r = RECT()
     user32.GetWindowRect(hwnd, ctypes.byref(r))
     return r
+
+
+class MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint32), ("rcMonitor", RECT),
+                ("rcWork", RECT), ("dwFlags", ctypes.c_uint32)]
+
+
+def work_area():
+    """主屏工作区（物理像素，已扣掉任务栏）。"""
+    mi = MONITORINFO()
+    mi.cbSize = ctypes.sizeof(MONITORINFO)
+    hmon = user32.MonitorFromPoint(w.POINT(0, 0), 1)  # MONITOR_DEFAULTTOPRIMARY
+    user32.GetMonitorInfoW(hmon, ctypes.byref(mi))
+    return mi.rcWork
 
 
 def info():
@@ -124,6 +146,60 @@ def drag(dx, dy, right=False, hold_ms=90):
     return 0 if (abs(moved[0]) > 4 or abs(moved[1]) > 4) else 2
 
 
+def center(text):
+    """拉起一次 --island，量真实窗口矩形相对工作区的左右留白，判断是否真居中。"""
+    exe = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "src", "NotifyHub", "bin", "Release",
+                       "net8.0-windows10.0.19041.0", "win-x64", "NotifyHub.exe")
+    if not os.path.exists(exe):
+        print("EXE NOT FOUND:", exe)
+        return 1
+
+    proc = subprocess.Popen([exe, "--island", text], cwd=os.path.dirname(exe),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # 框架依赖版首次启动要 1.5~3s（hostfxr + WPF 初始化），轮询等窗口出现
+    hwnd = None
+    for _ in range(30):
+        time.sleep(0.25)
+        hwnd = find_island()
+        if hwnd is not None:
+            break
+
+    if hwnd is None:
+        proc.terminate()
+        print("ISLAND NOT FOUND")
+        return 1
+
+    r = rect_of(hwnd)
+    for _ in range(8):  # 等位移动画落定：连续两次采样一致
+        time.sleep(0.2)
+        again = rect_of(find_island() or hwnd)
+        if (again.left, again.top, again.right, again.bottom) == (r.left, r.top, r.right, r.bottom):
+            break
+        r = again
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        proc.kill()
+    time.sleep(0.4)
+
+    work = work_area()
+    left_gap = r.left - work.left
+    right_gap = work.right - r.right
+    width = r.right - r.left
+    drift = abs(left_gap - right_gap)
+
+    print(f"text='{text}' width={width}")
+    print(f"rect=({r.left},{r.top})-({r.right},{r.bottom})")
+    print(f"work=({work.left},{work.top})-({work.right},{work.bottom})")
+    print(f"上距={r.top - work.top} 左留白={left_gap} 右留白={right_gap} 居中偏差={drift}")
+    print("CENTER " + ("OK" if drift <= 2 else "FAIL"))
+    return 0 if drift <= 2 else 2
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -133,6 +209,11 @@ def main():
 
     if cmd == "info":
         return info()
+
+    if cmd == "center":
+        # center [text]：自己拉起 --island，量真实矩形并判断是否真居中（需求 5）
+        text = sys.argv[2] if len(sys.argv) > 2 else "正在梳理需求文档结构并拆分任务"
+        return center(text)
 
     if cmd in ("drag", "rdrag"):
         dx = int(sys.argv[2]) if len(sys.argv) > 2 else 0

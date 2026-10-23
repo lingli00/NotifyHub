@@ -4,8 +4,15 @@ using System.Text.RegularExpressions;
 
 namespace NotifyHub.Services;
 
-/// <summary>一行歌词（时间点 + 文本）。</summary>
-public sealed record LyricLine(TimeSpan Time, string Text);
+/// <summary>
+/// 一行歌词（时间点 + 原文 + 可选译文）。
+/// 译文来自歌词资源自带的翻译（网易云接口的 tlyric 字段），不是机翻。
+/// </summary>
+public sealed record LyricLine(TimeSpan Time, string Text, string Translation = "")
+{
+    /// <summary>这一行是否带可用译文（与原文相同视为没有）。</summary>
+    public bool HasTranslation => Translation.Length > 0;
+}
 
 /// <summary>
 /// 歌词服务（v0.2.6 需求 5）：按「歌名 + 歌手」在线取 LRC 并解析成带时间轴的行。
@@ -74,11 +81,12 @@ public sealed partial class LyricsService
             var songId = await SearchSongIdAsync(title, artist, timeout.Token).ConfigureAwait(false);
             if (songId is not null)
             {
-                var lrc = await FetchLyricAsync(songId.Value, timeout.Token).ConfigureAwait(false);
+                var (lrc, translated) = await FetchLyricAsync(songId.Value, timeout.Token).ConfigureAwait(false);
                 var lines = ParseLrc(lrc);
                 if (lines.Count > 0)
                 {
-                    result = lines;
+                    // v0.2.8 需求 2：歌词资源自带翻译时自动附带（外文歌才有，中文歌接口返回空）
+                    result = MergeTranslation(lines, translated);
                 }
             }
         }
@@ -108,7 +116,9 @@ public sealed partial class LyricsService
         }
         else
         {
-            _log.Write(LogLevel.Debug, "Lyrics", $"歌词已就绪: {title}（{result.Count} 行）");
+            var translatedCount = result.Count(l => l.HasTranslation);
+            var suffix = translatedCount > 0 ? $"，含译文 {translatedCount} 行" : string.Empty;
+            _log.Write(LogLevel.Debug, "Lyrics", $"歌词已就绪: {title}（{result.Count} 行{suffix}）");
         }
 
         return result;
@@ -170,7 +180,8 @@ public sealed partial class LyricsService
         return bestScore >= 0.6 ? bestId : null;
     }
 
-    private static async Task<string?> FetchLyricAsync(long songId, CancellationToken token)
+    /// <summary>取原文与译文（tv=-1 = 要求返回翻译歌词，没有翻译时 tlyric.lyric 为空串）。</summary>
+    private static async Task<(string? Lrc, string? Translation)> FetchLyricAsync(long songId, CancellationToken token)
     {
         var url = $"{LyricApi}?id={songId}&lv=-1&kv=-1&tv=-1";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -179,19 +190,27 @@ public sealed partial class LyricsService
         using var response = await Http.SendAsync(request, token).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
-            return null;
+            return (null, null);
         }
 
         var json = await response.Content.ReadAsStringAsync(token).ConfigureAwait(false);
         using var document = JsonDocument.Parse(json);
 
-        if (document.RootElement.TryGetProperty("lrc", out var lrc)
-            && lrc.TryGetProperty("lyric", out var lyric))
+        string? lrc = null;
+        if (document.RootElement.TryGetProperty("lrc", out var lrcNode)
+            && lrcNode.TryGetProperty("lyric", out var lyric))
         {
-            return lyric.GetString();
+            lrc = lyric.GetString();
         }
 
-        return null;
+        string? translation = null;
+        if (document.RootElement.TryGetProperty("tlyric", out var transNode)
+            && transNode.TryGetProperty("lyric", out var transLyric))
+        {
+            translation = transLyric.GetString();
+        }
+
+        return (lrc, translation);
     }
 
     private static HttpClient CreateClient()
@@ -267,6 +286,79 @@ public sealed partial class LyricsService
 
         lines.Sort((a, b) => a.Time.CompareTo(b.Time));
         return lines;
+    }
+
+    /// <summary>
+    /// 把译文按时间点合并进主歌词（v0.2.8 需求 2）。
+    ///
+    /// 规则：
+    ///   * 译文按时间点匹配（LRC 的 tlyric 与 lrc 时间轴通常完全一致，留 400ms 容差兜住个别偏移）；
+    ///   * 译文与原文相同（中文歌 / 接口把原文当译文返回）→ 视为没有译文，避免同一句显示两遍；
+    ///   * 匹配不到的译文直接丢弃，绝不把上一句的翻译塞给下一句。
+    /// </summary>
+    public static IReadOnlyList<LyricLine> MergeTranslation(
+        IReadOnlyList<LyricLine> lines, string? translatedLrc)
+    {
+        if (lines.Count == 0 || string.IsNullOrWhiteSpace(translatedLrc))
+        {
+            return lines;
+        }
+
+        var translations = ParseLrc(translatedLrc);
+        if (translations.Count == 0)
+        {
+            return lines;
+        }
+
+        var result = new List<LyricLine>(lines.Count);
+        var cursor = 0;
+
+        foreach (var line in lines)
+        {
+            var match = string.Empty;
+
+            // 时间轴基本同序，用游标线性推进，避免每行二分查找
+            while (cursor + 1 < translations.Count
+                   && Math.Abs((translations[cursor + 1].Time - line.Time).TotalMilliseconds)
+                      <= Math.Abs((translations[cursor].Time - line.Time).TotalMilliseconds))
+            {
+                cursor++;
+            }
+
+            if (cursor < translations.Count
+                && Math.Abs((translations[cursor].Time - line.Time).TotalMilliseconds) <= 400)
+            {
+                var candidate = translations[cursor].Text.Trim();
+                if (candidate.Length > 0 && !LooksSame(candidate, line.Text))
+                {
+                    match = candidate;
+                }
+            }
+
+            result.Add(line with { Translation = match });
+        }
+
+        return result;
+    }
+
+    /// <summary>两段文本是否实质相同（忽略空白、标点与大小写）。</summary>
+    private static bool LooksSame(string a, string b)
+    {
+        static string Squash(string value)
+        {
+            var builder = new System.Text.StringBuilder(value.Length);
+            foreach (var ch in value)
+            {
+                if (char.IsLetterOrDigit(ch))
+                {
+                    builder.Append(char.ToLowerInvariant(ch));
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        return string.Equals(Squash(a), Squash(b), StringComparison.Ordinal);
     }
 
     /// <summary>

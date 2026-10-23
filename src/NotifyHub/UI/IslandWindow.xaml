@@ -57,21 +57,21 @@
     </Window.Resources>
 
     <!--
-      v0.2.7 布局重排（需求 1）：两栏「等信息量」结构，左右视觉配平。
+      v0.2.8 播放器 + 歌词区域重做（需求 2/5）。
 
-        左栏（音乐 + 歌词）
-          第 0 行： [App图标/♪] 歌名-歌手 ········ [⏮][⏯][⏭]
-          第 1 行： 当前歌词（字号 +1.5，满亮度，半粗）
-                    下一行歌词（字号 -1.5，55% 亮度）
-        中间   ： 1px 竖分隔线（仅两侧都有内容时出现）
-        右栏（WorkBuddy 任务，跨两行垂直居中）
-          第 0 行： ● WorkBuddy   ← 小号标签，弱化
-          第 1 行： 正在执行的动作  ← 正文（跑马灯，超宽横滚）
+      旧版别扭的地方：
+        · 音乐行固定 46 高，歌名被顶在上面，和下面的歌词之间空一大块；
+        · 歌词左侧一根 2px 竖条 + 23px 空白，文字起点和歌名对不上，看起来像"缩进错了"；
+        · 歌词两行都是固定 270 宽，歌词短的时候右侧留一大片黑，
+          岛还是按这个固定宽居中 → 视觉上明显靠左；
+        · 三行内容（当前/下一句）层次只靠字号，读起来分不清主次。
 
-      为什么这样改：v0.2.6 右侧是一条 440px 的宽文字 + 左侧 286px 歌词，
-      有任务时整条岛被撑到 810px 且左右比例失衡（左挤右空）。现在两侧都按
-      「标签 + 正文」双行组织，宽度在代码里按内容配平（LeftWidth ≈ RightWidth），
-      有任务时岛宽稳定在 660 左右，无任务时左侧自然收窄。
+      现在的结构：一条贯穿的强调脊线 + 一个统一缩进的内容列
+        ┃ [图标] 歌名 - 歌手 ............  ⏮ ⏯ ⏭
+        ┃ 当前歌词（加粗、满亮度）
+        ┃ 译文（可选，小一号、次亮）      ← 只有歌词源自带翻译时才出现
+        ┃ 下一句（小一号、更暗）
+      所有文字共用同一个左边界（脊线右侧 10px），宽度按文本实测自适应（见 BalanceWidths）。
     -->
     <Border x:Name="Pill" Margin="14" CornerRadius="22" BorderBrush="#26FFFFFF" BorderThickness="1">
         <Border.Background>
@@ -86,7 +86,7 @@
         </Border.RenderTransform>
 
         <Grid>
-            <!--  毛玻璃顶部高光：一条极淡的白色渐变，让半透明面板有“玻璃”的层次  -->
+            <!--  毛玻璃顶部高光：一条极淡的白色渐变，让半透明面板有"玻璃"的层次  -->
             <Border x:Name="HighlightLayer" CornerRadius="22" IsHitTestVisible="False">
                 <Border.Background>
                     <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
@@ -96,87 +96,93 @@
                 </Border.Background>
             </Border>
 
-            <Grid Margin="12,0,12,0" MinHeight="46">
+            <!--  上下 10 / 8 的内边距：内容不再贴边，视觉更松   -->
+            <Grid Margin="12,9,12,9" MinHeight="36">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <!--  单行 + 星号高度：只显示右侧任务时（左侧全收起）也能撑住垂直居中  -->
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
 
-                <!--  ============ 左栏：音乐行 + 双行歌词（垂直堆叠）  ============  -->
-                <StackPanel x:Name="LeftPane" Grid.Column="0" Orientation="Vertical"
-                            VerticalAlignment="Center">
-                    <!--  第 0 行：音乐组  -->
-                    <Grid x:Name="MusicGroup" Height="46" Margin="2,0,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                <!--  ============ 左栏：强调脊线 + 音乐行 + 歌词  ============  -->
+                <Grid x:Name="LeftPane" Grid.Column="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
 
-                        <!--  标题：App 图标 / ♪ + 歌名-歌手（跑马灯）  -->
-                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Border x:Name="MusicIconBox" Width="18" Height="18" CornerRadius="5"
-                                    VerticalAlignment="Center" Margin="0,0,7,0" Visibility="Collapsed">
-                                <Image x:Name="MusicAppIcon" Width="18" Height="18" Stretch="Uniform" />
-                            </Border>
-                            <TextBlock x:Name="MusicGlyph" Text="&#x266A;" FontSize="14"
-                                       Foreground="{DynamicResource IslandAccent}"
-                                       VerticalAlignment="Center" Margin="2,0,7,0" />
-                            <local:MarqueeText x:Name="MusicText" Width="152" FontSize="12.5"
-                                               Foreground="{DynamicResource IslandFg}"
-                                               VerticalAlignment="Center" Text="正在播放" />
-                        </StackPanel>
+                    <!--  贯穿脊线：播放中为强调色；只有任务时整条左栏隐藏  -->
+                    <Border x:Name="AccentSpine" Grid.Column="0" Width="3" CornerRadius="1.5"
+                            Background="{DynamicResource IslandAccent}" Opacity="0.8"
+                            VerticalAlignment="Stretch" Margin="0,2,0,2" />
 
-                        <!--  播放三键：上一首 / 播放暂停 / 下一首  -->
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="8,0,0,0"
-                                    VerticalAlignment="Center">
-                            <Button x:Name="PrevButton" Style="{StaticResource IslandButton}"
-                                    Click="OnPrevClick" ToolTip="上一首">
-                                <Path Data="{StaticResource GlyphPrev}" Fill="{DynamicResource IslandGlyph}"
-                                      Width="11" Height="11" Stretch="Uniform"
-                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Button>
-                            <Button x:Name="PlayPauseButton" Style="{StaticResource IslandButton}"
-                                    Margin="2,0" Click="OnPlayPauseClick" ToolTip="播放 / 暂停">
-                                <Path x:Name="PlayPauseGlyph" Data="{StaticResource GlyphPlay}"
-                                      Fill="{DynamicResource IslandGlyph}"
-                                      Width="11" Height="11" Stretch="Uniform"
-                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Button>
-                            <Button x:Name="NextButton" Style="{StaticResource IslandButton}"
-                                    Click="OnNextClick" ToolTip="下一首">
-                                <Path Data="{StaticResource GlyphNext}" Fill="{DynamicResource IslandGlyph}"
-                                      Width="11" Height="11" Stretch="Uniform"
-                                      HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Button>
-                        </StackPanel>
-                    </Grid>
+                    <StackPanel Grid.Column="1" Orientation="Vertical" Margin="10,0,0,0"
+                                VerticalAlignment="Center">
 
-                    <!--  第 1 行：双行歌词（强调竖条 + 当前行/下一行）  -->
-                    <Grid x:Name="LyricsPanel" Margin="2,0,0,9" Visibility="Collapsed">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
+                        <!--  第 0 行：音频行（图标 + 歌名 + 三键），高度按内容自适应  -->
+                        <Grid x:Name="MusicGroup" MinHeight="30">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
 
-                        <Border x:Name="LyricBar" Grid.Column="0" Width="2" CornerRadius="1"
-                                Background="{DynamicResource IslandAccent}" Opacity="0.5"
-                                Margin="0,3,23,3" />
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Border x:Name="MusicIconBox" Width="17" Height="17" CornerRadius="5"
+                                        VerticalAlignment="Center" Margin="0,0,7,0" Visibility="Collapsed">
+                                    <Image x:Name="MusicAppIcon" Width="17" Height="17" Stretch="Uniform" />
+                                </Border>
+                                <TextBlock x:Name="MusicGlyph" Text="&#x266A;" FontSize="13"
+                                           Foreground="{DynamicResource IslandAccent}"
+                                           VerticalAlignment="Center" Margin="1,0,6,0" />
+                                <local:MarqueeText x:Name="MusicText" Width="152" FontSize="12.5"
+                                                   Foreground="{DynamicResource IslandSubFg}"
+                                                   VerticalAlignment="Center" Text="正在播放" />
+                            </StackPanel>
 
-                        <StackPanel Grid.Column="1" Orientation="Vertical">
-                            <local:MarqueeText x:Name="LyricLine1" Width="270" FontSize="13"
+                            <!--  播放三键：32×32，比旧版 36 收紧，行内更紧凑  -->
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="7,0,0,0"
+                                        VerticalAlignment="Center">
+                                <Button x:Name="PrevButton" Style="{StaticResource IslandButton}"
+                                        Width="32" Height="32" Click="OnPrevClick" ToolTip="上一首">
+                                    <Path Data="{StaticResource GlyphPrev}" Fill="{DynamicResource IslandGlyph}"
+                                          Width="10" Height="10" Stretch="Uniform"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Button>
+                                <Button x:Name="PlayPauseButton" Style="{StaticResource IslandButton}"
+                                        Width="32" Height="32" Margin="1,0" Click="OnPlayPauseClick"
+                                        ToolTip="播放 / 暂停">
+                                    <Path x:Name="PlayPauseGlyph" Data="{StaticResource GlyphPlay}"
+                                          Fill="{DynamicResource IslandGlyph}"
+                                          Width="10" Height="10" Stretch="Uniform"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Button>
+                                <Button x:Name="NextButton" Style="{StaticResource IslandButton}"
+                                        Width="32" Height="32" Click="OnNextClick" ToolTip="下一首">
+                                    <Path Data="{StaticResource GlyphNext}" Fill="{DynamicResource IslandGlyph}"
+                                          Width="10" Height="10" Stretch="Uniform"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+
+                        <!--  第 1 行：歌词（当前 / 译文 / 下一句，宽度由代码按文本实测）  -->
+                        <!--  左缩进 24 = 图标 17 + 间距 7，让歌词左边界与歌名文字对齐；
+                               运行时 BalanceWidths 会按实测位置再校正一次  -->
+                        <StackPanel x:Name="LyricsPanel" Orientation="Vertical" Margin="24,4,0,1"
+                                    Visibility="Collapsed">
+                            <local:MarqueeText x:Name="LyricLine1" Width="270" FontSize="14"
                                                Foreground="{DynamicResource IslandFg}"
                                                VerticalAlignment="Center" Text="" />
-                            <local:MarqueeText x:Name="LyricLine2" Width="270" FontSize="10.5"
-                                               Foreground="{DynamicResource IslandSubFg}" Opacity="0.75"
-                                               Margin="0,2,0,0" VerticalAlignment="Center" Text="" />
+                            <local:MarqueeText x:Name="LyricTrans" Width="270" FontSize="11"
+                                               Foreground="{DynamicResource IslandSubFg}" Opacity="0.8"
+                                               Margin="0,1,0,0" VerticalAlignment="Center"
+                                               Visibility="Collapsed" Text="" />
+                            <local:MarqueeText x:Name="LyricLine2" Width="270" FontSize="11"
+                                               Foreground="{DynamicResource IslandSubFg}" Opacity="0.55"
+                                               Margin="0,1,0,0" VerticalAlignment="Center" Text="" />
                         </StackPanel>
-                    </Grid>
-                </StackPanel>
+                    </StackPanel>
+                </Grid>
 
                 <!--  ============ 中间竖分隔线  ============  -->
                 <Border x:Name="Divider" Grid.Column="1" Width="1" Height="24"

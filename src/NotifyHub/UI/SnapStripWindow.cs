@@ -4,16 +4,20 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
-using System.Windows.Shapes;
 using NotifyHub.Interop;
+using NotifyHub.Services;
 
 namespace NotifyHub.UI;
 
 /// <summary>
-/// 吸附态的「细条」：灵动岛 10 秒无交互吸附到屏幕顶部后，只显示一条横细条
-/// （v0.2.3 起只允许顶部边缘停靠，左右竖条已按需求 4 砍掉），不占地方；
-/// 鼠标移入或点击立即展开完整悬浮条。
-/// 窗口比可视条大一圈（留 8px 命中余量），"容易点到"就是靠这个 + 128ms 快速淡入。
+/// 吸附态的「细条」（v0.2.8 需求 4 改造）：灵动岛收纳后只留一条窄条，
+/// 鼠标移入或点击立即展开完整岛。
+///
+/// 和旧版的差别：中间的静态小圆点换成了 <see cref="StripIndicator"/>（跑道指示器），
+/// 能区分「仅音乐 / 仅任务 / 音乐+任务」三种状态；整条保留原有的呼吸效果
+/// （整体透明度 1 ↔ 0.55 循环），不再是一个不动的点。
+///
+/// 窗口仍比可视条大一圈（左右各 8px 命中余量），"容易点到"靠它 + 128ms 快速淡入。
 /// </summary>
 public sealed class SnapStripWindow : Window
 {
@@ -21,16 +25,16 @@ public sealed class SnapStripWindow : Window
     public event EventHandler? ExpandRequested;
 
     /// <summary>可视条厚度（DIP）。</summary>
-    public const double BarThickness = 8;
+    public const double BarThickness = 12;
 
     /// <summary>可视条长度（DIP）。</summary>
-    public const double BarLength = 110;
+    public const double BarLength = 124;
 
     /// <summary>窗口四边命中余量（DIP）。</summary>
     private const double HitPadding = 8;
 
     private readonly Border _bar;
-    private readonly Ellipse _dot;
+    private readonly StripIndicator _indicator;
 
     public SnapStripWindow()
     {
@@ -45,19 +49,16 @@ public sealed class SnapStripWindow : Window
         WindowStartupLocation = WindowStartupLocation.Manual;
         Title = "NotifyHub 吸附条";
 
-        _dot = new Ellipse
+        _indicator = new StripIndicator
         {
-            Width = 5,
-            Height = 5,
-            HorizontalAlignment = HorizontalAlignment.Center,
+            Mode = StripMode.Music,
+            Margin = new Thickness(5, 0, 5, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0xD6, 0x0A)), // 与岛上状态点同款黄
-            Opacity = 0.9,
         };
 
         _bar = new Border
         {
-            CornerRadius = new CornerRadius(4),
+            CornerRadius = new CornerRadius(6),
             BorderThickness = new Thickness(1),
             BorderBrush = new SolidColorBrush(Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF)),
             Background = new LinearGradientBrush
@@ -70,7 +71,7 @@ public sealed class SnapStripWindow : Window
                     new GradientStop(Color.FromArgb(0xE6, 0x14, 0x14, 0x18), 1),
                 },
             },
-            Child = _dot,
+            Child = _indicator,
         };
 
         Content = _bar;
@@ -81,8 +82,23 @@ public sealed class SnapStripWindow : Window
         MouseLeftButtonUp += (_, _) => ExpandRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>把细条摆到屏幕顶部中央并淡入（已可见时只刷新位置）。</summary>
-    public void ShowFor(string edgeName, bool doneState)
+    /// <summary>当前指示器形态（诊断用）。</summary>
+    public StripMode Mode => _indicator.Mode;
+
+    /// <summary>指示器诊断快照（--strip-shot / 自检用）。</summary>
+    public string IndicatorDebug =>
+        $"mode={_indicator.Mode} done={_indicator.IsDone} phase={_indicator.Phase:F2} " +
+        $"bar={BarThickness}x{BarLength} draw={_indicator.ActualWidth:F0}x{_indicator.ActualHeight:F0} " +
+        $"opacity={_bar.Opacity:F2}";
+
+    /// <summary>当前可视条尺寸是否已经是 v0.2.8 的新规格（自检用）。</summary>
+    public static bool UsesNewGeometry => BarThickness >= 12 && BarLength >= 120;
+
+    /// <summary>
+    /// 把细条摆到屏幕顶部中央并淡入（已可见时只刷新状态与位置）。
+    /// <paramref name="mode"/> 决定跑道指示器的形态，<paramref name="doneState"/> 为完成态（整条转绿）。
+    /// </summary>
+    public void ShowFor(StripMode mode, bool doneState)
     {
         // 横条：长 × 细。窗口外扩 HitPadding 扩大命中区。
         var winW = BarLength + (HitPadding * 2);
@@ -92,26 +108,56 @@ public sealed class SnapStripWindow : Window
         Height = winH;
 
         _bar.Margin = new Thickness(HitPadding);
-        _bar.CornerRadius = new CornerRadius(4);
 
-        var area = SystemParameters.WorkArea;
+        _indicator.Mode = mode;
+        _indicator.IsDone = doneState;
+
+        var area = ScreenMetrics.PrimaryWorkAreaDip(this);
         var gap = 8; // 与岛吸附同款缝隙
 
         Left = Math.Round(area.Left + ((area.Width - winW) / 2));
         Top = Math.Round(area.Top + gap - HitPadding);
 
-        // 完成态显示绿点，其余时间黄点
-        _dot.Fill = new SolidColorBrush(doneState
-            ? Color.FromRgb(0x34, 0xC7, 0x59)
-            : Color.FromRgb(0xFF, 0xD6, 0x0A));
-
         if (IsVisible)
         {
+            // 已在屏上：只更新形态（音乐停/任务开始时不用重新淡入）
+            StartBreathing(doneState);
             return;
         }
 
         Show();
         BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(128)));
+        StartBreathing(doneState);
+    }
+
+    /// <summary>只更新指示器状态（细条已在屏上时用）。</summary>
+    public void UpdateState(StripMode mode, bool doneState)
+    {
+        if (!IsVisible)
+        {
+            return;
+        }
+
+        _indicator.Mode = mode;
+        _indicator.IsDone = doneState;
+        StartBreathing(doneState);
+    }
+
+    /// <summary>
+    /// 呼吸：整条透明度循环（旧版细条的呼吸灯效果保留）。
+    /// 完成态呼吸更慢更浅，视觉上"安定下来"。
+    /// </summary>
+    private void StartBreathing(bool doneState)
+    {
+        var breathe = new DoubleAnimation(doneState ? 1 : 0.92, doneState ? 0.75 : 0.55,
+            TimeSpan.FromMilliseconds(doneState ? 1500 : 900))
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+        };
+
+        _bar.BeginAnimation(OpacityProperty, breathe);
     }
 
     /// <summary>淡出并隐藏。</summary>
@@ -121,6 +167,9 @@ public sealed class SnapStripWindow : Window
         {
             return;
         }
+
+        _bar.BeginAnimation(OpacityProperty, null);
+        _bar.Opacity = 1;
 
         var fade = new DoubleAnimation(Opacity, 0, TimeSpan.FromMilliseconds(120));
         fade.Completed += (_, _) =>

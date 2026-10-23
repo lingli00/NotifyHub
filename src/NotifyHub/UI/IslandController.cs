@@ -359,6 +359,7 @@ public sealed class IslandController : IDisposable
         _lyricLines = null;
         _lyricIndex = int.MinValue;
 
+        // v0.2.8 需求 2：歌词开关是独立总开关——关掉后连取词都不做（省流量，也绝不留占位）
         if (info is null || string.IsNullOrWhiteSpace(info.Title) || !_config.Current.LyricsEnabled)
         {
             _lyricTimer.Stop();
@@ -432,14 +433,28 @@ public sealed class IslandController : IDisposable
         }
 
         _lyricIndex = index;
-        Island().ShowLyrics(TextAt(index), TextAt(index + 1));
+        Island().ShowLyrics(TextAt(index), TextAt(index + 1), TransAt(index));
     }
 
     private string? TextAt(int index)
         => _lyricLines is { } lines && index >= 0 && index < lines.Count ? lines[index].Text : null;
 
+    /// <summary>当前行的译文（歌词源自带才有；没有返回 null，岛上那一行就不占位）。</summary>
+    private string? TransAt(int index)
+    {
+        if (_lyricLines is not { } lines || index < 0 || index >= lines.Count)
+        {
+            return null;
+        }
+
+        var line = lines[index];
+        return line.HasTranslation ? line.Translation : null;
+    }
+
     /// <summary>当前展示的第 n 行（1=当前行，2=下一行），配置变更后重放一次用。</summary>
     private string? CurrentLyricText(int offset) => TextAt(_lyricIndex + offset - 1);
+
+    private string? CurrentLyricTrans() => TransAt(_lyricIndex);
 
     /// <summary>拖拽结束：位置写入配置自动保存。</summary>
     private void SavePosition(double left, double top)    {
@@ -470,7 +485,7 @@ public sealed class IslandController : IDisposable
 
                 // v0.2.7：歌词字号 / 总开关 / 收纳时长保存后立即生效
                 Island().ApplyLyricsTypography();
-                Island().ShowLyrics(CurrentLyricText(1), CurrentLyricText(2));
+                Island().ShowLyrics(CurrentLyricText(1), CurrentLyricText(2), CurrentLyricTrans());
 
                 // 音乐开关/跑马灯速度等变更即时生效：
                 // 需求 8——此前只调 ApplyModeChange，音乐组可见性不会重算，

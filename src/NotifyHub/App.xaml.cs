@@ -155,9 +155,10 @@ public partial class App : Application
                 ConsoleBridge.WriteLine($"SESSIONS {rows.Count} 行（FromSelf=自己发的，不推送；HasUnread=未读）");
                 foreach (var row in rows)
                 {
+                    var kind = WeChatFilter.Classify(row);
                     ConsoleBridge.WriteLine(
-                        $"  [{row.Contact}] FromSelf={row.FromSelf} HasUnread={row.HasUnread} " +
-                        $"Muted={row.Muted} Signals={row.Signals} | {row.Summary}");
+                        $"  [{row.Contact}] 类型={WeChatFilter.KindName(kind)} FromSelf={row.FromSelf} " +
+                        $"未读={row.UnreadCount} Muted={row.Muted} | {row.Summary}");
                 }
 
                 Shutdown();

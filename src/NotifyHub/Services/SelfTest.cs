@@ -161,28 +161,139 @@ public static class SelfTest
             return accepted1 && !accepted2 && accepted3 && hash1 == hash2;
         });
 
-        Check("微信过滤：免打扰/公众号/服务通知拦截，好友与普通群放行", () =>
+        Check("微信过滤：免打扰/官方会话拦截，好友与普通群放行（名称关键词不判类型）", () =>
         {
             var config = new AppConfig { WeChatFilterEnabled = true };
 
             var mutedGroup = new SessionRow("产品群", "王五: 明天十点开会", Muted: true, Signals: "消息免打扰");
-            var official = new SessionRow("某公众号", "今日推送：三分钟读懂财报");
+            var officialFolder = new SessionRow("公众号", "求是网: 今日推送");
             var serviceNotice = new SessionRow("服务通知", "微信支付凭证");
-            var friend = new SessionRow("张三", "在吗");
+            var friend = new SessionRow("张三", "张三: 在吗");
             var normalGroup = new SessionRow("家人群", "李四: 晚上吃啥", Muted: false, Signals: "群聊");
 
             return WeChatFilter.ShouldBlock(mutedGroup, config, out _)
-                   && WeChatFilter.ShouldBlock(official, config, out _)
+                   && WeChatFilter.ShouldBlock(officialFolder, config, out _)
                    && WeChatFilter.ShouldBlock(serviceNotice, config, out _)
                    && !WeChatFilter.ShouldBlock(friend, config, out _)
                    && !WeChatFilter.ShouldBlock(normalGroup, config, out _);
+        });
+
+        Check("v0.2.5 回归：群名叫“阿里云”不被误判成公众号（名称关键词已从类型判定移除）", () =>
+        {
+            var config = new AppConfig { WeChatFilterEnabled = true };
+
+            // 真机复现用例：阿里云是个普通群聊，群里 Flyme 发来“[动画表情]”，
+            // 旧实现撞上关键词表里的“阿里云”直接跳过——现在必须放行。
+            var aliGroup = new SessionRow("阿里云", "Flyme: [动画表情]", HasUnread: true, UnreadCount: 20);
+            var aliGroupRead = new SessionRow("阿里云", "Flyme: 收到");
+
+            // 同名的官方会话规范名仍然整名拦截
+            var systemSession = new SessionRow("服务号", "中国银行微银行: 交易成功提醒", HasUnread: true, UnreadCount: 1);
+
+            return !WeChatFilter.ShouldBlock(aliGroup, config, out _)
+                   && !WeChatFilter.ShouldBlock(aliGroupRead, config, out _)
+                   && WeChatFilter.ShouldBlock(systemSession, config, out _);
+        });
+
+        Check("v0.2.5：会话类型判定只依据真实信号（Classify）", () =>
+        {
+            var chat = new SessionRow("勇敢牛牛", "小矮子: 行吧", HasUnread: true, UnreadCount: 1);
+            var muted = new SessionRow("飞牛粉丝群", "助理: 大家好", Muted: true, Signals: "消息免打扰");
+            var system = new SessionRow("微信团队", "[链接] 登录操作通知");
+            var fromSelf = new SessionRow("陈星", "ok", FromSelf: true);
+
+            // 私聊的摘要就是裸内容——带未读证据说明是别人发来的，必须放行
+            // （v0.2.5 回归：xiy624 发来“就只能下班”、xiy62 发来“谢谢你”曾被误判成官方推送）
+            var privateIncoming = new SessionRow("xiy624", "就只能下班", HasUnread: true, UnreadCount: 1);
+
+            return WeChatFilter.Classify(chat) == WeChatFilter.WeChatSessionKind.Chat
+                   && WeChatFilter.Classify(muted) == WeChatFilter.WeChatSessionKind.Muted
+                   && WeChatFilter.Classify(system) == WeChatFilter.WeChatSessionKind.System
+                   && WeChatFilter.Classify(fromSelf) == WeChatFilter.WeChatSessionKind.FromSelf
+                   && WeChatFilter.Classify(privateIncoming) == WeChatFilter.WeChatSessionKind.Chat;
+        });
+
+        Check("v0.2.5 回归：私聊裸内容消息必须放行（未读证据判他人消息）", () =>
+        {
+            var config = new AppConfig { WeChatFilterEnabled = true };
+
+            // 真机复现：xiy624/xiy62 是个人好友，摘要为裸内容 + 未读，旧规则判成“官方账号推送”被吞
+            var xiy624 = new SessionRow("xiy624", "就只能下班", HasUnread: true, UnreadCount: 1);
+            var xiy62 = new SessionRow("xiy62", "谢谢你", HasUnread: true, UnreadCount: 2);
+            // 群聊带“成员: ”前缀也要放行
+            var group = new SessionRow("阿里云", "Flyme: [动画表情]", HasUnread: true, UnreadCount: 20);
+            // 自己发的（裸内容 + 无未读）仍然拦
+            var self = new SessionRow("xiy624", "就随便下班", FromSelf: true);
+
+            return !WeChatFilter.ShouldBlock(xiy624, config, out _)
+                   && !WeChatFilter.ShouldBlock(xiy62, config, out _)
+                   && !WeChatFilter.ShouldBlock(group, config, out _)
+                   && WeChatFilter.Classify(self) == WeChatFilter.WeChatSessionKind.FromSelf;
+        });
+
+        Check("v0.2.5：解析未读数与 FromSelf 判据（自己发的不带未读证据）", () =>
+        {
+            // 别人发来的未读消息：[N条] + 发言人前缀
+            var incoming = MessageTextParser.Parse(new[]
+            {
+                "阿里云",
+                "[20条] Flyme: [动画表情]",
+                "08:19",
+            });
+            // 自己发的：裸内容、无未读证据
+            var self = MessageTextParser.Parse(new[]
+            {
+                "陈星",
+                "ok",
+                "昨天 20:56",
+            });
+            // 官方账号推送：裸内容但带未读证据 → 不是自己发送
+            var official = MessageTextParser.Parse(new[]
+            {
+                "商家寄件福利官23",
+                "[1条] [图片]",
+                "昨天 11:01",
+            });
+
+            return incoming is { FromSelf: false, HasUnread: true, UnreadCount: 20 }
+                   && self is { FromSelf: true, HasUnread: false }
+                   && official is { FromSelf: false, HasUnread: true, UnreadCount: 1 };
+        });
+
+        Check("v0.2.5：同文本新消息靠未读数递增识别（差分不再吞消息）", () =>
+        {
+            var tracker = new SessionDiffTracker();
+            var now = DateTime.Now;
+            var rows = new[]
+            {
+                new SessionRow("张三", "李四: 1", HasUnread: true, UnreadCount: 1),
+            };
+
+            // 第一轮建基线
+            tracker.Diff(rows, now, out _);
+
+            // 文本完全相同、未读数 1→2：必须识别为变化
+            var again = new[]
+            {
+                new SessionRow("张三", "李四: 1", HasUnread: true, UnreadCount: 2),
+            };
+            var changes = tracker.Diff(again, now.AddSeconds(1), out _);
+
+            // 文本与未读数都不变：不再重复报
+            var same = new[]
+            {
+                new SessionRow("张三", "李四: 1", HasUnread: true, UnreadCount: 2),
+            };
+            var noChanges = tracker.Diff(same, now.AddSeconds(2), out _);
+
+            return changes.Count == 1 && noChanges.Count == 0;
         });
 
         Check("微信过滤：关闭过滤开关后一律放行", () =>
         {
             var config = new AppConfig { WeChatFilterEnabled = false };
             var muted = new SessionRow("产品群", "内容", Muted: true, Signals: "消息免打扰");
-            var official = new SessionRow("某公众号", "推送");
+            var official = new SessionRow("公众号", "推送");
             return !WeChatFilter.ShouldBlock(muted, config, out _)
                    && !WeChatFilter.ShouldBlock(official, config, out _);
         });
@@ -407,6 +518,20 @@ public static class SelfTest
                    && WeChatFilter.ShouldBlock(officialFolder, config, out _)
                    && WeChatFilter.ShouldBlock(articleLink, config, out _)
                    && !WeChatFilter.ShouldBlock(friend, config, out _);
+        });
+
+        Check("v0.2.5：夸克浏览器定位（真实安装路径 + 注册表兜底）", () =>
+        {
+            // 夸克装在 %LOCALAPPDATA%\Programs\Quark\quark.exe；本机装了就必须找到，
+            // 找到的路径必须真实存在。没装则跳过（返回 null 也算通过）。
+            var quark = BrowserLauncher.Locate("Quark");
+            var pathOk = quark is null || File.Exists(quark);
+
+            // 注册表 App Paths 兜底：本机 quark.exe 有登记，直接读注册表也要能拿到
+            var fromRegistry = BrowserLauncher.LocateFromAppPaths("quark.exe");
+            var registryOk = fromRegistry is null || File.Exists(fromRegistry);
+
+            return pathOk && registryOk;
         });
 
         Check("v0.2.4 需求1：多订阅配置（迁移/清理/色板收敛）", () =>

@@ -378,14 +378,14 @@
                                 </Grid.ColumnDefinitions>
 
                                 <CheckBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
-                                          x:Name="WeChatFilterCheck" Content="启用过滤（只推好友私聊与未免打扰群）" />
+                                          x:Name="WeChatFilterCheck" Content="启用过滤（放行他人私聊/普通群聊，屏蔽官方会话与免打扰）" />
 
                                 <TextBlock Grid.Row="1" Grid.Column="0" Text="拦截关键词" Margin="0,8,10,0" />
                                 <TextBox Grid.Row="1" Grid.Column="1" x:Name="FilterKeywordsBox" Height="28" Margin="0,8,0,0" />
 
                                 <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
                                            Margin="0,6,0,0" TextWrapping="Wrap"
-                                           Text="公众号、服务通知、广告营销、以及所有“消息免打扰”会话（含回看历史消息）全部拦截；关键词用逗号分隔，命中会话名或摘要即拦截。QQ 不过滤。" />
+                                           Text="类型判定只看真实信号：免打扰标记、微信内置系统会话（服务号/服务通知/微信团队/公众号等整名匹配）、公众号文章链接、以及“无发言人结构的群发推送”；不按群名/好友名的文字猜测，群名叫“阿里云”也不会被误杀。拦截关键词是你自己的追加黑名单（逗号分隔），命中会话名或摘要即拦截。QQ 不过滤。" />
                             </Grid>
                         </GroupBox>
                     </StackPanel>

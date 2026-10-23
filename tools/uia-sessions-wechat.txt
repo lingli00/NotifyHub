@@ -1,47 +1,109 @@
-main hwnd=0x503CE
+main hwnd=0x204C4
 List candidates: 2
-  [0] name="消息" items=7 class=mmui::RecyclerListView score=10007
+  [0] name="消息" items=5 class=mmui::RecyclerListView score=10005
   [1] name="会话" items=10 class=mmui::XTableView score=10010
 best list: name="会话" class=mmui::XTableView
 items: 10
 
 ===== ITEM 0 =====
-[ListItem] "QQ邮箱提醒
-已置顶
-From CloudCone: $5.10 on you, $2.55 on us! Prepare yourself for the Black Frida
-20:44
+  -- 28 supported properties --
+    AutomationElementIdentifiers.ControlTypeProperty = System.Windows.Automation.ControlType
+    AutomationElementIdentifiers.LocalizedControlTypeProperty = 列表项目
+    AutomationElementIdentifiers.IsContentElementProperty = True
+    AutomationElementIdentifiers.ProcessIdProperty = 1164
+    AutomationElementIdentifiers.BoundingRectangleProperty = 82,195,240,65
+    SelectionItemPatternIdentifiers.SelectionContainerProperty = System.Windows.Automation.AutomationElement
+    AutomationElementIdentifiers.OrientationProperty = None
+    AutomationElementIdentifiers.ClassNameProperty = mmui::ChatSessionCell
+    AutomationElementIdentifiers.RuntimeIdProperty = System.Int32[]
+    AutomationElementIdentifiers.IsControlElementProperty = True
+    AutomationElementIdentifiers.NameProperty = 亿新双11活动方案福利群8
+亿新线报专员一不加好友: [图片] 
+00:22
 消息免打扰
-" class=mmui::ChatSessionCell id=session_item_QQ邮箱提醒
 
-===== ITEM 1 =====
-[ListItem] "小八
-已置顶
-
-
-消息免打扰
-" class=mmui::ChatSessionCell id=session_item_小八
-
-===== ITEM 2 =====
+    AutomationElementIdentifiers.AutomationIdProperty = session_item_亿新双11活动方案福利群8
+    AutomationElementIdentifiers.FrameworkIdProperty = Qt
+    AutomationElementIdentifiers.IsEnabledProperty = True
 [ListItem] "亿新双11活动方案福利群8
-[14条] 亿新线报专员一不加好友: [图片] 
-22:45
+亿新线报专员一不加好友: [图片] 
+00:22
+消息免打扰
+" class=mmui::ChatSessionCell id=session_item_亿新双11活动方案福利群8
+[ListItem] "亿新双11活动方案福利群8
+亿新线报专员一不加好友: [图片] 
+00:22
+消息免打扰
+" class=mmui::ChatSessionCell id=session_item_亿新双11活动方案福利群8
+[CV:ListItem] "亿新双11活动方案福利群8
+亿新线报专员一不加好友: [图片] 
+00:22
 消息免打扰
 " class=mmui::ChatSessionCell id=session_item_亿新双11活动方案福利群8
 
-===== ITEM 3 =====
+===== ITEM 1 =====
+  -- 28 supported properties --
+    AutomationElementIdentifiers.ControlTypeProperty = System.Windows.Automation.ControlType
+    AutomationElementIdentifiers.LocalizedControlTypeProperty = 列表项目
+    AutomationElementIdentifiers.IsContentElementProperty = True
+    AutomationElementIdentifiers.ProcessIdProperty = 1164
+    AutomationElementIdentifiers.BoundingRectangleProperty = 82,260,240,65
+    SelectionItemPatternIdentifiers.SelectionContainerProperty = System.Windows.Automation.AutomationElement
+    AutomationElementIdentifiers.OrientationProperty = None
+    AutomationElementIdentifiers.ClassNameProperty = mmui::ChatSessionCell
+    AutomationElementIdentifiers.RuntimeIdProperty = System.Int32[]
+    AutomationElementIdentifiers.IsControlElementProperty = True
+    AutomationElementIdentifiers.NameProperty = 服务号
+[1条] 
+中国银行微银行: 交易成功提醒
+昨天 22:36
+
+    AutomationElementIdentifiers.AutomationIdProperty = session_item_服务号
+    AutomationElementIdentifiers.FrameworkIdProperty = Qt
+    AutomationElementIdentifiers.IsEnabledProperty = True
 [ListItem] "服务号
 [1条] 
 中国银行微银行: 交易成功提醒
-22:36
+昨天 22:36
+" class=mmui::ChatSessionCell id=session_item_服务号
+[ListItem] "服务号
+[1条] 
+中国银行微银行: 交易成功提醒
+昨天 22:36
+" class=mmui::ChatSessionCell id=session_item_服务号
+[CV:ListItem] "服务号
+[1条] 
+中国银行微银行: 交易成功提醒
+昨天 22:36
 " class=mmui::ChatSessionCell id=session_item_服务号
 
-===== ITEM 4 =====
-[ListItem] "比企谷八蟠
-的撒旦不会寂寞最新版·
-22:35
-" class=mmui::ChatSessionCell id=session_item_比企谷八蟠
+===== ITEM 2 =====
+  -- 28 supported properties --
+    AutomationElementIdentifiers.ControlTypeProperty = System.Windows.Automation.ControlType
+    AutomationElementIdentifiers.LocalizedControlTypeProperty = 列表项目
+    AutomationElementIdentifiers.IsContentElementProperty = True
+    AutomationElementIdentifiers.ProcessIdProperty = 1164
+    AutomationElementIdentifiers.BoundingRectangleProperty = 82,325,240,65
+    SelectionItemPatternIdentifiers.SelectionContainerProperty = System.Windows.Automation.AutomationElement
+    AutomationElementIdentifiers.OrientationProperty = None
+    AutomationElementIdentifiers.ClassNameProperty = mmui::ChatSessionCell
+    AutomationElementIdentifiers.RuntimeIdProperty = System.Int32[]
+    AutomationElementIdentifiers.IsControlElementProperty = True
+    AutomationElementIdentifiers.NameProperty = 文件传输助手
+录音内容拿到了，整理成完整需求文案，直接复制给 WorkBuddy：
+ 
+ 
+ 
+NotifyHub 需求清单
+ 
+一、ntfy 订阅与推送
+ 
+1. 支…
+昨天 22:31
 
-===== ITEM 5 =====
+    AutomationElementIdentifiers.AutomationIdProperty = session_item_文件传输助手
+    AutomationElementIdentifiers.FrameworkIdProperty = Qt
+    AutomationElementIdentifiers.IsEnabledProperty = True
 [ListItem] "文件传输助手
 录音内容拿到了，整理成完整需求文案，直接复制给 WorkBuddy：
  
@@ -52,35 +114,29 @@ NotifyHub 需求清单
 一、ntfy 订阅与推送
  
 1. 支…
-22:31
+昨天 22:31
 " class=mmui::ChatSessionCell id=session_item_文件传输助手
-
-===== ITEM 6 =====
-[ListItem] "七七【情报局】瓶盖在群公告A330
-[9条] 七七更新员: 蜜思婷金气垫速度去！！这是2个的 平时一个都要100+  随时没货！带一个替换装 手慢🈚️断货
-22:30
-消息免打扰
-" class=mmui::ChatSessionCell id=session_item_七七【情报局】瓶盖在群公告A330
-
-===== ITEM 7 =====
-[ListItem] "公众号
-[49条] XuanRan: AI的潘多拉魔盒已经打开
-22:17
-" class=mmui::ChatSessionCell id=session_item_公众号
-
-===== ITEM 8 =====
-[ListItem] "🚢上岸船舱🉑拉人
-🚢船姐🍉: 立白高端系列！！
-全部是瓶装，没有袋装补充液
-立白.洗衣液10斤，下拉💰38
-折一斤才3.8亓！！
-除菌除…
-21:59
-消息免打扰
-" class=mmui::ChatSessionCell id=session_item_🚢上岸船舱🉑拉人
-
-===== ITEM 9 =====
-[ListItem] "陈星
-ok
-20:56
-" class=mmui::ChatSessionCell id=session_item_陈星
+[ListItem] "文件传输助手
+录音内容拿到了，整理成完整需求文案，直接复制给 WorkBuddy：
+ 
+ 
+ 
+NotifyHub 需求清单
+ 
+一、ntfy 订阅与推送
+ 
+1. 支…
+昨天 22:31
+" class=mmui::ChatSessionCell id=session_item_文件传输助手
+[CV:ListItem] "文件传输助手
+录音内容拿到了，整理成完整需求文案，直接复制给 WorkBuddy：
+ 
+ 
+ 
+NotifyHub 需求清单
+ 
+一、ntfy 订阅与推送
+ 
+1. 支…
+昨天 22:31
+" class=mmui::ChatSessionCell id=session_item_文件传输助手

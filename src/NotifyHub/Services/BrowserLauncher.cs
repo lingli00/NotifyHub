@@ -29,13 +29,27 @@ public static class BrowserLauncher
             @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             @"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
         }),
+        // 夸克装在 %LOCALAPPDATA%\Programs\Quark\（注意是 Programs 子目录，且 exe 名为 quark.exe 小写）——
+        // 旧路径 %LOCALAPPDATA%\Quark\Quark.exe 是用户数据目录，永远找不到（v0.2.5 修复）。
         new("Quark", new[]
         {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                @"Programs\Quark\quark.exe"),
+            @"C:\Program Files\Quark\quark.exe",
+            @"C:\Program Files (x86)\Quark\quark.exe",
             @"C:\Program Files\Quark\Quark.exe",
             @"C:\Program Files (x86)\Quark\Quark.exe",
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 @"Quark\Quark.exe"),
         }),
+    };
+
+    /// <summary>各浏览器在注册表 App Paths 里的可执行名（路径探测落败时的兜底）。</summary>
+    private static readonly (string Choice, string ExeName)[] RegistryBrowsers =
+    {
+        new("Chrome", "chrome.exe"),
+        new("Edge", "msedge.exe"),
+        new("Quark", "quark.exe"),
     };
 
     /// <summary>
@@ -85,6 +99,7 @@ public static class BrowserLauncher
 
     /// <summary>
     /// 探测固定浏览器的可执行文件路径；未安装返回 null。
+    /// 先查常见安装路径，再查注册表 App Paths（安装路径千奇百怪时的兜底）。
     /// </summary>
     public static string? Locate(string choice)
     {
@@ -103,7 +118,50 @@ public static class BrowserLauncher
                 }
             }
 
+            // 路径探测落败：查注册表 App Paths（HKLM + HKCU）
+            foreach (var (regName, exeName) in RegistryBrowsers)
+            {
+                if (!string.Equals(regName, choice, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var fromRegistry = LocateFromAppPaths(exeName);
+                if (fromRegistry is not null)
+                {
+                    return fromRegistry;
+                }
+            }
+
             return null;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// 从注册表 App Paths（HKLM/HKCU 的 SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths）
+    /// 读浏览器的真实安装位置。这是 Windows 官方的“应用在哪”登记处，
+    /// 用户装到任意盘/任意目录都能找到。
+    /// </summary>
+    internal static string? LocateFromAppPaths(string exeName)
+    {
+        foreach (var root in new[] { Microsoft.Win32.Registry.LocalMachine, Microsoft.Win32.Registry.CurrentUser })
+        {
+            try
+            {
+                using var key = root.OpenSubKey(
+                    $@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exeName}");
+                var path = key?.GetValue(string.Empty) as string;
+                if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
+                {
+                    return path;
+                }
+            }
+            catch
+            {
+                // 注册表不可读就跳过
+            }
         }
 
         return null;

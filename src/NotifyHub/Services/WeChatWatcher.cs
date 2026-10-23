@@ -27,21 +27,28 @@ public sealed class WeChatWatcher : ChatAppWatcher
 
     protected override bool ShouldEmit(SessionRow row, AppConfig config)
     {
-        // 需求 4：自己发的消息一律不推送。
-        // 微信 4.x 实测：别人发来的摘要带“发言人: ”前缀（未读另带“[N条]”），
-        // 自己发的只有裸内容（MessageTextParser.FromSelf 已判定）。
-        if (row.FromSelf)
+        // 类型判定（真实信号：未读证据 / 免打扰 / 官方会话规范名 / 文章链接）
+        var kind = WeChatFilter.Classify(row);
+        var preview = LogService.Truncate(row.Summary, 40);
+
+        // 需求 4：自己发的消息一律不推送（与过滤开关无关的硬规则）。
+        // 裸内容 + 无未读证据 = 自己发的（自己发的消息不进未读数；
+        // 私聊的别人消息也是裸内容，但一定带未读证据，不能按“有没有发言人前缀”判）。
+        if (kind == WeChatFilter.WeChatSessionKind.FromSelf)
         {
-            LogThrottled(LogLevel.Debug, $"跳过自己发送的消息: {row.Contact} → {LogService.Truncate(row.Summary, 40)}", TimeSpan.FromSeconds(30));
+            // 每条消息都要留日志，不做时间节流
+            Log.Write(LogLevel.Debug, Name, $"跳过自己发送的消息: {row.Contact} → {preview}");
             return false;
         }
 
         if (!WeChatFilter.ShouldBlock(row, config, out var reason))
         {
+            // 放行：他人私聊 / 普通群聊
+            Log.Info(Name, $"放行{WeChatFilter.KindName(kind)}: {row.Contact} → {LogService.Truncate(row.Summary, 50)}");
             return true;
         }
 
-        LogThrottled(LogLevel.Debug, $"已过滤微信会话: {row.Contact}（{reason}）", TimeSpan.FromSeconds(30));
+        Log.Write(LogLevel.Debug, Name, $"已过滤微信会话: {row.Contact}（{reason}）");
         return false;
     }
 

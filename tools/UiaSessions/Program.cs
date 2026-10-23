@@ -103,12 +103,67 @@ internal static class Program
         {
             Console.WriteLine();
             Console.WriteLine($"===== ITEM {i} =====");
+            DumpAllProps(items[i]);
             var sb = new StringBuilder();
             Walk(items[i], 0, sb);
+            Console.Write(sb.ToString());
+            WalkControl(items[i], 0, sb);
             Console.Write(sb.ToString());
         }
 
         return 0;
+    }
+
+    /// <summary> dump 元素支持的全部属性值，找隐藏的“类型字段”。 </summary>
+    private static void DumpAllProps(AutomationElement e)
+    {
+        AutomationProperty[] props;
+        try { props = e.GetSupportedProperties(); }
+        catch (Exception ex) { Console.WriteLine("  GetSupportedProperties failed: " + ex.Message); return; }
+
+        Console.WriteLine($"  -- {props.Length} supported properties --");
+        foreach (var p in props)
+        {
+            object? val;
+            try { val = e.GetCurrentPropertyValue(p); }
+            catch { continue; }
+            if (val is null) continue;
+            var s = val.ToString();
+            if (string.IsNullOrEmpty(s)) continue;
+            if (val is bool b && !b) continue; // 跳过 false 布尔
+            if (s == "0" && (p == AutomationElement.NativeWindowHandleProperty || p == AutomationElement.ProcessIdProperty)) continue;
+            Console.WriteLine($"    {p.ProgrammaticName} = {s}");
+        }
+    }
+
+    /// <summary> ControlView 遍历（RawView 在微信 4.x 下无子元素，类型信息可能在 ControlView 里）。 </summary>
+    private static void WalkControl(AutomationElement e, int depth, StringBuilder sb)
+    {
+        string type, name, cls, aid;
+        try
+        {
+            type = e.Current.ControlType?.ProgrammaticName?.Replace("ControlType.", "") ?? "?";
+            name = e.Current.Name ?? "";
+            cls = e.Current.ClassName ?? "";
+            aid = e.Current.AutomationId ?? "";
+        }
+        catch { return; }
+
+        sb.Append(' ', depth * 2)
+            .Append($"[CV:{type}] \"{name}\"")
+            .Append(string.IsNullOrEmpty(cls) ? "" : $" class={cls}")
+            .Append(string.IsNullOrEmpty(aid) ? "" : $" id={aid}")
+            .AppendLine();
+
+        AutomationElement? child;
+        try { child = TreeWalker.ControlViewWalker.GetFirstChild(e); }
+        catch { return; }
+        while (child is not null)
+        {
+            WalkControl(child, depth + 1, sb);
+            try { child = TreeWalker.ControlViewWalker.GetNextSibling(child); }
+            catch { child = null; }
+        }
     }
 
     private static void Walk(AutomationElement e, int depth, StringBuilder sb)

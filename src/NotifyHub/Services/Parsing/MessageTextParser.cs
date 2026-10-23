@@ -8,11 +8,15 @@ namespace NotifyHub.Services.Parsing;
 /// <paramref name="Signals"/> 是该会话项里所有元素名称/说明的拼接，供过滤规则做关键词判定；
 /// <paramref name="HasUnread"/> 表示摘要里带未读证据（微信 4.x 的“[N条]”前缀或“有人@我”），
 /// 已读会话没有该前缀——需求 7 用它区分“用户已看过的老消息”与“真正的新消息”。
-/// <paramref name="FromSelf"/> 表示最后一条消息是**用户自己发的**（微信 4.x 实测：
-/// 别人发来的消息摘要带“发言人: ”前缀，未读的还带“[N条]”；自己发的只有裸内容）。
+/// <paramref name="UnreadCount"/> 是 [N条] 里的 N（无前缀为 0）——别人再发一条即使文本与
+/// 上一条完全相同，未读数也会 +1，差分据此识别“同文本新消息”（修复同文本被吞）。
+/// <paramref name="FromSelf"/> 表示最后一条消息是**用户自己发的**：微信 4.x 实测，
+/// 别人发来的消息摘要带“发言人: ”前缀（未读另带“[N条]”），自己发的只有裸内容且不带未读证据
+/// （自己发的消息不会进未读数）。官方账号推送也是裸内容，但带未读数——由过滤层按
+/// “无发言人结构的未读推送”拦截，不算自己发送。
 /// 需求 4：自己发的消息一律不推送。
 /// </summary>
-public sealed record SessionRow(string Contact, string Summary, bool Muted = false, string Signals = "", bool HasUnread = false, bool FromSelf = false);
+public sealed record SessionRow(string Contact, string Summary, bool Muted = false, string Signals = "", bool HasUnread = false, int UnreadCount = 0, bool FromSelf = false);
 
 /// <summary>
 /// 把 UIA 抓到的文本片段还原成 (联系人, 摘要)。
@@ -34,8 +38,8 @@ public static partial class MessageTextParser
     [GeneratedRegex(@"^(已置顶|置顶)\s*")]
     private static partial Regex PinnedPrefixRegex();
 
-    /// <summary>微信 4.x 摘要开头的未读数前缀，例如 "[63条] 软件室: 内容"。</summary>
-    [GeneratedRegex(@"^\[\d+条\]\s*")]
+    /// <summary>微信 4.x 摘要开头的未读数前缀，例如 "[63条] 软件室: 内容" / "[99+条] …"。</summary>
+    [GeneratedRegex(@"^\[(\d+)\+?条\]\s*")]
     private static partial Regex UnreadPrefixRegex();
 
     /// <summary>@我的前缀，例如 "[有人@我] 张三: 内容"。</summary>
@@ -79,6 +83,7 @@ public static partial class MessageTextParser
         // 未读证据：微信 4.x 未读会话摘要带“[N条]”前缀，@我的会话带“有人@我”。
         // 实测（本机 dump）：已读会话摘要为“发言人: 内容”，没有任何前缀。
         var hasUnread = false;
+        var unreadCount = 0;
 
         var contact = texts[0];
         if (contact.Length > 80 || TimeLikeRegex().IsMatch(contact) || BadgeLikeRegex().IsMatch(contact))
@@ -111,7 +116,18 @@ public static partial class MessageTextParser
                 continue;
             }
 
-            if (UnreadPrefixRegex().IsMatch(text) || text.Contains("有人@我", StringComparison.Ordinal))
+            var unreadMatch = UnreadPrefixRegex().Match(text);
+            if (unreadMatch.Success)
+            {
+                hasUnread = true;
+                var digits = new string(unreadMatch.Value.Where(char.IsDigit).ToArray());
+                if (int.TryParse(digits, out var n))
+                {
+                    unreadCount = Math.Max(unreadCount, n);
+                }
+            }
+
+            if (text.Contains("有人@我", StringComparison.Ordinal))
             {
                 hasUnread = true;
             }
@@ -131,8 +147,10 @@ public static partial class MessageTextParser
         }
 
         var summary = string.Join(" ", Distinct(parts)).Trim();
-        var fromSelf = summary.Length > 0 && !HasSpeakerPrefix(summary);
-        return new SessionRow(contact, summary, HasUnread: hasUnread, FromSelf: fromSelf);
+        // 自己发送 = 裸内容且无未读证据（自己发的消息不进未读数）；
+        // 带未读证据的裸内容是官方账号推送，交给过滤层拦，不算自己发送。
+        var fromSelf = summary.Length > 0 && !HasSpeakerPrefix(summary) && !hasUnread;
+        return new SessionRow(contact, summary, HasUnread: hasUnread, UnreadCount: unreadCount, FromSelf: fromSelf);
     }
 
     /// <summary>

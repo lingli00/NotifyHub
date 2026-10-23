@@ -132,8 +132,14 @@ public abstract class ChatAppWatcher : PollingWatcherBase
 
         foreach (var row in changes)
         {
+            // 需求（日志规范）：每条消息处理都要有日志——收到 → 类型判断 → 放行/跳过，
+            // 不允许消息无任何日志输出。
+            Log.Write(LogLevel.Debug, Name, $"收到会话变化: {row.Contact} → {LogService.Truncate(row.Summary, 60)}" +
+                            (row.HasUnread ? $"（未读 {row.UnreadCount} 条）" : ""));
+
             if (string.IsNullOrWhiteSpace(row.Summary))
             {
+                Log.Write(LogLevel.Debug, Name, $"跳过: {row.Contact}（摘要为空，无法比对）");
                 continue;
             }
 
@@ -144,7 +150,6 @@ public abstract class ChatAppWatcher : PollingWatcherBase
                     $"跳过无未读证据的旧消息: {row.Contact}", TimeSpan.FromSeconds(30));
                 continue;
             }
-
             // 接收阶段过滤（不弹窗、不响铃、不进事件列表）
             if (!ShouldEmit(row, config))
             {

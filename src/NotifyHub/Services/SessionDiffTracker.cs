@@ -11,11 +11,11 @@ namespace NotifyHub.Services;
 public sealed class SessionDiffTracker
 {
     private static readonly TimeSpan RebaselineGap = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan MoveToTopSuppressWindow = TimeSpan.FromSeconds(8);
 
     private readonly Dictionary<string, string> _lastSummary = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _previousSummary = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _lastIndex = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _lastUnread = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTime> _lastEmit = new(StringComparer.Ordinal);
     private DateTime _lastSuccessUtc = DateTime.MinValue;
     private bool _primed;
@@ -33,6 +33,7 @@ public sealed class SessionDiffTracker
         {
             _lastSummary.Clear();
             _lastIndex.Clear();
+            _lastUnread.Clear();
             _previousSummary.Clear();
             _hadBaseline = false;
 
@@ -144,15 +145,24 @@ public sealed class SessionDiffTracker
                 var changed = !_lastSummary.TryGetValue(row.Contact, out var previous)
                               || !string.Equals(previous, row.Summary, StringComparison.Ordinal);
 
-                // 内容一模一样但会话跳到最顶部：多半是对方又发了同一句话
-                var movedToTop = !changed
-                                 && i == 0
-                                 && _lastIndex.TryGetValue(row.Contact, out var previousIndex)
-                                 && previousIndex > 0
-                                 && (!_lastEmit.TryGetValue(row.Contact, out var lastEmit)
-                                     || now - lastEmit > MoveToTopSuppressWindow);
+                // 同文本新消息：对方又发了一条与上一条文本完全相同的消息时摘要不变，
+                // 但未读数会 +1——未读数递增同样算变化（修复“同文本消息被吞”）。
+                var unreadIncreased = row.UnreadCount > 0
+                                      && _lastUnread.TryGetValue(row.Contact, out var previousUnread)
+                                      && row.UnreadCount > previousUnread;
 
-                if (changed || movedToTop)
+                // 内容一模一样但会话跳到更靠上的位置：多半是对方又发了同一句话
+                // （未读 badge 可能在轮询间隙已被用户点掉）。放宽到“任意上移”，
+                // 抑制窗口压到 2 秒——同文本重复消息不再依赖跳到最顶部。
+                var movedUp = !changed
+                              && !unreadIncreased
+                              && i == 0
+                              && _lastIndex.TryGetValue(row.Contact, out var previousIndex)
+                              && previousIndex > 0
+                              && (!_lastEmit.TryGetValue(row.Contact, out var lastEmit)
+                                  || now - lastEmit > TimeSpan.FromSeconds(2));
+
+                if (changed || unreadIncreased || movedUp)
                 {
                     changes.Add(row);
                     _lastEmit[row.Contact] = now;
@@ -177,6 +187,7 @@ public sealed class SessionDiffTracker
                 if (!string.IsNullOrEmpty(row.Summary))
                 {
                     _lastSummary[row.Contact] = row.Summary;
+                    _lastUnread[row.Contact] = row.UnreadCount;
                 }
             }
 
@@ -200,6 +211,7 @@ public sealed class SessionDiffTracker
             _primed = false;
             _lastSummary.Clear();
             _lastIndex.Clear();
+            _lastUnread.Clear();
         }
     }
 
@@ -207,11 +219,13 @@ public sealed class SessionDiffTracker
     {
         _lastSummary.Clear();
         _lastIndex.Clear();
+        _lastUnread.Clear();
 
         for (var i = 0; i < rows.Count; i++)
         {
             _lastSummary[rows[i].Contact] = rows[i].Summary;
             _lastIndex[rows[i].Contact] = i;
+            _lastUnread[rows[i].Contact] = rows[i].UnreadCount;
         }
     }
 }

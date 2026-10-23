@@ -138,12 +138,17 @@ public partial class SettingsWindow : Window
         CornerCombo.SelectedIndex = cornerIndex < 0 ? 0 : cornerIndex;
     }
 
-    // ---------------- ntfy 多订阅（v0.2.4 需求 1/2） ----------------
+    // ---------------- ntfy 多订阅（v0.2.4 需求 1/2；v0.2.5 排版修复） ----------------
 
     /// <summary>把 <see cref="_ntfyEditing"/> 渲染成设置页里的订阅行。</summary>
     private void RebuildNtfyListUI()
     {
         NtfyListPanel.Children.Clear();
+
+        if (_ntfyEditing.Count > 0)
+        {
+            NtfyListPanel.Children.Add(BuildNtfyHeaderRow());
+        }
 
         for (var i = 0; i < _ntfyEditing.Count; i++)
         {
@@ -151,16 +156,67 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>订阅列表的列头行（与数据行列宽一致，避免用户猜哪列是什么）。</summary>
+    private UIElement BuildNtfyHeaderRow()
+    {
+        var grid = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NtfyRowCols.Enable) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NtfyRowCols.Name) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NtfyRowCols.Color) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NtfyRowCols.Remove) });
+
+        foreach (var (text, col) in new[]
+                 {
+                     ("启用", 0), ("名称", 1), ("订阅地址", 2), ("通知颜色", 3), ("删除", 4),
+                 })
+        {
+            var label = new TextBlock
+            {
+                Text = text,
+                FontSize = 11,
+                Foreground = SystemColors.GrayTextBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(col == 0 ? 2 : 4, 0, 4, 0),
+            };
+            Grid.SetColumn(label, col);
+            grid.Children.Add(label);
+        }
+
+        return grid;
+    }
+
+    /// <summary>订阅行各列的宽度（DIP），列头行与数据行共用，保证上下对齐。</summary>
+    private static class NtfyRowCols
+    {
+        public const double Enable = 34;
+        public const double Name = 96;
+        public const double Color = 108;
+        public const double Remove = 34;
+    }
+
     private UIElement BuildNtfyRow(NtfySubscription sub, int index)
     {
         var grid = new Grid { Margin = new Thickness(0, 0, 0, 6) };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(26) });           // 启用
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(96) });           // 名称
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 地址
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(104) });          // 颜色
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });           // 删除
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NtfyRowCols.Enable) });           // 启用
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NtfyRowCols.Name) });             // 名称
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });         // 地址
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NtfyRowCols.Color) });            // 颜色
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(NtfyRowCols.Remove) });           // 删除
 
-        var enabled = new CheckBox { IsChecked = sub.Enabled, VerticalAlignment = VerticalAlignment.Center };
+        // 启用勾选框：显式覆盖全局 CheckBox 样式（Margin 右 18px）与列宽，
+        // 否则 16px 的框 + 18px 右边距会超出列宽被裁成“半个勾选框”。
+        var enabled = new CheckBox
+        {
+            IsChecked = sub.Enabled,
+            Width = 16,
+            Height = 16,
+            Margin = new Thickness(0),
+            Padding = new Thickness(0),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "启用/停用这个订阅",
+        };
         Grid.SetColumn(enabled, 0);
         grid.Children.Add(enabled);
 
@@ -170,6 +226,7 @@ public partial class SettingsWindow : Window
             Height = 26,
             Margin = new Thickness(4, 0, 4, 0),
             VerticalContentAlignment = VerticalAlignment.Center,
+            ToolTip = "显示在通知卡顶部的来源名（如“家庭”），留空只显示 ntfy",
         };
         Grid.SetColumn(name, 1);
         grid.Children.Add(name);
@@ -178,8 +235,9 @@ public partial class SettingsWindow : Window
         {
             Text = sub.Url,
             Height = 26,
-            Margin = new Thickness(0, 0, 4, 0),
+            Margin = new Thickness(0, 0, 6, 0),
             VerticalContentAlignment = VerticalAlignment.Center,
+            ToolTip = "https://ntfy.sh/你的主题，程序自动补 /sse",
         };
         Grid.SetColumn(url, 2);
         grid.Children.Add(url);
@@ -190,6 +248,7 @@ public partial class SettingsWindow : Window
             Width = 96,
             Margin = new Thickness(0, 0, 4, 0),
             FontSize = 12,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
             VerticalContentAlignment = VerticalAlignment.Center,
             ToolTip = "该订阅通知弹窗的强调色（低饱和度，与微信/QQ/ntfy 同风格）",
         };
@@ -202,13 +261,22 @@ public partial class SettingsWindow : Window
         Grid.SetColumn(color, 3);
         grid.Children.Add(color);
 
+        // 删除按钮：必须显式把 MinWidth/Padding/Margin 压回 0——
+        // 全局 Button 样式给了 MinWidth=88，Width=26 会被 MinWidth 压回去，
+        // 按钮实际 88px 宽、内容居中后跑到面板外被裁掉，看起来就是“颜色右边多出一块灰”。
         var remove = new Button
         {
-            Content = "✕",
-            Height = 26,
-            Width = 24,
+            Content = "×",
+            Width = 26,
+            Height = 24,
+            MinWidth = 0,
+            MinHeight = 0,
             Padding = new Thickness(0),
-            FontSize = 11,
+            Margin = new Thickness(0),
+            FontSize = 13,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
             ToolTip = "删除这个订阅",
             Tag = grid,
         };

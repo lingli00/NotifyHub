@@ -84,6 +84,9 @@ public sealed class MediaPlayerMonitor : IDisposable
     private int _refreshing;
     private string _trackKey = string.Empty;
 
+    /// <summary>换曲时刻（Stopwatch tick，v0.2.13）：用来识别"切歌瞬间播放器还报上一首进度"。</summary>
+    private long _trackChangedAtTicks;
+
     /// <summary>
     /// 本次连续播放的起点（<see cref="Stopwatch.GetTimestamp"/>）。
     /// 仅用于"播放器不提供 timeline"时的位置兜底，暂停/停止归零。
@@ -387,6 +390,24 @@ public sealed class MediaPlayerMonitor : IDisposable
             return true;
         }
 
+        // 切歌瞬间播放器常常还没刷新 timeline，报上来的是**上一首**的位置。
+        // 真实案例：新歌 0 秒，播放器报 239s → 歌词直接跳到第 29 行（偏差 20.7 秒）。
+        if (_trackChangedAtTicks > 0)
+        {
+            var sinceChange = (nowTicks - _trackChangedAtTicks) / (double)Stopwatch.Frequency;
+            if (PlaybackClock.LooksStaleOnTrackChange(reported, sinceChange, durationSeconds))
+            {
+                _log.Routine(
+                    "Media",
+                    "忽略切歌瞬间的陈旧进度",
+                    $"pos={reported:F1}s dur={durationSeconds:F1}s since={sinceChange:F1}s");
+
+                reported = 0;
+                reportAge = 0;
+                _clock.Reset();
+            }
+        }
+
         positionSeconds = _clock.Update(reported, playing, nowTicks, reportAge);
         return true;
     }
@@ -457,6 +478,7 @@ public sealed class MediaPlayerMonitor : IDisposable
             if (!string.Equals(key, _trackKey, StringComparison.Ordinal))
             {
                 _trackKey = key;
+                _trackChangedAtTicks = Stopwatch.GetTimestamp();
                 _clock.Reset();
             }
 

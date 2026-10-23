@@ -26,6 +26,36 @@ namespace NotifyHub.Services;
 /// </summary>
 public sealed class PlaybackClock
 {
+    /// <summary>
+    /// 这一帧上报的位置是否**明显不属于当前这首歌**（v0.2.13）。
+    ///
+    /// 真实场景（2026-10-23 20:16 日志）：Folia 切到《牵丝戏》后立刻读了 timeline，
+    /// 播放器报的还是上一首的 239.36s，而新歌才刚开始、总长 210s —— 于是歌词一下跳到
+    /// 第 29 行，日志打出"换句 #29 偏差 20702ms"。用户看到的就是"歌词时间对不上"。
+    ///
+    /// 两条判据：
+    ///   · 位置 ≥ 总时长（且总时长有效）→ 不可能是这首歌的位置；
+    ///   · 切歌后 2.5 秒内，位置远大于"实际流逝的时间"→ 上一首的残留。
+    /// 命中的处理是"这次当作 0 并重置估算器"，而不是硬把播放器报的值拉回来。
+    /// </summary>
+    public static bool LooksStaleOnTrackChange(
+        double reportedSeconds, double secondsSinceTrackChange, double durationSeconds)
+    {
+        if (reportedSeconds <= 0)
+        {
+            return false;
+        }
+
+        if (durationSeconds > 0.5 && reportedSeconds > durationSeconds - 0.25)
+        {
+            return true;
+        }
+
+        return secondsSinceTrackChange >= 0
+               && secondsSinceTrackChange < 2.5
+               && reportedSeconds > secondsSinceTrackChange + 3;
+    }
+
     /// <summary>上报值与外推值偏差超过这个秒数，判定为拖动进度/切歌。</summary>
     private const double SeekThresholdSeconds = 1.5;
 

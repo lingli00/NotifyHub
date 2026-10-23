@@ -1139,6 +1139,28 @@ public static class SelfTest
                    && psi.FileName.EndsWith("notepad.exe", StringComparison.OrdinalIgnoreCase);
         });
 
+        Check("v0.2.13：切歌瞬间丢弃上一首的陈旧进度（歌词不再跳到第 29 行）", () =>
+        {
+            // 复刻 2026-10-23 20:16 的真实日志：新歌《牵丝戏》刚起，播放器报 239.36s，
+            // 而这首歌总长只有 210s、切换才过去 6 秒。
+            var logCase = PlaybackClock.LooksStaleOnTrackChange(239.36, 6.0, 210.0);
+
+            // 切歌后 0.5 秒报 30s（上一首的位置，但新歌总长 300s 没触发第一条判据）
+            var carryOver = PlaybackClock.LooksStaleOnTrackChange(30, 0.5, 300);
+
+            // 正常情况不能误杀：刚切歌 0.5 秒报 0.6s、或播了 10 秒报 100s（用户拖了进度条）
+            var fresh = !PlaybackClock.LooksStaleOnTrackChange(0.6, 0.5, 300);
+            var normal = !PlaybackClock.LooksStaleOnTrackChange(100, 10, 300);
+
+            // 时长未知（timeline 不可用）时不能只凭时间判：播了 6 秒报 239s 也该放行
+            var unknownDuration = !PlaybackClock.LooksStaleOnTrackChange(6.2, 6.0, 0);
+
+            // 0 或负数位置永远不算"陈旧"（暂停/刚起播）
+            var zero = !PlaybackClock.LooksStaleOnTrackChange(0, 0.2, 210);
+
+            return logCase && carryOver && fresh && normal && unknownDuration && zero;
+        });
+
         Check("v0.2.12 需求1：LRC [offset:] 整体偏移 + 元信息行过滤", () =>
         {
             var lrc = string.Join("\n", new[]

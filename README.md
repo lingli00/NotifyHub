@@ -5,8 +5,8 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
-**下载**：[Release v0.2.12](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.12)
-→ `NotifyHub-v0.2.12-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.12-source.zip`（完整工程）。
+**下载**：[Release v0.2.13](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.13)
+→ `NotifyHub-v0.2.13-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.13-source.zip`（完整工程）。
 
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
@@ -117,7 +117,7 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 
 ```
 NotifyHub.exe                      托盘常驻运行
-NotifyHub.exe --selftest           无界面逻辑自检（退出码 0=通过，75 项）
+NotifyHub.exe --selftest           无界面逻辑自检（退出码 0=通过，76 项）
 NotifyHub.exe --selftest-ui        通知层自检（堆叠/位置/不抢焦点）
 NotifyHub.exe --demo               弹 6 条演示通知并生成抓图
 NotifyHub.exe --dump               导出微信/QQ 的 UIA 树（适配新版界面用）
@@ -367,6 +367,11 @@ python tools\stream_latency.py         # 状态流延迟
 ---
 
 ## 八、版本
+
+**v0.2.13** — 修切歌瞬间歌词跳到末尾（播放器报上一首位置，偏差 20.7 秒）
+
+* `PlaybackClock.LooksStaleOnTrackChange()`：位置 ≥ 总时长、或切歌后 2.5 秒内位置远超实际流逝时间 → 判为上一首残留，当次按 0 处理并重置估算器；拖进度条与"时长未知"的播放器不误判
+* 其余特性与 v0.2.12 相同
 
 **v0.2.12** — 歌词本地优先 + 时间轴修正 / WorkBuddy 标签配色 / 待机左右分裂布局 / 悬浮可靠展开 / 轮询流水日志过滤
 

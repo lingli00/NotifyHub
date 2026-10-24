@@ -473,7 +473,19 @@ public sealed class IslandController : IDisposable
             }
         };
 
-        island.PlayPauseRequested += () => _ = _media.TogglePlayPauseAsync();
+        island.PlayPauseRequested += () =>
+        {
+            // v0.2.14 需求 2：播放器还没注册 SMTC 会话时（冷启动后用户手动点播放之前），
+            // 指令会被挂起等会话——这时把岛继续撑住，用户才能再按一次/按别的键，
+            // 不会一松鼠标岛就收成窄条、按钮再也点不到。
+            if (!_media.IsAvailable || !_media.HasActiveSession)
+            {
+                island.NoteUserLaunch();
+            }
+
+            _ = _media.TogglePlayPauseAsync();
+        };
+
         island.NextRequested += () => _ = _media.NextAsync();
         island.PreviousRequested += () => _ = _media.PreviousAsync();
 

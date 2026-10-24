@@ -1139,6 +1139,231 @@ public static class SelfTest
                    && psi.FileName.EndsWith("notepad.exe", StringComparison.OrdinalIgnoreCase);
         });
 
+        Check("v0.2.14 需求8：WorkBuddy 新任务不回溯推送上一轮的「完成了」", () =>
+        {
+            // 行为验证：造一个假会话记录文件，让监视器真的去 tail 它，
+            // 按「任务1 → 回复 → 安静8秒判完成 → 任务2 → 回复」追加，逐段核对推送序列。
+            var dir = Path.Combine(Path.GetTempPath(), "nh-wb-" + Guid.NewGuid().ToString("N")[..8]);
+            var project = Path.Combine(dir, "proj");
+            Directory.CreateDirectory(project);
+            var file = Path.Combine(project, "session.jsonl");
+            // 先建空文件：监视器首次接入时 offset 落在文件尾，
+            // 如果等它接上再写内容，之前的内容会被整段跳过（本测试第一次就是这么失败的）。
+            File.WriteAllText(file, string.Empty);
+
+            var emissions = new List<(string Text, bool Done)>();
+
+            try
+            {
+                WorkBuddyWatcher.RootOverride = dir;
+                using var watcher = new WorkBuddyWatcher(LogService.Shared);
+                watcher.TaskChanged += (text, done) => emissions.Add((text, done));
+                watcher.Start();
+
+                // 等它接上文件：必须接在"空文件"上，否则首次 tail 会把已有内容跳过
+                System.Threading.Thread.Sleep(2500);
+
+                void Append(string role, string payload)
+                {
+                    var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    var line = $"{{\"type\":\"message\",\"role\":\"{role}\",\"timestamp\":{ts}," +
+                               $"\"content\":[{{\"type\":\"output_text\",\"text\":\"{payload}\"}}]}}";
+                    File.AppendAllText(file, line + "\n", Encoding.UTF8);
+                }
+
+                // 第一轮：用户下发 → AI 回复（应推一条"进行中"）
+                Append("user", "帮我整理需求文档");
+                Append("assistant", "第一轮已完成");
+                System.Threading.Thread.Sleep(2000);
+                var afterFirstReply = emissions.Count;
+
+                // 安静 8 秒 → 判定完成（应再推一条"完成了"）
+                System.Threading.Thread.Sleep(9500);
+                var afterQuiet = emissions.Count;
+
+                // 第二轮：同一会话里下发新任务（**不能**把上一轮的完成消息再推一遍）
+                Append("user", "再帮我拆一下任务");
+                System.Threading.Thread.Sleep(2500);
+                var afterNewTask = emissions.Count;
+
+                // 第二轮 AI 回复 → 推这一轮的进度
+                Append("assistant", "第二轮已完成");
+                System.Threading.Thread.Sleep(2000);
+                var afterSecondReply = emissions.Count;
+
+                LogService.Shared.Write(LogLevel.Info, "SelfTest", "WorkBuddy 轮次隔离诊断",
+                    $"序列=[{string.Join(" → ", emissions.Select(e => (e.Done ? "D:" : "R:") + e.Text))}] " +
+                    $"first={afterFirstReply} quiet={afterQuiet} newTask={afterNewTask} reply={afterSecondReply}");
+
+                return afterFirstReply == 1
+                       && afterQuiet == 2
+                       && afterNewTask == 2
+                       && afterSecondReply == 3
+                       && emissions[0].Text == "第一轮已完成" && !emissions[0].Done
+                       && emissions[1].Text == "第一轮已完成" && emissions[1].Done
+                       && emissions[2].Text == "第二轮已完成" && !emissions[2].Done;
+            }
+            finally
+            {
+                WorkBuddyWatcher.RootOverride = null;
+                try
+                {
+                    Directory.Delete(dir, true);
+                }
+                catch
+                {
+                    // 清理失败不影响结论
+                }
+            }
+        });
+
+        Check("v0.2.14 需求7：消息身份稳定 + 已推送标记跨重启生效（旧消息不再补发）", () =>
+        {
+            // 同一条微信消息的两种面貌：未读时带 "[3条] "，点开后只剩正文
+            var unread = MessageTextParser.Parse(new[] { "我的朋友们", "[3条] xiy624: 不是不对吧", "昨天 09:56" });
+            var read = MessageTextParser.Parse(new[] { "我的朋友们", "xiy624: 不是不对吧", "昨天 09:56" });
+
+            var identityStable = unread is not null && read is not null
+                                 && unread.Identity.Length > 0
+                                 && string.Equals(unread.Identity, read.Identity, StringComparison.Ordinal);
+
+            // 差分：摘要变了（前缀被消掉）但身份没变 → 不算新消息
+            var tracker = new SessionDiffTracker();
+            // 第一轮建基线（基线轮本身不产通知），之后才谈"算不算新消息"
+            tracker.Diff(new[] { unread! }, DateTime.Now, out _);
+            var first = tracker.Diff(new[] { unread! }, DateTime.Now.AddSeconds(1), out var baseline1);
+            var second = tracker.Diff(new[] { read! }, DateTime.Now.AddSeconds(2), out var baseline2);
+            var diffStable = !baseline1 && !baseline2 && first.Count == 0 && second.Count == 0;
+
+            // 换成另一句话 → 必须算新消息
+            var other = MessageTextParser.Parse(new[] { "我的朋友们", "xiy624: 还是不上班", "昨天 10:01" });
+            var third = tracker.Diff(new[] { other! }, DateTime.Now.AddSeconds(2), out _);
+            var diffDetects = third.Count == 1;
+
+            // 已推送标记：模拟"进程重启"——用同一个文件新建一个 store，标记必须还在
+            var dir = Path.Combine(Path.GetTempPath(), "nh-cursor-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(dir);
+
+            try
+            {
+                var file = Path.Combine(dir, "cursor.json");
+                var id = DedupCache.Hash("wechat\u0001我的朋友们\u0001xiy624: 不是不对吧");
+
+                var storeA = new MessageCursorStore(file);
+                var before = storeA.WasPushed("wechat", id);
+                storeA.MarkPushed("wechat", id);
+                storeA.Flush();
+
+                var storeB = new MessageCursorStore(file);
+                var after = storeB.WasPushed("wechat", id);
+
+                LogService.Shared.Write(LogLevel.Info, "SelfTest", "微信去重诊断",
+                    $"identityStable={identityStable} diffStable={diffStable} diffDetects={diffDetects} before={before} after={after}");
+
+                return identityStable && diffStable && diffDetects && !before && after;
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(dir, true);
+                }
+                catch
+                {
+                    // 清理失败不影响结论
+                }
+            }
+        });
+
+        Check("v0.2.14 需求3/4：进程挂着但没播放/没任务 → 仍是待机（场景 B）", () =>
+        {
+            return RunSta(() =>
+            {
+                var island = new IslandWindow
+                {
+                    ModeProvider = () => "Fixed",
+                    MusicEnabledProvider = () => true,
+                    MarqueeSpeedProvider = () => 45,
+                    LyricsEnabledProvider = () => true,
+                    SavedPositionProvider = () => null,
+                };
+
+                try
+                {
+                    island.ApplyTheme(ThemePalette.Create(new AppConfig()));
+
+                    // 播放器 + WorkBuddy 进程都在，但都没在干活：必须算待机（左右双击唤起仍可用）
+                    island.SetPresence(true, true, "Folia");
+                    var idleWithProcesses = island.IsIdleStandby;
+
+                    // 真的开始播放 → 信息展示
+                    island.SetMedia(new MediaInfo("侧脸", "魏语诺", "FOLIA", true, "", "Folia", 3, 214));
+                    var playing = !island.IsIdleStandby;
+
+                    // 播完停下（进程还在）→ 等 2.2 秒隐藏宽限期过完，回到待机。
+                    // 注意：RunSta 的消息循环不会自己转，必须手动泵 dispatcher，定时器才会走。
+                    island.SetMedia(null);
+                    var deadline = DateTime.UtcNow.AddSeconds(5);
+                    while (DateTime.UtcNow < deadline && island.IsIdleStandby == false)
+                    {
+                        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                            () => { }, System.Windows.Threading.DispatcherPriority.Background);
+                        System.Threading.Thread.Sleep(50);
+                    }
+
+                    var backToIdle = island.IsIdleStandby;
+
+                    return idleWithProcesses && playing && backToIdle;
+                }
+                finally
+                {
+                    island.Close();
+                }
+            });
+        });
+
+        Check("v0.2.14 需求6：提示音峰值归一化（不动系统音量也能更响）", () =>
+        {
+            var target = SoundService.PeakNormalizeTarget;
+
+            // 合成一篇并读回 WAV 峰值：必须被拉到目标附近，且不超过满刻度
+            var notes = SoundService.MessageTone("DingDong");
+            new SoundService(LogService.Shared).Preview(notes, 100);
+
+            var dir = Path.Combine(AppPaths.Root, "sounds");
+            if (!Directory.Exists(dir))
+            {
+                return false;
+            }
+
+            var newest = new DirectoryInfo(dir).GetFiles("tone-*.wav")
+                .OrderByDescending(f => f.LastWriteTimeUtc).FirstOrDefault();
+            if (newest is null)
+            {
+                return false;
+            }
+
+            var bytes = File.ReadAllBytes(newest.FullName);
+            var peak = 0;
+            for (var i = 44; i + 1 < bytes.Length; i += 2)
+            {
+                var sample = (short)(bytes[i] | (bytes[i + 1] << 8));
+                var magnitude = sample == short.MinValue ? short.MaxValue : Math.Abs(sample);
+                if (magnitude > peak)
+                {
+                    peak = magnitude;
+                }
+            }
+
+            var ratio = peak / (double)short.MaxValue;
+
+            LogService.Shared.Write(LogLevel.Info, "SelfTest", "提示音增益诊断",
+                $"target={target} peak={ratio:F3} file={newest.Name}");
+
+            // 目标 0.92：允许合成/量化的少量误差，但必须明显高于旧的 ~0.42
+            return Math.Abs(target - 0.92) < 1e-6 && ratio >= 0.85 && ratio <= 1.0;
+        });
+
         Check("v0.2.13：切歌瞬间丢弃上一首的陈旧进度（歌词不再跳到第 29 行）", () =>
         {
             // 复刻 2026-10-23 20:16 的真实日志：新歌《牵丝戏》刚起，播放器报 239.36s，
@@ -1249,42 +1474,9 @@ public static class SelfTest
             }
         });
 
-        Check("v0.2.12 需求3：播放器进程在跑就保留左栏音乐区（图标 + 三键 + 空歌名）", () =>
-        {
-            return RunSta(() =>
-            {
-                var island = new IslandWindow
-                {
-                    ModeProvider = () => "Fixed",
-                    MusicEnabledProvider = () => true,
-                    MarqueeSpeedProvider = () => 45,
-                    LyricsEnabledProvider = () => true,
-                    SavedPositionProvider = () => null,
-                };
+        // v0.2.14 起"进程在跑但没播放"算场景 B（仍待机），这条旧断言由上面的
+        // 「v0.2.14 需求3/4：进程挂着但没播放/没任务 → 仍是待机」取代。
 
-                try
-                {
-                    island.ApplyTheme(ThemePalette.Create(new AppConfig()));
-
-                    island.SetPresence(false, false);
-                    var noMusic = island.HasMusicContent;
-
-                    // 只开播放器、还没播放：音乐区必须已经在（需求 3 的核心）
-                    island.SetPresence(true, false, "Folia");
-                    var withMusic = island.HasMusicContent;
-
-                    // 关掉播放器：音乐区收回
-                    island.SetPresence(false, false);
-                    var backOff = island.HasMusicContent;
-
-                    return !noMusic && withMusic && !backOff;
-                }
-                finally
-                {
-                    island.Close();
-                }
-            });
-        });
 
         Check("v0.2.12 需求5：轮询流水日志默认不落盘 + 相同行 2 秒内去重", () =>
         {
@@ -1320,7 +1512,7 @@ public static class SelfTest
             }
         });
 
-        Check("v0.2.11 需求2/4：待机空闲 ⇄ 信息展示 模式判定（进程在线即退出待机）", () =>
+        Check("v0.2.11 需求2/4（v0.2.14 改写）：进程在线≠信息展示，播放/任务才算", () =>
         {
             return RunSta(() =>
             {
@@ -1337,27 +1529,28 @@ public static class SelfTest
                 {
                     island.ApplyTheme(ThemePalette.Create(new AppConfig()));
 
-                    // 什么都没有：待机空闲
+                    // v0.2.14 需求 3/4：进程挂着但没播放/没任务 → 仍然是待机（场景 B）
                     island.SetPresence(false, false);
                     var idle = island.IsIdleStandby;
 
-                    // 只开播放器（还没播放）：不再是待机
-                    island.SetPresence(true, false);
+                    island.SetPresence(true, false, "Folia");
                     var musicPresence = island.IsIdleStandby;
 
-                    // 只开 WorkBuddy（没有任务）：不再是待机
                     island.SetPresence(false, true);
                     var wbPresence = island.IsIdleStandby;
 
-                    // 两个都开：仍然不是待机
-                    island.SetPresence(true, true);
+                    island.SetPresence(true, true, "Folia");
                     var both = island.IsIdleStandby;
 
-                    // 全部关掉：回到待机
-                    island.SetPresence(false, false);
-                    var backToIdle = island.IsIdleStandby;
+                    // 正在跑任务 → 信息展示（场景 A）
+                    island.ShowRunning("正在整理需求文档结构", "WorkBuddy");
+                    var withTask = !island.IsIdleStandby;
 
-                    return idle && !musicPresence && !wbPresence && !both && backToIdle;
+                    // 任务在跑时再把进程全部关掉：仍然是信息展示（任务本身就是内容，与进程无关）
+                    island.SetPresence(false, false);
+                    var taskKeepsInfo = !island.IsIdleStandby;
+
+                    return idle && musicPresence && wbPresence && both && withTask && taskKeepsInfo;
                 }
                 finally
                 {

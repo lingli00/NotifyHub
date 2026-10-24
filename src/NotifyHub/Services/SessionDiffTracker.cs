@@ -12,6 +12,15 @@ public sealed class SessionDiffTracker
 {
     private static readonly TimeSpan RebaselineGap = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// 差分用的键：优先 <see cref="SessionRow.Identity"/>（剥掉未读/置顶装饰的稳定文本），
+    /// 没有 Identity 时退回原始摘要。v0.2.14 需求 7：旧版直接比摘要，
+    /// 用户点开微信消掉未读红点 → 摘要从 “[3条] 张三: 内容” 变成 “张三: 内容”
+    /// → 被判成“新消息”再弹一次（历史消息重复推送的根因）。
+    /// </summary>
+    private static string KeyOf(SessionRow row)
+        => row.Identity.Length > 0 ? row.Identity : row.Summary;
+
     private readonly Dictionary<string, string> _lastSummary = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _previousSummary = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _lastIndex = new(StringComparer.Ordinal);
@@ -116,7 +125,7 @@ public sealed class SessionDiffTracker
                             continue; // 会话已消失，不补发
                         }
 
-                        if (!string.Equals(fresh.Summary, pair.Value, StringComparison.Ordinal)
+                        if (!string.Equals(KeyOf(fresh), pair.Value, StringComparison.Ordinal)
                             && !string.IsNullOrWhiteSpace(fresh.Summary))
                         {
                             changes.Add(fresh);
@@ -143,7 +152,7 @@ public sealed class SessionDiffTracker
                 seen.Add(row.Contact);
 
                 var changed = !_lastSummary.TryGetValue(row.Contact, out var previous)
-                              || !string.Equals(previous, row.Summary, StringComparison.Ordinal);
+                              || !string.Equals(previous, KeyOf(row), StringComparison.Ordinal);
 
                 // 同文本新消息：对方又发了一条与上一条文本完全相同的消息时摘要不变，
                 // 但未读数会 +1——未读数递增同样算变化（修复“同文本消息被吞”）。
@@ -186,7 +195,7 @@ public sealed class SessionDiffTracker
                 // 否则下一轮会把旧内容当新消息（误报），且真实变化可能被空值周期吞掉
                 if (!string.IsNullOrEmpty(row.Summary))
                 {
-                    _lastSummary[row.Contact] = row.Summary;
+                    _lastSummary[row.Contact] = KeyOf(row);
                     _lastUnread[row.Contact] = row.UnreadCount;
                 }
             }
@@ -223,7 +232,7 @@ public sealed class SessionDiffTracker
 
         for (var i = 0; i < rows.Count; i++)
         {
-            _lastSummary[rows[i].Contact] = rows[i].Summary;
+            _lastSummary[rows[i].Contact] = KeyOf(rows[i]);
             _lastIndex[rows[i].Contact] = i;
             _lastUnread[rows[i].Contact] = rows[i].UnreadCount;
         }

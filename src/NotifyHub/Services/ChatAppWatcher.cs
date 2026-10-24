@@ -107,6 +107,19 @@ public abstract class ChatAppWatcher : PollingWatcherBase
             Log.Info(Name, $"建立基线：{rows.Count} 个会话（本轮不通知）");
             OnBaseline(rows.Count);
 
+            // 升级兼容（v0.2.14 需求 7）：从"没有已推送数据"的老版本升上来时，
+            // 把当前屏幕上的会话全部标记为已推送——否则升级后第一次差分就会把
+            // 用户早看过的东西补弹一遍（旧消息重复推送）。
+            if (_cursorStore.IsUpgradeWithoutPushedData)
+            {
+                foreach (var row in rows)
+                {
+                    _cursorStore.MarkPushed(SourceKey, MessageId(row));
+                }
+
+                Log.Info(Name, $"升级兼容：{rows.Count} 个会话已标记为推送过（不补发历史）");
+            }
+
             // 基线轮也可能带出“恢复期补发”（读列表中断超过 30 秒后与旧快照的差集）。
             // 这些可能是真实到达过的消息，但也可能是用户早已看过、只是 UIA 抽风的老消息
             // ——必须带未读证据才放行（需求 7：打开微信不重弹旧消息）。
@@ -150,6 +163,18 @@ public abstract class ChatAppWatcher : PollingWatcherBase
                     $"跳过无未读证据的旧消息: {row.Contact}", TimeSpan.FromSeconds(30));
                 continue;
             }
+            // 消息身份（v0.2.14 需求 7）：联系人 + 剥掉未读/置顶装饰后的稳定文本。
+            // 微信里同一条消息会以两种面貌出现：未读时“[3条] 张三: 内容”，点开后“张三: 内容”。
+            // 用身份判定后，点开微信不会再触发一次推送；跨进程重启也不会补发。
+            var messageId = MessageId(row);
+
+            if (_cursorStore.WasPushed(SourceKey, messageId))
+            {
+                // 已经推送过：只更新游标，不再通知（旧消息重复弹窗的根因就在这里）
+                Log.Write(LogLevel.Debug, Name,
+                    $"跳过已推送过的消息: {row.Contact} → {LogService.Truncate(row.Identity, 40)}");
+                continue;
+            }
             // 接收阶段过滤（不弹窗、不响铃、不进事件列表）
             if (!ShouldEmit(row, config))
             {
@@ -161,6 +186,9 @@ public abstract class ChatAppWatcher : PollingWatcherBase
             // 消息游标：记录“最后一条已展示消息”的边界，重启后从这里继续
             _cursorStore.Update(SourceKey, row.Contact, row.Summary);
 
+            // 已推送标记：一条消息只推一次（7 天内有效，超期自然清理）
+            _cursorStore.MarkPushed(SourceKey, messageId);
+
             Emit(new NotifyMessage
             {
                 Source = Source,
@@ -170,6 +198,13 @@ public abstract class ChatAppWatcher : PollingWatcherBase
             });
         }
     }
+
+    /// <summary>
+    /// 这条消息的唯一 ID（v0.2.14 需求 7）：来源 + 联系人 + 稳定身份 的短哈希。
+    /// 已读/未读装饰变化不会改变它，所以同一条消息无论何时出现都算同一条。
+    /// </summary>
+    protected string MessageId(SessionRow row)
+        => DedupCache.Hash($"{SourceKey}\u0001{row.Contact}\u0001{row.Identity}");
 
     /// <summary>
     /// 是否放行该会话（子类可覆写做过滤）。默认全部放行（QQ 不做过滤）。

@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using NotifyHub.Models;
 
 namespace NotifyHub.Services;
 
@@ -31,6 +32,12 @@ public sealed class WorkBuddyWatcher : IDisposable
     private string? _path;      // 当前跟踪的会话文件
     private long _offset;       // 已读到的字节偏移
     private string _emitKey = "";  // 上次推送的内容（去重）
+
+    /// <summary>
+    /// 当前任务轮次（v0.2.14 需求 8）：每次用户在会话里下发新任务 +1。
+    /// 推送键里带上它，保证「上一轮已推送过的完成消息」绝不会被这一轮再推一次。
+    /// </summary>
+    private int _turnId;
 
     // 最近事件状态（只在 _gate 内访问）
     private string _lastAction = "";
@@ -64,9 +71,12 @@ public sealed class WorkBuddyWatcher : IDisposable
         _log.Info("WorkBuddy", "任务进度监视已启动", Root);
     }
 
-    private static string Root => Path.Combine(
+    private static string Root => RootOverride ?? Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".workbuddy", "projects");
+
+    /// <summary>测试用：把 projects 根目录指到临时目录（自检的行为验证走这条）。</summary>
+    internal static string? RootOverride { get; set; }
 
     private void Loop()
     {
@@ -237,7 +247,11 @@ public sealed class WorkBuddyWatcher : IDisposable
 
     private void Emit(string text, bool done)
     {
-        var key = (done ? "D|" : "R|") + text;
+        // 轮次号进键（v0.2.14 需求 8）：
+        //   同一轮里同样的文字只推一次（原来就这样）；
+        //   换轮后同样的文字允许再推一次（新任务的真实进度，应该推）。
+        // 关键是"轮次切换时不会把上一轮的 D|xxx 再推一遍"——见 ParseLine 里对新任务的复位。
+        var key = $"T{_turnId}|" + (done ? "D|" : "R|") + text;
         if (key == _emitKey)
         {
             return;
@@ -292,7 +306,29 @@ public sealed class WorkBuddyWatcher : IDisposable
 
                 case "message":
                 {
-                    if (!root.TryGetProperty("role", out var roleEl) || roleEl.GetString() != "assistant")
+                    if (!root.TryGetProperty("role", out var roleEl))
+                    {
+                        return;
+                    }
+
+                    // 用户在同一个会话里下发新任务（v0.2.14 需求 8）：
+                    // 开启新轮次，并清空上一轮留下的回复/动作状态。
+                    // 不清的话，新任务刚开始时 CurrentState() 还拿着上一轮的回复文字，
+                    // 于是先把上一轮的“完成了”当成本轮进度推一遍（用户看到的重复推送）。
+                    if (roleEl.GetString() == "user")
+                    {
+                        _turnId++;
+                        _lastReply = string.Empty;
+                        _lastReplyTs = 0;
+                        _lastAction = string.Empty;
+                        _lastActionTs = 0;
+                        _emitKey = string.Empty;
+                        _log.Write(LogLevel.Debug, "WorkBuddy",
+                            $"新任务轮次 #{_turnId}（清空上一轮通知状态）");
+                        return;
+                    }
+
+                    if (roleEl.GetString() != "assistant")
                     {
                         return;
                     }

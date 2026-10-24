@@ -16,7 +16,21 @@ namespace NotifyHub.Services.Parsing;
 /// “无发言人结构的未读推送”拦截，不算自己发送。
 /// 需求 4：自己发的消息一律不推送。
 /// </summary>
-public sealed record SessionRow(string Contact, string Summary, bool Muted = false, string Signals = "", bool HasUnread = false, int UnreadCount = 0, bool FromSelf = false);
+/// <summary>
+/// 一条会话行。<paramref name="Identity"/> 是"这条消息的稳定身份"（v0.2.14 需求 7）：
+/// 摘要里会随时间变化的装饰（未读数前缀 [N条]、已置顶、有人@我、空白）都剥掉后的文本。
+/// 差分与去重都用它 —— 用户点开微信把未读红点消掉时，摘要会变但 Identity 不变，
+/// 于是不会再被当成"新消息"重复推送（旧消息重复弹窗的根因）。
+/// </summary>
+public sealed record SessionRow(
+    string Contact,
+    string Summary,
+    bool Muted = false,
+    string Signals = "",
+    bool HasUnread = false,
+    int UnreadCount = 0,
+    bool FromSelf = false,
+    string Identity = "");
 
 /// <summary>
 /// 把 UIA 抓到的文本片段还原成 (联系人, 摘要)。
@@ -66,6 +80,34 @@ public static partial class MessageTextParser
         "已读", "未读", "免打扰", "草稿", "消息免打扰", "[草稿]", "有人@我", "[有人@我]",
         "已置顶", "置顶",
     };
+
+    /// <summary>
+    /// 把摘要规整成"消息身份"：去掉一切会随时间/用户操作变化的装饰，
+    /// 只留稳定内容（v0.2.14 需求 7：旧消息重复推送的根因就是这些装饰）。
+    ///
+    /// 会变的：未读数前缀 "[63条] "、"已置顶"、"有人@我"、首尾空白、连续空白。
+    /// 不变的："发言人: 正文"（同一群不同人发的消息身份不同，不会被互相抵消）。
+    /// </summary>
+    public static string NormalizeIdentity(string? summary)
+    {
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return string.Empty;
+        }
+
+        var text = summary.Trim();
+        text = PinnedPrefixRegex().Replace(text, string.Empty);
+        text = UnreadPrefixRegex().Replace(text, string.Empty);
+        text = AtMePrefixRegex().Replace(text, string.Empty);
+
+        // 压平连续空白（微信 4.x 有时在冒号后补一个全角空格）
+        while (text.Contains("  ", StringComparison.Ordinal))
+        {
+            text = text.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        return text.Trim();
+    }
 
     /// <summary>
     /// 解析一条会话项的文本序列。
@@ -150,7 +192,13 @@ public static partial class MessageTextParser
         // 自己发送 = 裸内容且无未读证据（自己发的消息不进未读数）；
         // 带未读证据的裸内容是官方账号推送，交给过滤层拦，不算自己发送。
         var fromSelf = summary.Length > 0 && !HasSpeakerPrefix(summary) && !hasUnread;
-        return new SessionRow(contact, summary, HasUnread: hasUnread, UnreadCount: unreadCount, FromSelf: fromSelf);
+        return new SessionRow(
+            contact,
+            summary,
+            HasUnread: hasUnread,
+            UnreadCount: unreadCount,
+            FromSelf: fromSelf,
+            Identity: NormalizeIdentity(summary));
     }
 
     /// <summary>

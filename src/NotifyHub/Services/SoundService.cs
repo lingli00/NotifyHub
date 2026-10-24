@@ -129,8 +129,10 @@ public sealed class SoundService : IDisposable
             Directory.CreateDirectory(dir);
 
             // 文件名按音符序列指纹：换音色自动换文件，互不覆盖。
-            // 指纹里带合成增益常量——v0.2.4 调大音量后旧缓存文件不能继续用。
-            var sig = string.Join("|", notes.Select(n => $"{n.Freq:0.##}-{n.Ms}-{n.Vol}")) + "|g" + WaveGain.ToString("0.##");
+            // 指纹里带合成参数（增益 + 峰值归一化目标 + 增益上限）——
+            // v0.2.14 改了峰值归一化，旧缓存文件不能继续用。
+            var sig = string.Join("|", notes.Select(n => $"{n.Freq:0.##}-{n.Ms}-{n.Vol}"))
+                      + $"|g{WaveGain:0.##}|p{PeakTarget:0.##}|m{MaxPeakGain:0.##}";
             var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sig)))[..12];
             path = Path.Combine(dir, $"tone-{hash}.wav");
 
@@ -162,8 +164,67 @@ public sealed class SoundService : IDisposable
     /// </summary>
     private const double WaveGain = 1.0;
 
+    /// <summary>
+    /// 峰值归一化目标（v0.2.14 需求 6）：合成后把整篇 WAV 拉到该峰值。
+    ///
+    /// 为什么还要这一层：各音符的 volume 是 0.26~0.5 的音色调校值，乘上用户音量
+    /// （默认 80%）后实际响度只有系统的四成左右——用户反馈"提示音只有正常音量的
+    /// 一半，很难听见"。这里在合成阶段把峰值拉到 0.92，等效 +6~8dB，
+    /// **不动系统全局音量**；设置里的音量滑块仍然叠加在这之上。
+    /// </summary>
+    private const double PeakTarget = 0.92;
+
+    /// <summary>
+    /// 峰值归一化的增益上限：防止把近乎静音的音色放大成噪声。
+    /// 3.0 是实测出来的——默认音色合成后峰值只有 0.35，拉到 0.92 需要 2.64 倍，
+    /// 留一点余量但不至于把静音段放大成电流声。
+    /// </summary>
+    private const double MaxPeakGain = 3.0;
+
     /// <summary>合成增益（供自检断言用，运行时不可改）。</summary>
     internal static double SynthesisGain => WaveGain;
+
+    /// <summary>峰值归一化目标（供自检断言用）。</summary>
+    internal static double PeakNormalizeTarget => PeakTarget;
+
+    /// <summary>
+    /// 把整篇样本的峰值拉到 <see cref="PeakTarget"/>（v0.2.14 需求 6）。
+    /// 只放大不压低（峰值超标的音符本就该被削），且增益封顶 <see cref="MaxPeakGain"/>。
+    /// </summary>
+    private static void NormalizePeak(List<short> samples)
+    {
+        if (samples.Count == 0)
+        {
+            return;
+        }
+
+        var peak = 0;
+        foreach (var sample in samples)
+        {
+            var magnitude = sample == short.MinValue ? short.MaxValue : Math.Abs(sample);
+            if (magnitude > peak)
+            {
+                peak = magnitude;
+            }
+        }
+
+        if (peak <= 0)
+        {
+            return;
+        }
+
+        var target = (int)Math.Round(PeakTarget * short.MaxValue);
+        var gain = Math.Min(MaxPeakGain, target / (double)peak);
+        if (gain <= 1.0)
+        {
+            return; // 已经够响，不再放大
+        }
+
+        for (var i = 0; i < samples.Count; i++)
+        {
+            samples[i] = (short)Math.Clamp((int)Math.Round(samples[i] * gain), short.MinValue, short.MaxValue);
+        }
+    }
 
     private static byte[] BuildWav((double Freq, int Ms, double Volume)[] notes, int sampleRate = 44100)
     {
@@ -195,6 +256,9 @@ public sealed class SoundService : IDisposable
                 samples.Add((short)(Math.Clamp(scaled, -1.0, 1.0) * short.MaxValue));
             }
         }
+
+        // v0.2.14 需求 6：合成完统一拉到目标峰值（提示音偏小的根因是音符调校音量太小）
+        NormalizePeak(samples);
 
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);

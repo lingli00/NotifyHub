@@ -131,12 +131,20 @@ public sealed class MediaPlayerMonitor : IDisposable
         }
     }
 
-    /// <summary>播放/暂停切换（当前活跃的白名单会话）。</summary>
+    /// <summary>
+    /// 播放/暂停切换（当前活跃的白名单会话）。
+    ///
+    /// v0.2.14 需求 2：**冷启动拉起播放器后的几秒内它还没注册 SMTC 会话**，
+    /// 这时 <see cref="PickSession"/> 返回 null，旧版直接静默返回——用户看到的
+    /// 就是"双击唤起了播放器，但灵动岛上的播放键按了没反应"。
+    /// 现在把指令挂起，后台每 300ms 重试，最长等 <see cref="PendingCommandWaitMs"/>。
+    /// </summary>
     public async Task TogglePlayPauseAsync()
     {
         var session = PickSession();
         if (session is null)
         {
+            QueuePending(PendingKind.Toggle);
             return;
         }
 
@@ -151,6 +159,8 @@ public sealed class MediaPlayerMonitor : IDisposable
             {
                 await session.TryPlayAsync();
             }
+
+            _log.Info("Media", "已切换播放/暂停", session.SourceAppUserModelId);
         }
         catch (Exception ex)
         {
@@ -163,12 +173,14 @@ public sealed class MediaPlayerMonitor : IDisposable
         var session = PickSession();
         if (session is null)
         {
+            QueuePending(PendingKind.Next);
             return;
         }
 
         try
         {
             await session.TrySkipNextAsync();
+            _log.Info("Media", "已切下一首", session.SourceAppUserModelId);
         }
         catch (Exception ex)
         {
@@ -181,18 +193,171 @@ public sealed class MediaPlayerMonitor : IDisposable
         var session = PickSession();
         if (session is null)
         {
+            QueuePending(PendingKind.Previous);
             return;
         }
 
         try
         {
             await session.TrySkipPreviousAsync();
+            _log.Info("Media", "已切上一首", session.SourceAppUserModelId);
         }
         catch (Exception ex)
         {
             _log.Warn("Media", "切上一首失败", ex.Message);
         }
     }
+
+    // ---------------- 冷启动挂起指令（v0.2.14 需求 2） ----------------
+
+    private enum PendingKind
+    {
+        None,
+        Toggle,
+        Next,
+        Previous,
+    }
+
+    /// <summary>
+    /// 挂起指令最长等待时间（v0.2.14 实测校准）：原定 6 秒，实测本机 Folia 冷启动后
+    /// 要等用户在它自己的界面里点播放才注册 SMTC 会话，可能远超 6 秒。
+    /// 放到 20 秒：既覆盖"启动慢"，又不至于让一条失效指令挂太久。
+    /// </summary>
+    private const int PendingCommandWaitMs = 20_000;
+
+    /// <summary>重试间隔。</summary>
+    private const int PendingRetryMs = 300;
+
+    private readonly object _pendingGate = new();
+    private PendingKind _pending;
+    private long _pendingSinceTicks;
+    private int _pendingRunning;
+
+    /// <summary>当前是否拿得到可控制的播放器会话（冷启动后、真正开播前为 false）。</summary>
+    public bool HasActiveSession => PickSession() is not null;
+
+    /// <summary>当前是否有等待执行的播放指令（诊断/自检用）。</summary>
+    public bool HasPendingCommand
+    {
+        get
+        {
+            lock (_pendingGate)
+            {
+                return _pending != PendingKind.None;
+            }
+        }
+    }
+
+    /// <summary>会话还没就绪：把指令挂起，并启动一次性重试任务。</summary>
+    private void QueuePending(PendingKind kind)
+    {
+        lock (_pendingGate)
+        {
+            // 后来的指令覆盖前面的（用户连按两下，执行最后一次意图即可）
+            _pending = kind;
+            _pendingSinceTicks = Stopwatch.GetTimestamp();
+
+            if (_pendingRunning == 1)
+            {
+                return; // 已有重试循环在跑
+            }
+
+            _pendingRunning = 1;
+        }
+
+        _log.Info("Media", "播放器会话未就绪，指令挂起", $"{kind}（最多等 {PendingCommandWaitMs / 1000}s）");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(PendingRetryMs).ConfigureAwait(false);
+
+                    PendingKind kind2;
+                    long since;
+                    lock (_pendingGate)
+                    {
+                        if (_pending == PendingKind.None)
+                        {
+                            return;
+                        }
+
+                        kind2 = _pending;
+                        since = _pendingSinceTicks;
+
+                        var waitedMs = (Stopwatch.GetTimestamp() - since) / (double)Stopwatch.Frequency * 1000;
+                        if (waitedMs > PendingCommandWaitMs)
+                        {
+                            _pending = PendingKind.None;
+                            _log.Warn("Media", "播放指令超时放弃", $"{kind2}（等了 {waitedMs:F0}ms 仍无会话）");
+                            return;
+                        }
+                    }
+
+                    var session = PickSession();
+                    if (session is null)
+                    {
+                        continue;
+                    }
+
+                    bool ok;
+                    try
+                    {
+                        ok = kind2 switch
+                        {
+                            PendingKind.Toggle => await ToggleAsync(session).ConfigureAwait(false),
+                            PendingKind.Next => await SkipAsync(session, next: true).ConfigureAwait(false),
+                            PendingKind.Previous => await SkipAsync(session, next: false).ConfigureAwait(false),
+                            _ => false,
+                        };
+                    }
+                    catch
+                    {
+                        ok = false;
+                    }
+
+                    lock (_pendingGate)
+                    {
+                        // 只有当挂起的还是同一条指令时才清掉（期间用户可能又按了别的）
+                        if (_pending == kind2)
+                        {
+                            _pending = PendingKind.None;
+                        }
+                    }
+
+                    if (ok)
+                    {
+                        _log.Info("Media", "挂起指令已执行", $"{kind2}");
+                    }
+
+                    return;
+                }
+            }
+            finally
+            {
+                lock (_pendingGate)
+                {
+                    _pendingRunning = 0;
+                }
+            }
+        });
+    }
+
+    private static async Task<bool> ToggleAsync(GlobalSystemMediaTransportControlsSession session)
+    {
+        if (session.GetPlaybackInfo().PlaybackStatus
+            == GlobalSystemMediaTransportControlsSessionPlaybackStatus.Playing)
+        {
+            return await session.TryPauseAsync();
+        }
+
+        return await session.TryPlayAsync();
+    }
+
+    private static async Task<bool> SkipAsync(GlobalSystemMediaTransportControlsSession session, bool next)
+        => next ? await session.TrySkipNextAsync() : await session.TrySkipPreviousAsync();
 
     private void OnSessionsChanged(
         GlobalSystemMediaTransportControlsSessionManager sender,

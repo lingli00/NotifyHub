@@ -116,6 +116,12 @@ public partial class IslandWindow : Window
     /// <summary>当前是否在显示"WorkBuddy 在线"占位行。</summary>
     private bool _presenceVisible;
 
+    /// <summary>
+    /// 待机展示用的左栏音乐组（v0.2.14 需求 3）：播放器进程在跑但没在放歌时显示
+    /// 「图标 + 空歌名区 + 三个播放键」。它只是形态，不算内容（不阻止收纳、不算信息展示）。
+    /// </summary>
+    private bool _standbyMusicShown;
+
     /// <summary>检测到的播放器进程名（v0.2.12 需求 3：没有播放会话时也要能显示它的图标）。</summary>
     private string? _presenceMusicProcess;
 
@@ -133,6 +139,17 @@ public partial class IslandWindow : Window
 
     /// <summary>细条最近一次现身的时间（防止刚收起就被展开，v0.2.9 需求 2）。</summary>
     private long _stripShownAtMs;
+
+    /// <summary>
+    /// 「用户刚双击唤起」的保持截止时刻（v0.2.14 需求 2）。
+    /// 从待机条双击拉起播放器/WorkBuddy 后的这段时间里，岛保持展开成待机展示态
+    /// （左栏图标 + 三个播放键），用户才有机会点播放键——否则一松开鼠标就收成窄条，
+    /// 需求 2 的"通过灵动岛按钮控制冷启动的播放器"根本没法操作。
+    /// </summary>
+    private long _launchHoldUntilMs;
+
+    /// <summary>保持时长：15 秒（够播放器起来并注册 SMTC，也不至于长期占屏）。</summary>
+    private const int LaunchHoldMs = 15_000;
 
     /// <summary>
     /// 唯一的「超时自动收纳」计时器（v0.2.7 需求 2）。
@@ -497,8 +514,8 @@ public partial class IslandWindow : Window
 
         LyricsPanel.Visibility = hasLyric ? Visibility.Visible : Visibility.Collapsed;
 
-        // 有词 → 占位让位；没词但音乐组还在（待机）→ 用占位撑住"歌词区域留空"
-        LyricSpacer.Visibility = hasLyric || !_musicVisible
+        // 有词 → 占位让位；没词但左栏还在（播放中或待机展示）→ 用占位撑住"歌词区域留空"
+        LyricSpacer.Visibility = hasLyric || !(_musicVisible || _standbyMusicShown)
             ? Visibility.Collapsed
             : Visibility.Visible;
 
@@ -711,9 +728,16 @@ public partial class IslandWindow : Window
     /// **只有这个模式**才有"左右分区悬浮配色 + 双击快捷唤起"；
     /// 一旦进程在线或来了内容，就进入信息展示模式，那些待机交互全部关闭。
     /// </summary>
+    /// <summary>
+    /// 是否处于「待机空闲模式」（v0.2.14 需求 3/4/5 重新定义）。
+    ///
+    /// 待机 = **没有正在播放的音乐、没有正在跑的任务、没有通知**。
+    /// 播放器/WorkBuddy 进程挂着但没内容，同样算待机（场景 B）——
+    /// 超时后一样收纳回待机样式，左右双击唤起入口始终可用（需求 5）。
+    /// 只有场景 A（正在播放 / 正在跑任务）才算信息展示，岛才维持展开。
+    /// </summary>
     public bool IsIdleStandby
-        => !_presenceMusic && !_presenceWorkbuddy
-           && !_statusVisible && !_musicVisible && !_noticeVisible;
+        => !_musicVisible && !_statusVisible && !_noticeVisible;
 
     /// <summary>
     /// 由控制器推送"进程是否在线"（v0.2.11 需求 2）：进程一开就切信息展示模式，不等播放/任务。
@@ -736,7 +760,7 @@ public partial class IslandWindow : Window
             "进程在线状态更新",
             $"music={musicRunning}({musicProcess ?? "-"}) workbuddy={workBuddyRunning} standby={IsIdleStandby}");
 
-        // 音乐组是否显示取决于 presence，所以这边也要重建一次
+        // 待机展示/音乐组是否显示取决于 presence，所以这边也要重建一次
         UpdateMusicGroup();
         UpdateChrome();
         Evaluate();
@@ -766,6 +790,21 @@ public partial class IslandWindow : Window
     }
 
     public bool IsNoticeShown => _noticeVisible;
+
+    /// <summary>当前是否处于「用户刚唤起」的保持期（诊断/自检用）。</summary>
+    public bool IsLaunchHoldActive
+        => _launchHoldUntilMs > 0 && Environment.TickCount64 < _launchHoldUntilMs;
+
+    /// <summary>
+    /// 记一次「用户主动唤起」（v0.2.14 需求 2）：接下来 15 秒保持展开成待机展示态，
+    /// 让用户能直接点左栏的播放键控制刚拉起的播放器。
+    /// </summary>
+    public void NoteUserLaunch()
+    {
+        _launchHoldUntilMs = Environment.TickCount64 + LaunchHoldMs;
+        LogService.Shared.Routine("IslandAuto", "用户唤起保持展开", $"{LaunchHoldMs / 1000}s");
+        Evaluate();
+    }
 
     /// <summary>是否处于收纳细条形态（诊断/自检用）。</summary>
     public bool IsStripMode => _stripMode;
@@ -1014,12 +1053,17 @@ public partial class IslandWindow : Window
     {
         var enabled = MusicEnabledProvider?.Invoke() ?? true;
 
-        // v0.2.12 需求 3：**播放器进程一开就保留音乐组**，不等真的播放。
-        // 这样待机态左侧就是"图标 + 空的歌名/歌词区 + 三个播放键"，
-        // 和右侧的 WorkBuddy 区块形成左右分裂布局，而不是把两行小字挤在右栏。
-        _musicVisible = enabled && (_musicPlaying || _musicTimer.IsEnabled || _presenceMusic);
+        // v0.2.14 需求 3/4：**只有"正在播放"才算信息展示内容**（场景 A）。
+        // 播放器进程挂着但没在放歌 = 场景 B，超时后一样收纳回待机样式。
+        _musicVisible = enabled && (_musicPlaying || _musicTimer.IsEnabled);
 
-        MusicGroup.Visibility = _musicVisible ? Visibility.Visible : Visibility.Collapsed;
+        // 场景 B 的左栏形态（v0.2.12 引入、v0.2.14 保留为"待机展示"）：
+        // 播放器进程在跑但没在放歌时，左栏仍然显示「图标 + 空歌名区 + 三个播放键」，
+        // 用户一眼知道是哪个播放器、并且能直接点播放；但它**不算内容**，
+        // 不会阻止岛超时收纳，也不会让岛退出待机模式。
+        _standbyMusicShown = enabled && !_musicVisible && _presenceMusic;
+
+        MusicGroup.Visibility = _musicVisible || _standbyMusicShown ? Visibility.Visible : Visibility.Collapsed;
 
         // 音乐收起时歌词必须一起收起（否则会留两行空行把岛撑高）；
         // 恢复播放时按开关 + 是否真的有词重新判定
@@ -1029,8 +1073,10 @@ public partial class IslandWindow : Window
 
         LyricsPanel.Visibility = keepLyrics ? Visibility.Visible : Visibility.Collapsed;
 
-        // 没有歌词但音乐组在（待机）：留一条空白占位，"歌词区域留空" + 左右等高
-        LyricSpacer.Visibility = _musicVisible && !keepLyrics ? Visibility.Visible : Visibility.Collapsed;
+        // 没有歌词但左栏在（播放中或待机展示）：留一条空白占位，"歌词区域留空" + 左右等高
+        LyricSpacer.Visibility = (_musicVisible || _standbyMusicShown) && !keepLyrics
+            ? Visibility.Visible
+            : Visibility.Collapsed;
 
         if (_media is not null)
         {
@@ -1040,9 +1086,9 @@ public partial class IslandWindow : Window
             PlayPauseGlyph.Data = (Geometry)FindResource(_media.IsPlaying ? "GlyphPause" : "GlyphPlay");
             UpdateMusicIcon(_media);
         }
-        else if (_musicVisible)
+        else if (_musicVisible || _standbyMusicShown)
         {
-            // 待机：歌名/歌手**留空**（需求原话），图标仍然显示 - 用户一眼能认出是哪个播放器
+            // 待机：歌名/歌手**留空**，图标仍然显示 - 用户一眼能认出是哪个播放器
             MusicText.Text = string.Empty;
             MusicText.Width = MusicTitleMinWidth;
             PlayPauseGlyph.Data = (Geometry)FindResource("GlyphPlay");
@@ -1105,9 +1151,10 @@ public partial class IslandWindow : Window
         UpdatePresenceRows();
 
         // 左栏（播放器）与右栏（任务/通知/WorkBuddy 在线）同时有东西 → 画竖分隔线。
-        // 待机态也算：需求 3 要的是"左右分裂"，有分界线一眼就看得出两栏（v0.2.12）
+        // 待机展示态也算：需求 3 要的是"左右分裂"，有分界线一眼就看得出两栏
+        var leftShown = _musicVisible || _standbyMusicShown;
         var rightHasContent = _statusVisible || _noticeVisible || _presenceVisible;
-        Divider.Visibility = _musicVisible && rightHasContent
+        Divider.Visibility = leftShown && rightHasContent
             ? Visibility.Visible
             : Visibility.Collapsed;
         BalanceWidths();
@@ -1443,7 +1490,8 @@ public partial class IslandWindow : Window
         // 旧版把 _idleExpanded 也算成内容，于是空岛被 Show 出来：所有栏都 Collapsed，
         // 宽度塌到 40 左右、Pill 圆角 22 → 屏幕上就是一个竖立的白色/浅灰椭圆（用户截图里的那个）。
         // 待机态的正确形态只有一种：顶部窄条。
-        var hasContent = _statusVisible || _musicVisible || _noticeVisible || _presenceVisible;
+        var hasContent = _statusVisible || _musicVisible || _noticeVisible || _presenceVisible
+                         || IsLaunchHoldActive;
 
         if (hasContent)
         {
@@ -1892,6 +1940,13 @@ public partial class IslandWindow : Window
             return;
         }
 
+        // 用户刚双击唤起了播放器/WorkBuddy：这段期间保持展开，别让按钮一闪就没
+        if (IsLaunchHoldActive)
+        {
+            RestartAutoCollapse();
+            return;
+        }
+
         if (IsDoneState)
         {
             return;
@@ -2238,6 +2293,14 @@ public partial class IslandWindow : Window
                     "IslandStrip",
                     "双击左段：打开音乐播放器",
                     $"outcome={outcome} process={running}");
+
+                // 真的是"冷启动拉起"的：保持岛展开一会儿，让用户能马上点播放键
+                // （需求 2：通过灵动岛按钮控制刚拉起的播放器）
+                if (outcome == OpenOutcome.Launched)
+                {
+                    NoteUserLaunch();
+                }
+
                 return;
             }
 
@@ -2247,6 +2310,11 @@ public partial class IslandWindow : Window
                 "IslandStrip",
                 "双击右段：打开 WorkBuddy",
                 $"outcome={wb}");
+
+            if (wb == OpenOutcome.Launched)
+            {
+                NoteUserLaunch();
+            }
         }
         catch (Exception ex)
         {

@@ -638,6 +638,42 @@ public partial class IslandWindow : Window
         {
             RightPaneShift.Y = TaskOffsetY;
         }
+
+        // 6) v0.2.18：高度有限时按预算裁掉靠下的歌词行
+        //    （岛高是固定值，矮一点的设置放不下"当前句+译文+下一句"三行，
+        //      不裁的话第三行会被岛体裁掉半截，看起来像排版坏了）
+        ApplyLyricLineBudget(h, m);
+    }
+
+    /// <summary>
+    /// 按当前岛高决定歌词要显示几行：优先"当前句" → 译文 → 下一句，
+    /// 放不下就把靠下的行收起来（宁少一行，不要半截字）。
+    /// </summary>
+    private void ApplyLyricLineBudget(double h, double musicScale)
+    {
+        var font = LyricsFontSizeProvider?.Invoke() ?? 13;
+        var contentHeight = (BaseIslandHeight * h) - (18 * h);  // 扣掉 Pill 外边距与内容上下留白
+        var room = contentHeight - (32 * musicScale) - MusicLyricsGap;
+
+        var lineCurrent = (font + 1) * 1.55;
+        var lineSmall = Math.Max(9, font - 2) * 1.55;
+
+        var showTrans = LyricTrans.Text.Trim().Length > 0
+                        && room >= lineCurrent + (lineSmall * 0.9);
+        var showNext = LyricLine2.Text.Trim().Length > 0
+                       && room >= lineCurrent + (showTrans ? lineSmall : 0) + (lineSmall * 0.9);
+
+        var transVisibility = showTrans ? Visibility.Visible : Visibility.Collapsed;
+        if (LyricTrans.Visibility != transVisibility)
+        {
+            LyricTrans.Visibility = transVisibility;
+        }
+
+        var nextVisibility = showNext ? Visibility.Visible : Visibility.Collapsed;
+        if (LyricLine2.Visibility != nextVisibility)
+        {
+            LyricLine2.Visibility = nextVisibility;
+        }
     }
 
     private static void SetMinHeight(FrameworkElement element, double value)

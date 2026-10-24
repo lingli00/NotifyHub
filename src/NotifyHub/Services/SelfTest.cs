@@ -1097,7 +1097,7 @@ public static class SelfTest
 
                 report.Append($"{Environment.NewLine}仅任务: 整条={totalTaskOnly:F1} 左栏收起={leftCollapsed}");
 
-                // ---------- ⑤ 译文行：有译文才占位，且字比当前行小 ----------
+                // ---------- ⑤ 译文行：有译文才占位、字号更小；高度放不下时**折叠**而不是被裁半截 ----------
                 translated.ApplyTheme(ThemePalette.Create(new AppConfig()));
                 translated.ApplyLyricsTypography();
                 translated.SetMedia(new MediaInfo("Runaway", "AURORA", "FOLIA", true, "", "Folia", 30, 200));
@@ -1105,15 +1105,26 @@ public static class SelfTest
                 Layout(translated);
 
                 var trans = translated.FindName("LyricTrans") as MarqueeText;
-                var transShown = translated.IsTranslationShown
-                                 && trans is not null
-                                 && trans.FontSize < (translated.FindName("LyricLine1") as MarqueeText)!.FontSize;
+                var nextLine = translated.FindName("LyricLine2") as MarqueeText;
+                var currentLine = translated.FindName("LyricLine1") as MarqueeText;
+                if (trans is null || nextLine is null || currentLine is null)
+                {
+                    return false;
+                }
+
+                // 高度上限 70%（104px）装不下「当前句+译文+下一句」三行：
+                // 靠下的行必须收起来（否则第三行会被岛体裁掉半截），字号关系仍然正确
+                var transOk = trans.FontSize < currentLine.FontSize;
+                var noClippedLine = !translated.IsTranslationShown
+                                    && nextLine.Visibility == Visibility.Collapsed;
 
                 translated.ShowLyrics("I keep the light on", "For you", null);
                 Layout(translated);
                 var transHidden = !translated.IsTranslationShown;
 
-                report.Append($"{Environment.NewLine}译文行: 有译文显示={transShown} 无译文隐藏={transHidden}");
+                report.Append($"{Environment.NewLine}译文行: 字号更小={transOk} 放不下就折叠={noClippedLine} 无译文隐藏={transHidden}");
+
+                var transShown = transOk && noClippedLine;
 
                 // ---------- ⑥ 固定模式真居中：左右留白相等 ----------
                 var work = new Rect(0, 0, 1920, 1040);

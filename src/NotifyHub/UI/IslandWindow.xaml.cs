@@ -218,6 +218,65 @@ public partial class IslandWindow : Window
     private SnapStripWindow? _strip;
     private bool _stripMode;
 
+    // ---------------- v0.2.17 工单B/C：统一交互时序的新状态 ----------------
+
+    /// <summary>
+    /// 展开原因（v0.2.17 工单B/C 的"什么条件下才允许把岛展开"的唯一判据）。
+    /// 工单C 规则 3：强制收纳后，只有 Notice / MusicStart / TaskStart / StripClick
+    /// 这四类条件能重新展开岛，Refresh / Presence / Config 一律不行。
+    /// </summary>
+    private enum ExpandReason
+    {
+        /// 启动初始化（规则 1：只展开一次）。</summary>
+        Startup,
+
+        /// 收到新通知（规则 3）。</summary>
+        Notice,
+
+        /// 音乐开始播放（规则 4：暂停→播放 / 无→播放）。</summary>
+        MusicStart,
+
+        /// WorkBuddy 启动任务（规则 4：任务行从无到有）。</summary>
+        TaskStart,
+
+        /// 鼠标单击收纳条（规则 6）。</summary>
+        StripClick,
+
+        /// 内容刷新（切歌、任务步骤更新、配置变更…不许把强制收纳的岛拉出来）。</summary>
+        Refresh,
+
+        /// 进程在线状态变化（后台挂着不算内容，见规则 5）。</summary>
+        Presence,
+
+        /// 配置/模式变更。</summary>
+        Config,
+    }
+
+    /// <summary>启动展开是否已尝试过（规则 1：仅一次，幂等）。</summary>
+    private bool _startupTried;
+
+    /// <summary>
+    /// 启动展示窗（规则 1 + 规则 5）：从启动到第一次收纳之间，
+    /// 允许显示"进程在线/待机播放器"这类无状态占位行；窗结束后一律隐藏——
+    /// 后台挂着但没有任务/播放的应用不占岛（工单B 现状表现 4 的修复）。
+    /// </summary>
+    private bool _startupWindow;
+
+    /// <summary>
+    /// 暂存的最新一条通知（规则 3/7）：收纳后仍然保留，
+    /// 单击窄条展开或鼠标悬浮到岛上时展示；被点击处理或下一条到来时替换。
+    /// </summary>
+    private NotifyMessage? _stashedNotice;
+
+    /// <summary>
+    /// 长按上滑强制收纳生效中（工单C 规则 3）：此时岛不再响应
+    /// "内容刷新/进程状态/配置变更"类的展开请求，只有四类指定条件能重新展开。
+    /// </summary>
+    private bool _forceCollapsed;
+
+    /// <summary>长按上滑手势跟踪器（纯状态机，见 <see cref="SwipeUpCollapseTracker"/>）。</summary>
+    private readonly SwipeUpCollapseTracker _swipe = new();
+
     // 滑动动画（SetWindowPos 逐帧，像素坐标）
     private readonly Stopwatch _slideWatch = new();
     private int _slideFromX;
@@ -349,6 +408,15 @@ public partial class IslandWindow : Window
     /// <summary>注入的配置读取：音乐播放期间保持展开（不自动收纳）。</summary>
     public Func<bool>? KeepOpenWhilePlayingProvider { get; set; }
 
+    /// <summary>长按上滑强制收纳开关（v0.2.17 工单C，默认 true）。</summary>
+    public Func<bool>? LongPressCollapseEnabledProvider { get; set; }
+
+    /// <summary>长按判定时长（毫秒，v0.2.17 工单C）。</summary>
+    public Func<int>? LongPressHoldMsProvider { get; set; }
+
+    /// <summary>上滑触发距离（物理像素，v0.2.17 工单C）。</summary>
+    public Func<int>? LongPressSwipePxProvider { get; set; }
+
     /// <summary>注入的配置读取：灵动岛总长度（百分比，v0.2.9 需求 6）。</summary>
     public Func<int>? IslandWidthPercentProvider { get; set; }
 
@@ -389,6 +457,25 @@ public partial class IslandWindow : Window
         var seconds = AutoCollapseSecondsProvider?.Invoke() ?? DefaultAutoCollapseSeconds;
         return Math.Clamp(seconds, MinAutoCollapseSeconds, MaxAutoCollapseSeconds);
     }
+
+    /// <summary>长按上滑手势是否启用（默认开）。</summary>
+    private bool LongPressCollapseEnabled() => LongPressCollapseEnabledProvider?.Invoke() ?? true;
+
+    /// <summary>长按判定时长（毫秒）。</summary>
+    private int LongPressHoldMs() => Math.Clamp(
+        LongPressHoldMsProvider?.Invoke() ?? DefaultLongPressHoldMs,
+        Models.AppConfig.MinLongPressHoldMs, Models.AppConfig.MaxLongPressHoldMs);
+
+    /// <summary>上滑触发距离（物理像素）。</summary>
+    private int LongPressSwipePx() => Math.Clamp(
+        LongPressSwipePxProvider?.Invoke() ?? DefaultLongPressSwipePx,
+        Models.AppConfig.MinLongPressSwipePx, Models.AppConfig.MaxLongPressSwipePx);
+
+    /// <summary>长按判定时长默认值（毫秒）。</summary>
+    private const int DefaultLongPressHoldMs = 220;
+
+    /// <summary>上滑触发距离默认值（物理像素）。</summary>
+    private const int DefaultLongPressSwipePx = 24;
 
     /// <summary>
     /// 按配置刷新歌词排版（v0.2.7 需求 1）：当前行比设定字号大 1.5，下一行小 1.5 且更暗，
@@ -578,43 +665,70 @@ public partial class IslandWindow : Window
     }
 
     /// <summary>
-    /// 新消息提示（v0.2.7 需求 2）：有新消息时把灵动岛弹出来并显示一条临时状态，
-    /// 超时后整条收起。若此刻有真实任务状态在跑，只弹出/续时，不覆盖任务文字。
+    /// 【v0.2.17 工单B 起改为转调】新消息提示的旧入口（v0.2.7 的"临时状态行"方案）。
+    /// 已被 <see cref="ShowNotice"/> 的"暂存 + 规则 3/7 分支"取代——旧方案把消息文字
+    /// 塞进任务行，和真正的任务状态混在一起，且没有暂存能力。
+    /// 方法保留只为兼容旧调用方，内部直接转成新模型。
     /// </summary>
     public void PokeMessage(string source, string sender, string content)
     {
         EnsureCreated();
 
-        if (_statusVisible && !_statusTransient)
-        {
-            // 有真实任务在跑：只把岛弹出来 + 续时，不动任务文字
-            Evaluate();
-            RestartAutoCollapse();
-            return;
-        }
-
         var who = string.IsNullOrWhiteSpace(sender) ? source : $"{source} · {sender}";
         var line = string.IsNullOrWhiteSpace(content) ? who : $"{who}：{content}";
 
-        SetStatus(line, done: false, tag: source, transient: true);
+        ShowNotice(new NotifyMessage
+        {
+            Source = MessageSource.Ntfy,
+            Sender = line,
+            Content = string.Empty,
+        });
     }
 
     /// <summary>外部事件（新任务/新状态）到达时把岛弹出来并重置收纳倒计时。</summary>
     public void PokeActivity()
     {
-        Evaluate();
+        Evaluate(reason: ExpandReason.Refresh);
         RestartAutoCollapse();
     }
 
     // ---------------- 岛内通知（v0.2.9 需求 3） ----------------
 
     /// <summary>
-    /// 在岛内展示一条通知（微信 / QQ / ntfy），用来源主题色区分，整行可点。
+    /// 新消息到达（v0.2.17 工单B 规则 3/7 重写）。
     ///
-    /// 展示策略由 <see cref="IslandController"/> 决定：音乐与 WorkBuddy 任务同时存在时
-    /// 通知仍走四角弹窗，只有"最多一项内容在跑"时才进岛内（此时岛不会有第四行）。
+    /// 三条分支：
+    ///   · 空闲（无任务/播放/通知）→ 自动展开 + 展示这条通知 + 走全局收纳倒计时（规则 3）；
+    ///   · 岛内已有**单个**应用在展示（在放歌或在跑任务）→ 只**暂存**，
+    ///     不主动弹出来，鼠标悬浮到岛上时才展示（规则 7："一闪而过容易遗漏"的修法）；
+    ///   · 岛内已有两项以上内容 → 调用方（IslandController）已经改走四角弹窗，不会到这里。
+    /// 两条规则都会把最新一条写进 <see cref="_stashedNotice"/>，收纳后依然保留。
     /// </summary>
     public void ShowNotice(NotifyMessage message)
+    {
+        EnsureCreated();
+
+        _stashedNotice = message;
+
+        var singleActive = _musicVisible ^ _statusVisible; // 恰好一个在展示
+        if (singleActive && !_noticeVisible)
+        {
+            // 规则 7：单应用模式只暂存，不弹。刷新细条指示器（有暂存通知时用来源色）。
+            LogService.Shared.Routine(
+                "IslandAuto",
+                "单应用模式：通知只暂存，悬浮岛上才展示",
+                $"{message.SourceText} · {message.Sender}");
+
+            UpdateChrome();
+            RestartAutoCollapse();
+            return;
+        }
+
+        ShowNoticeRow(message);
+    }
+
+    /// <summary>把一条通知显示到岛内（真正的"上屏"路径：规则 3 的自动展开 / 悬浮展示 / 单击窄条展开）。</summary>
+    private void ShowNoticeRow(NotifyMessage message)
     {
         EnsureCreated();
 
@@ -654,14 +768,18 @@ public partial class IslandWindow : Window
         _noticeTimer.Start();
 
         UpdateChrome();
-        Evaluate();
+        Evaluate(reason: ExpandReason.Notice);
         RestartAutoCollapse();
     }
 
-    /// <summary>收起岛内通知行（点击已读 / 到时自动）。</summary>
+    /// <summary>
+    /// 通知行被点击已读（规则 7 的"处理掉"）：收起该行并清掉暂存——
+    /// 用户已经看过/定位过了，再暂存着会在下次单击窄条时重复弹出。
+    /// </summary>
     public void HideNotice()
     {
         _noticeTimer.Stop();
+        _stashedNotice = null;
 
         if (!_noticeVisible)
         {
@@ -677,10 +795,38 @@ public partial class IslandWindow : Window
         RestartAutoCollapse();
     }
 
+    /// <summary>
+    /// 只收通知行、保留暂存（规则 3：倒计时结束收纳回窄条，"同时保留暂存最新一条通知"）。
+    /// </summary>
+    private void HideNoticeRowKeepStash()
+    {
+        _noticeTimer.Stop();
+
+        if (!_noticeVisible)
+        {
+            return;
+        }
+
+        _noticeVisible = false;
+        _notice = null;
+        NoticeButton.Visibility = Visibility.Collapsed;
+    }
+
     private void OnNoticeHoldElapsed()
     {
         _noticeTimer.Stop();
-        HideNotice();
+
+        // 鼠标正停在岛上（用户正在看）：续时，别把人家正在读的通知收掉
+        if (_pointerOverIsland || Pill.IsMouseOver)
+        {
+            _noticeTimer.Start();
+            return;
+        }
+
+        HideNoticeRowKeepStash();
+        UpdateChrome();
+        Evaluate();
+        RestartAutoCollapse();
     }
 
     /// <summary>通知行被点击：交给控制器打开对应会话 / 网页，然后收起该行。</summary>
@@ -795,7 +941,8 @@ public partial class IslandWindow : Window
 
         // v0.2.15 需求 5：进程退出导致"什么都没剩下"时，**立即**收成待机细条——
         // 不走 240ms 上滑 + 140ms 淡出那一套（那套是给"用户拖着岛回顶部"用的）。
-        Evaluate(instantWhenEmpty: true);
+        // v0.2.17 工单B 规则 5：进程在线状态变化**不是**展开条件（后台挂着不算内容）。
+        Evaluate(instantWhenEmpty: true, reason: ExpandReason.Presence);
     }
 
     /// <summary>
@@ -807,9 +954,16 @@ public partial class IslandWindow : Window
     {
         var hasReal = _statusVisible || _noticeVisible;
 
-        // 需求 3 的左右分裂布局：**播放器归左栏**（图标 + 空歌名 + 三键），
-        // 右栏只留 WorkBuddy / 通知，不再有"音乐"这行小黄标签。
-        var showWb = !hasReal && _presenceWorkbuddy && !_statusVisible;
+        // v0.2.17 工单B 规则 5：多应用后台共存时**只展示活跃项**。
+        //   · 音乐正在播放 → WorkBuddy 在线行让位（例1：只展示音乐播放器）；
+        //   · 进程只是"挂着"（没任务/没播放）→ 平时不占岛，
+        //     只有两个窗口期允许显示：启动展示窗（规则1"仅展开一次"的展示内容）
+        //     与用户刚双击唤起后的 15s 保持期（给用户点播放键的机会）。
+        var holdActive = IsLaunchHoldActive;
+        var showWb = !hasReal
+                     && _presenceWorkbuddy
+                     && !_statusVisible
+                     && (holdActive || (_startupWindow && !_musicVisible));
 
         PresenceWbRow.Visibility = showWb ? Visibility.Visible : Visibility.Collapsed;
 
@@ -835,7 +989,8 @@ public partial class IslandWindow : Window
     {
         _launchHoldUntilMs = Environment.TickCount64 + LaunchHoldMs;
         LogService.Shared.Routine("IslandAuto", "用户唤起保持展开", $"{LaunchHoldMs / 1000}s");
-        Evaluate();
+        // 双击窄条唤起属于"用户主动操作"，与单击同级：强制收纳后也允许展开
+        Evaluate(reason: ExpandReason.StripClick);
     }
 
     /// <summary>是否处于收纳细条形态（诊断/自检用）。</summary>
@@ -874,9 +1029,65 @@ public partial class IslandWindow : Window
 
         if (!_fullscreen)
         {
-            Evaluate();
+            Evaluate(reason: ExpandReason.Startup);
         }
     }
+
+    /// <summary>
+    /// 启动"仅展开一次"（v0.2.17 工单B 规则 1）。
+    /// 进程在线数据刚到（PresenceWatcher 首轮约 400ms），此刻若有占位内容
+    /// （WorkBuddy 在线行 / 待机播放器左栏）就展开一次给用户看；
+    /// 什么都没有就只留窄条，并且**消费掉这次机会**——之后进程再起来也不算启动。
+    /// 幂等：多处调用（Start 延时 + presence 首报）只有第一次生效。
+    /// </summary>
+    public void TryStartupExpand()
+    {
+        if (_startupTried)
+        {
+            return;
+        }
+
+        _startupTried = true;
+        _startupWindow = true;
+
+        if (!_fullscreen && HasVisibleContent)
+        {
+            LogService.Shared.Routine("IslandAuto", "启动展开一次", "规则1");
+            ShowIsland(ExpandReason.Startup);
+            RestartAutoCollapse();
+        }
+        else
+        {
+            // 启动时什么都没开：不开展示窗，presence 行以后也不再显示（规则 5）
+            _startupWindow = false;
+        }
+    }
+
+    /// <summary>结束启动展示窗（第一次收纳时调用）。</summary>
+    private void EndStartupWindow()
+    {
+        if (!_startupWindow)
+        {
+            return;
+        }
+
+        _startupWindow = false;
+        // 占位行跟着消失 → 若岛上再无内容，Evaluate 会把岛收成窄条
+        UpdatePresenceRows();
+        UpdateMusicGroup();
+        UpdateChrome();
+    }
+
+    /// <summary>
+    /// 强制收纳后允许重新展开的条件（v0.2.17 工单C 规则 3）：
+    /// 只有「单击收纳条 / 收到新通知 / 开始播放歌曲 / WorkBuddy 启动任务」四类。
+    /// </summary>
+    private static bool IsExpandAllowedAfterForce(ExpandReason reason)
+        => reason is ExpandReason.StripClick
+            or ExpandReason.Notice
+            or ExpandReason.MusicStart
+            or ExpandReason.TaskStart
+            or ExpandReason.Startup;
 
     /// <summary>
     /// 预热：离屏把 HWND 建出来并跑完一次布局/渲染。
@@ -969,7 +1180,11 @@ public partial class IslandWindow : Window
         }
 
         UpdateMusicGroup();
-        Evaluate();
+
+        // v0.2.17 工单B 规则 4：**开始播放**（无→有 / 暂停→播放）是四类
+        // 允许"把强制收纳的岛拉出来"的条件之一；切歌/暂停只是内容刷新。
+        var musicStart = _musicPlaying && !wasPlaying;
+        Evaluate(reason: musicStart ? ExpandReason.MusicStart : ExpandReason.Refresh);
     }
 
     /// <summary>全屏状态变化（观影/游戏全屏 → 整岛隐藏，退出 → 恢复）。</summary>
@@ -1010,6 +1225,7 @@ public partial class IslandWindow : Window
 
     private void SetStatus(string text, bool done, string? tag = null, bool transient = false)
     {
+        var wasStatusVisible = _statusVisible;
         var fallback = done ? "完成" : "正在执行任务…";
         var display = string.IsNullOrWhiteSpace(text) ? fallback : text.Trim();
 
@@ -1081,7 +1297,10 @@ public partial class IslandWindow : Window
             TaskDoneShown?.Invoke(this, EventArgs.Empty);
         }
 
-        Evaluate();
+        // v0.2.17 工单B 规则 4：WorkBuddy **启动任务**（任务行从无到有）是四类
+        // 允许展开条件之一；任务步骤刷新、完成态只是内容更新。
+        var taskStart = !done && !wasStatusVisible;
+        Evaluate(reason: taskStart ? ExpandReason.TaskStart : ExpandReason.Refresh);
 
         // v0.2.7 需求 2：无论有没有任务在跑，都按用户设定的时长统一收纳
         RestartAutoCollapse();
@@ -1109,9 +1328,13 @@ public partial class IslandWindow : Window
 
         // 场景 B 的左栏形态（v0.2.12 引入、v0.2.14 保留为"待机展示"）：
         // 播放器进程在跑但没在放歌时，左栏仍然显示「图标 + 空歌名区 + 三个播放键」，
-        // 用户一眼知道是哪个播放器、并且能直接点播放；但它**不算内容**，
-        // 不会阻止岛超时收纳，也不会让岛退出待机模式。
-        _standbyMusicShown = enabled && !_musicVisible && _presenceMusic;
+        // 用户一眼知道是哪个播放器、并且能直接点播放。
+        // v0.2.17 工单B 规则 5：但它**只出现在启动展示窗与唤起保持期**——
+        // 平时"后台挂着没在放歌"的播放器不占岛（例2：只展示在跑任务的一方）。
+        _standbyMusicShown = enabled
+                             && !_musicVisible
+                             && _presenceMusic
+                             && (_startupWindow || IsLaunchHoldActive);
 
         MusicGroup.Visibility = _musicVisible || _standbyMusicShown ? Visibility.Visible : Visibility.Collapsed;
 
@@ -1269,7 +1492,9 @@ public partial class IslandWindow : Window
     /// </summary>
     private StripMode CurrentStripMode()
     {
-        if (_noticeVisible)
+        // v0.2.17 工单B：暂存的通知也要让细条显示"通知"形态——
+        // 用户一眼看出"有一条没看的消息"，单击即可展开看。
+        if (_stashedNotice is not null)
         {
             return StripMode.Notice;
         }
@@ -1289,7 +1514,7 @@ public partial class IslandWindow : Window
 
     /// <summary>细条要用的强调色（通知的来源色；没有通知返回 null 用内置色）。</summary>
     private Color? CurrentAccentColor()
-        => _noticeVisible && _notice is not null ? SourceColors.AccentOf(_notice) : null;
+        => _stashedNotice is not null ? SourceColors.AccentOf(_stashedNotice) : null;
 
     /// <summary>细条已显示时，随内容变化刷新指示器（音乐停、任务开始/完成…）。</summary>
     private void SyncStripState()
@@ -1551,7 +1776,7 @@ public partial class IslandWindow : Window
     /// Pill 圆角 22 —— 屏幕上就是一个竖立的白色椭圆（用户截图里的那个白框）。
     /// 现在**没有可见内容就绝不展开**，只有窄条。
     /// </summary>
-    private void Evaluate(bool instantWhenEmpty = false)
+    private void Evaluate(bool instantWhenEmpty = false, ExpandReason reason = ExpandReason.Refresh)
     {
         // 全屏（观影/游戏）：整岛与细条一起隐藏，退出全屏自动回来
         if (_fullscreen)
@@ -1563,7 +1788,7 @@ public partial class IslandWindow : Window
         if (HasVisibleContent)
         {
             CancelCollapse();
-            ShowIsland();
+            ShowIsland(reason);
             return;
         }
 
@@ -1598,9 +1823,14 @@ public partial class IslandWindow : Window
     /// </summary>
     private void CollapseToStrip(bool instant = false)
     {
+        // 只要走收纳路径，启动展示窗就结束（规则 1 的"仅展开一次"到此为止）
+        EndStartupWindow();
+
         if (_hidden || !IsVisible)
         {
             _autoTimer.Stop();
+            // 收纳时通知行跟着下去，但暂存保留（规则 3：倒计时结束"同时保留暂存最新一条通知"）
+            HideNoticeRowKeepStash();
             _stripMode = true;
             _stripShownAtMs = Environment.TickCount64;
             EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState, CurrentAccentColor());
@@ -1633,7 +1863,7 @@ public partial class IslandWindow : Window
     }
 
     /// <summary>展开：180ms ease-out（淡入 + 自上而下落位）。已显示则只做内容更新。</summary>
-    private void ShowIsland()
+    private void ShowIsland(ExpandReason reason = ExpandReason.Refresh)
     {
         // v0.2.15 需求 2：**最后一道闸**。
         // 任何调用方（配置变更、预览、进程状态、全屏恢复…）想把岛 Show 出来，
@@ -1645,6 +1875,26 @@ public partial class IslandWindow : Window
             LogService.Shared.Routine("IslandAuto", "无可见内容，拒绝展开空岛", $"presence={_presenceVisible}");
             CollapseToStrip(instant: true);
             return;
+        }
+
+        // v0.2.17 工单C 规则 3：长按上滑强制收纳后，只有四类条件能重新展开岛。
+        // "内容刷新 / 进程状态 / 配置变更"一律不拉——否则切首歌、任务走一步，
+        // 用户刚按下去的岛又弹回来了，强制收纳失去意义。
+        if (_forceCollapsed && !IsExpandAllowedAfterForce(reason))
+        {
+            LogService.Shared.Routine(
+                "IslandAuto",
+                "强制收纳生效中，忽略展开请求",
+                $"reason={reason}");
+            CollapseToStrip(instant: true);
+            return;
+        }
+
+        if (_forceCollapsed)
+        {
+            // 四类允许条件之一：恢复正常时序（自动收纳倒计时重新接管）
+            _forceCollapsed = false;
+            LogService.Shared.Info("Island", "强制收纳解除", $"reason={reason}");
         }
 
         // 吸附细条形态下来了新内容：先展开成完整岛
@@ -1777,10 +2027,8 @@ public partial class IslandWindow : Window
                 MusicGroup.Visibility = Visibility.Collapsed;
             }
 
-            if (!_noticeVisible)
-            {
-                NoticeButton.Visibility = Visibility.Collapsed;
-            }
+            // v0.2.17 工单B 规则 3：收纳不丢暂存——通知行收掉，_stashedNotice 保留
+            HideNoticeRowKeepStash();
 
             Hide();
             Hidden?.Invoke(this, EventArgs.Empty);
@@ -1968,6 +2216,12 @@ public partial class IslandWindow : Window
     {
         _autoTimer.Stop();
 
+        // v0.2.17 工单C 规则 3：强制收纳后不受自动收纳倒计时控制
+        if (_forceCollapsed)
+        {
+            return;
+        }
+
         if (!AutoCollapseEnabled())
         {
             return;
@@ -2012,6 +2266,12 @@ public partial class IslandWindow : Window
     private void OnAutoCollapseElapsed()
     {
         _autoTimer.Stop();
+
+        // v0.2.17 工单C：强制收纳生效时这个计时器本来就不该跑（双保险）
+        if (_forceCollapsed)
+        {
+            return;
+        }
 
         LogService.Shared.Routine(
             "IslandAuto", "收纳计时到点",
@@ -2076,19 +2336,13 @@ public partial class IslandWindow : Window
 
     private void OnPillMouseEnter(object sender, MouseEventArgs e)
     {
-        // 鼠标进入：暂停收纳倒计时（正在看歌词 / 准备点按钮）
+        // 鼠标进入：暂停收纳倒计时（正在看歌词 / 准备点按钮）。
+        // v0.2.17 工单C：悬浮放大动效已移除（悬浮不再放大），只保留"暂停计时"。
         _autoTimer.Stop();
-
-        // v0.2.10 需求 3：悬停反馈只做"整岛轻微放大"（≈2.5%，回弹），不再叠任何遮罩/变色。
-        // 放大走 RenderTransform（不参与布局），窗口尺寸与居中都不受影响；
-        // Pill 四周有 14px 留白，放大后也不会被窗口边界裁掉。
-        AnimateHoverScale(1.025, spring: true);
     }
 
     private void OnPillMouseLeave(object sender, MouseEventArgs e)
     {
-        AnimateHoverScale(1.0, spring: false);
-
         if (_dragging || _sliding)
         {
             return;
@@ -2122,7 +2376,7 @@ public partial class IslandWindow : Window
         if (_pointerOverIsland)
         {
             _pointerOverIsland = false;
-            AnimateHoverScale(1.0, spring: false);
+            _swipe.Reset();
         }
     }
 
@@ -2135,24 +2389,91 @@ public partial class IslandWindow : Window
         }
 
         var inside = PointerInsideIsland();
-        if (inside == _pointerOverIsland)
+        if (inside != _pointerOverIsland)
+        {
+            _pointerOverIsland = inside;
+            _swipe.Reset();
+
+            // 进入时暂停收纳倒计时（用户正在看），离开时重新计时
+            if (inside)
+            {
+                _autoTimer.Stop();
+                ShowStashedNoticeOnHover();
+            }
+            else if (!_dragging && !_sliding)
+            {
+                RestartAutoCollapse();
+            }
+        }
+
+        if (!inside)
         {
             return;
         }
 
-        _pointerOverIsland = inside;
-
-        // 进入时暂停收纳倒计时（用户正在看），离开时重新计时
-        if (inside)
+        // v0.2.17 工单C：长按 + 上滑 → 强制收纳。
+        // 岛是点穿窗口收不到鼠标消息，这里轮询 GetAsyncKeyState + 光标位置。
+        // 拖拽中（自由模式挪岛）不抢——拖动优先。
+        if (!LongPressCollapseEnabled() || _dragging || _sliding)
         {
-            _autoTimer.Stop();
-        }
-        else if (!_dragging && !_sliding)
-        {
-            RestartAutoCollapse();
+            return;
         }
 
-        AnimateHoverScale(inside ? 1.025 : 1.0, spring: inside);
+        if (!NativeMethods.GetCursorPos(out var point))
+        {
+            return;
+        }
+
+        var state = _swipe.Sample(
+            NativeMethods.IsLeftButtonDown(),
+            point.Y,
+            Environment.TickCount64,
+            LongPressHoldMs(),
+            LongPressSwipePx());
+
+        if (state == SwipeGestureState.Triggered)
+        {
+            ForceCollapseByGesture();
+        }
+    }
+
+    /// <summary>
+    /// 鼠标悬浮到展开的岛上时，把暂存的通知显示出来（v0.2.17 工单B 规则 7：
+    /// "岛内仅单个应用场景：暂存最新一条消息通知；默认不主动常驻弹出，
+    /// 鼠标悬浮岛上时展示该条暂存消息"）。
+    /// </summary>
+    private void ShowStashedNoticeOnHover()
+    {
+        if (_stashedNotice is null || _noticeVisible || _forceCollapsed)
+        {
+            return;
+        }
+
+        LogService.Shared.Routine("IslandAuto", "悬浮展示暂存通知", $"{_stashedNotice.SourceText}");
+        ShowNoticeRow(_stashedNotice);
+    }
+
+    /// <summary>
+    /// 长按上滑 → 强制收纳（v0.2.17 工单C 规则 2）：
+    /// 直接收成贴边窄收纳条，不等倒计时；之后只有四类条件能重新展开（规则 3）。
+    /// </summary>
+    private void ForceCollapseByGesture()
+    {
+        if (_hidden || _stripMode || _dragging || _sliding)
+        {
+            return;
+        }
+
+        _forceCollapsed = true;
+        _swipe.Reset();
+        _autoTimer.Stop();
+
+        LogService.Shared.Info(
+            "Island",
+            "长按上滑：强制收纳",
+            "之后只有单击窄条/新通知/开始播放/启动任务才会再展开");
+
+        CollapseToStrip(instant: true);
     }
 
     /// <summary>光标是否落在岛窗口矩形内（物理像素比较，避免 DPI 换算误差）。</summary>
@@ -2189,21 +2510,6 @@ public partial class IslandWindow : Window
         }
     }
 
-    /// <summary>整岛悬停缩放（v0.2.10 需求 3）：进入带回弹、离开平稳收，幅度 1.025。</summary>
-    private void AnimateHoverScale(double target, bool spring)
-    {
-        var duration = TimeSpan.FromMilliseconds(spring ? 190 : 160);
-        var ease = spring
-            ? new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.35 }
-            : (IEasingFunction)new CubicEase { EasingMode = EasingMode.EaseOut };
-
-        var sx = new DoubleAnimation(target, duration) { EasingFunction = ease };
-        var sy = new DoubleAnimation(target, duration) { EasingFunction = ease };
-
-        PillHoverScale.BeginAnimation(ScaleTransform.ScaleXProperty, sx);
-        PillHoverScale.BeginAnimation(ScaleTransform.ScaleYProperty, sy);
-    }
-
     /// <summary>
     /// 吸附到顶部边缘（v0.2.3：只允许顶部停靠）。
     /// 水平位置保留用户拖到的落点（收敛进中间 3/5），垂直贴顶，落定后收成细条。
@@ -2233,6 +2539,8 @@ public partial class IslandWindow : Window
 
         _stripMode = true;
         _stripShownAtMs = Environment.TickCount64;
+        // 收纳 = 通知行下去、暂存保留（细条会用"通知"形态提示还有一条没看）
+        HideNoticeRowKeepStash();
         EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState, CurrentAccentColor());
         SyncStripMode();
 
@@ -2274,12 +2582,38 @@ public partial class IslandWindow : Window
         BeginAnimation(OpacityProperty, fade);
     }
 
-    /// <summary>细条被移入/点击（或吸附期间来了新状态）：整岛重新展开，超时后再次收纳。</summary>
-    private void ExpandFromStrip()
+    /// <summary>
+    /// 单击收纳条（v0.2.17 工单B 规则 6）：展开信息面板。
+    /// 有暂存通知 → 先把它显示出来再展开；没有 → 按活跃内容展开
+    /// （音乐/任务）；两者都没有 → 保持静默收纳（规则 7）。
+    /// </summary>
+    private void ShowStashedNoticeOnStripClick()
+    {
+        if (_stashedNotice is not null && !_noticeVisible)
+        {
+            ShowNoticeRow(_stashedNotice);
+            return;
+        }
+
+        Evaluate(reason: ExpandReason.StripClick);
+    }
+
+    /// <summary>细条被单击/来了新状态：整岛重新展开，超时后再次收纳。</summary>
+    private void ExpandFromStrip(ExpandReason reason = ExpandReason.StripClick)
     {
         if (!_stripMode)
         {
             return;
+        }
+
+        // v0.2.17 工单B 规则 6：鼠标单击收纳条 → 展开信息面板，
+        // **包含暂存的最新通知**。没有暂存通知且没有活跃内容时，
+        // 下面的 HasVisibleContent 闸会拒绝展开（规则 7：无新通知保持静默收纳）。
+        if (reason == ExpandReason.StripClick
+            && _stashedNotice is not null
+            && !_noticeVisible)
+        {
+            ShowNoticeRow(_stashedNotice);
         }
 
         // 刚收起来就被"展开"（细条恰好落在指针下、或吸附动画尾帧的用户输入）会变成抖动，
@@ -2351,13 +2685,18 @@ public partial class IslandWindow : Window
 
             _strip.ZoneDoubleClicked += OnStripZoneDoubleClicked;
 
-            // 信息展示模式下，悬停窄条 260ms 就展开岛把内容显示出来（需求 2 补充规则）
-            _strip.HoverExpandRequested += (_, _) =>
+            // v0.2.17 工单B 规则 6：悬停 + **单击**展开信息面板（含暂存的最新通知）。
+            // 注意悬停本身不再展开岛（旧版"悬停 180ms 自动展开"已移除）——
+            // 窄条常驻屏幕顶部，指针路过就展开正是"无规律自动展开"的投诉来源。
+            _strip.ZoneClicked += (_, _) =>
             {
-                if (_stripMode && !_dragging && !_sliding && !IsIdleStandby)
+                if (!_stripMode || _dragging || _sliding)
                 {
-                    ExpandFromStrip();
+                    return;
                 }
+
+                LogService.Shared.Routine("IslandStrip", "单击窄条：展开信息面板", $"stash={_stashedNotice is not null}");
+                ShowStashedNoticeOnStripClick();
             };
         }
 
@@ -2372,16 +2711,9 @@ public partial class IslandWindow : Window
     {
         try
         {
-            // 需求 2：双击快捷唤起**只在待机空闲模式**生效；信息展示模式下不抢占双击
-            if (!IsIdleStandby)
-            {
-                LogService.Shared.Routine(
-                    "IslandStrip",
-                    "非待机模式，忽略双击",
-                    $"zone={zone} standby={IsIdleStandby}");
-                return;
-            }
-
+            // v0.2.17 工单B 规则 6：悬停 + 双击 = 唤起对应应用并置顶。
+            // 不再限"待机空闲模式"——音乐正在放时双击左段激活播放器、
+            // 任务在跑时双击右段激活 WorkBuddy，都是同一意图。
             if (zone == StripZone.Left)
             {
                 // v0.2.15 需求 1：交给 AppLauncher 统一判定——

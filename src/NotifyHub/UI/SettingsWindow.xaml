@@ -263,9 +263,10 @@
                                         <TextBlock Text="轮询间隔" Margin="0,0,6,0" />
                                         <TextBox x:Name="IntervalBox" Width="64" Height="26" Margin="0,0,4,0" TextAlignment="Right" />
                                         <TextBlock Text="ms" Margin="0,0,14,0" Foreground="{DynamicResource AppSubFg}" />
-                                        <TextBlock Text="通知时长" Margin="0,0,6,0" />
-                                        <TextBox x:Name="DurationBox" Width="64" Height="26" Margin="0,0,4,0" TextAlignment="Right" />
-                                        <TextBlock Text="ms" Foreground="{DynamicResource AppSubFg}" />
+                                        <TextBlock Text="四角弹窗" Margin="0,0,6,0" />
+                                        <TextBlock Text="固定 10 秒" Width="64" Margin="0,0,4,0" TextAlignment="Right"
+                                                   Foreground="{DynamicResource AppSubFg}" />
+                                        <TextBlock Text="（v0.2.17 起写死，不随收纳时长变化）" Foreground="{DynamicResource AppSubFg}" />
                                     </StackPanel>
                                 </Grid>
 
@@ -354,20 +355,23 @@
                                 <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="24,10,0,0">
                                     <CheckBox x:Name="AutoCollapseCheck" Content="超时自动收纳" MinWidth="110"
                                               Checked="OnAutoCollapseToggled" Unchecked="OnAutoCollapseToggled"
-                                              ToolTip="开启后：无新事件超过设定时长，灵动岛自动收成屏幕顶部细条，鼠标移上去即展开" />
+                                              ToolTip="开启后：无新事件超过设定时长，灵动岛自动收成屏幕顶部细条" />
                                     <TextBlock Text="超时" Margin="0,0,8,0" />
                                     <Slider x:Name="AutoCollapseSlider" Width="120" Minimum="1" Maximum="60"
                                             IsSnapToTickEnabled="True" TickFrequency="1" />
                                     <TextBlock x:Name="AutoCollapseText" Width="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="3 秒" />
-                                    <CheckBox x:Name="KeepOpenWhilePlayingCheck" Content="音乐播放时保持展开" />
+                                    <CheckBox x:Name="KeepOpenWhilePlayingCheck" Content="音乐播放时保持展开"
+                                              ToolTip="默认关：播放中也按上面的时长自动收纳（v0.2.17 统一时序）；勾选后播放期间一直显示歌词" />
+                                    <CheckBox x:Name="LongPressCollapseCheck" Content="长按上滑收纳" Margin="16,0,0,0"
+                                              ToolTip="展开的岛上长按鼠标并向上滑，直接收成窄收纳条；强制收纳后只有单击窄条/新通知/开始播放/启动任务才会再展开" />
                                 </StackPanel>
 
                                 <TextBlock Grid.Row="5" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
-                                           Text="统一收纳规则：新消息 / 新任务 / 状态更新都会把灵动岛弹出来，并按上面的时长重新计时；超时后收成顶部细条（固定与自由模式一致）。鼠标停在岛上时不计时；勾选「音乐播放时保持展开」则播放期间一直显示歌词。" />
+                                           Text="统一收纳规则（v0.2.17）：新消息 / 新任务 / 开始播放都会把灵动岛弹出来，并按上面的时长重新计时，超时收成顶部细条；空闲（无任务/播放/通知）到点同样收纳，之后不会自动再展开。鼠标停在岛上时不计时。「音乐播放时保持展开」是例外开关，默认关闭。多应用共存时只展示活跃项（在放歌/在跑任务），空闲挂着的不占岛。" />
 
                                 <TextBlock Grid.Row="6" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
-                                           Text="停靠只允许屏幕顶部：最左 1/5 与最右 1/5 禁停，仅中间 3/5 可拖可吸附。歌名/歌词/任务状态超宽时自动横向滚动（悬停暂停），短文本左对齐。" />
+                                           Text="窄条交互：悬停 + 单击展开信息面板（含暂存的最新通知）；悬停 + 双击唤起对应应用并置顶。岛内已有两项以上内容时，新消息改走四角弹窗（固定 10 秒收起）。长按上滑可随时强制收纳。" />
                             </Grid>
                         </GroupBox>
 
@@ -557,6 +561,8 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="70" />
@@ -566,12 +572,25 @@
                                 <CheckBox Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                                           x:Name="WeChatFilterCheck" Content="启用过滤（放行他人私聊/普通群聊，屏蔽官方会话与免打扰）" />
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="拦截关键词" Margin="0,8,10,0" />
-                                <TextBox Grid.Row="1" Grid.Column="1" x:Name="FilterKeywordsBox" Height="28" Margin="0,8,0,0" />
+                                <CheckBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,8,0,0"
+                                          x:Name="WeChatAllowChatMultimediaCheck"
+                                          Content="好友/群聊的多媒体（图片/视频/表情包/语音/文件）一律放行" />
 
-                                <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="拦截关键词" Margin="0,8,10,0" />
+                                <TextBox Grid.Row="2" Grid.Column="1" x:Name="FilterKeywordsBox" Height="28" Margin="0,8,0,0" />
+
+                                <WrapPanel Grid.Row="3" Grid.ColumnSpan="2" Margin="0,10,0,0">
+                                    <Button x:Name="FeedbackButton" Content="误拦截反馈…" Padding="14,6"
+                                            Click="OnFeedbackClick"
+                                            ToolTip="某条消息被错误拦截了？选一条记录或手动填写后提交，保存成 JSON 并复制到剪贴板" />
+                                    <TextBlock Style="{StaticResource HintText}" Margin="10,0,0,0"
+                                               VerticalAlignment="Center"
+                                               Text="提交后保存在反馈目录，可直接打包发给开发者" />
+                                </WrapPanel>
+
+                                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Style="{StaticResource HintText}"
                                            Margin="0,6,0,0" TextWrapping="Wrap"
-                                           Text="类型判定只看真实信号：免打扰标记、微信内置系统会话（服务号/服务通知/微信团队/公众号等整名匹配）、公众号文章链接、以及“无发言人结构的群发推送”；不按群名/好友名的文字猜测，群名叫“阿里云”也不会被误杀。拦截关键词是你自己的追加黑名单（逗号分隔），命中会话名或摘要即拦截。QQ 不过滤。" />
+                                           Text="判定拆成两个维度：来源渠道标签（官方/免打扰/好友群聊/自己发送）只作风险权重记录在日志里；内容类型（图片/视频/表情包/语音/文件）单独识别——好友/群聊里的多媒体一律放行，修掉私聊图片因缺少未读证据被当成“自己发的”而拦掉的误伤。官方会话与免打扰会话按渠道标签拦截（那是你显式要的静音/过滤）。拦截关键词是你自己的追加黑名单（逗号分隔），命中会话名或摘要即拦截。QQ 不过滤。" />
                             </Grid>
                         </GroupBox>
 

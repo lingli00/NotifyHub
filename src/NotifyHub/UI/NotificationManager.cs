@@ -37,6 +37,14 @@ public sealed class NotificationManager
     private static readonly TimeSpan PopInterval = TimeSpan.FromMilliseconds(320);
     private static readonly TimeSpan MoveDuration = TimeSpan.FromMilliseconds(190);
 
+    /// <summary>
+    /// 四角弹窗的固定停留时长（v0.2.17 工单B 规则 8）：**10 秒，写死**。
+    /// 岛内已有两项以上内容（音乐 + 任务同时在跑）时新通知改走四角，
+    /// 这条路径不跟随"自动收纳时长"配置——那个时长管的是灵动岛，不是卡片。
+    /// （旧的"通知时长"配置项 NotificationDurationMs 自本版起不再读取，仅为兼容旧配置保留。）
+    /// </summary>
+    public const int CornerNoticeDurationMs = 10_000;
+
     private readonly List<NotificationWindow> _windows = new();
     private readonly Queue<NotifyMessage> _pending = new();
     private readonly System.Windows.Threading.DispatcherTimer _pump = new() { Interval = PopInterval };
@@ -263,7 +271,7 @@ public sealed class NotificationManager
         var message = _pending.Dequeue();
         var window = new NotificationWindow(
             message,
-            config.NotificationDurationMs,
+            CornerNoticeDurationMs,
             config.MarqueeSpeed,
             config,
             scale);

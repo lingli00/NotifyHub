@@ -99,6 +99,28 @@ public sealed class AppConfig
     public string WeChatBlockedKeywords { get; set; } =
         "服务通知,微信团队,微信支付,订阅号消息,公众号,看一看,搜一搜,游戏中心,微信运动,腾讯新闻,QQ邮箱提醒,微信广告,广告通知";
 
+    /// <summary>
+    /// 好友私聊 / 普通群聊里的多媒体消息（图片、视频、动画表情、语音、文件）一律放行
+    /// （v0.2.17 工单A：反误伤）。关掉它 = 回到旧策略——私聊里"没有未读证据"的多媒体
+    /// 会被当成自己发的而拦截。官方/系统会话与免打扰会话的拦截不受此开关影响
+    /// （那是来源渠道标签与用户显式设置，不是内容误伤）。
+    /// </summary>
+    public bool WeChatAllowChatMultimedia { get; set; } = true;
+
+    /// <summary>
+    /// 长按上滑手动收纳（v0.2.17 工单C）：展开的岛上长按鼠标并向上滑，强制收成窄收纳条。
+    /// 关闭后只能等自动收纳倒计时。
+    /// </summary>
+    public bool LongPressCollapseEnabled { get; set; } = true;
+
+    /// <summary>
+    /// 长按上滑手势判定参数（v0.2.17 工单C）：按住至少这么久（毫秒）且向上滑动至少
+    /// 这么远（物理像素）才触发强制收纳；快速大距离上滑（≥56px）不看按住时长。
+    /// </summary>
+    public int LongPressHoldMs { get; set; } = 220;
+
+    public int LongPressSwipePx { get; set; } = 24;
+
     /// <summary>已推送消息去重缓存保留时长（小时）。</summary>
     public int DedupHours { get; set; } = 24;
 
@@ -194,9 +216,11 @@ public sealed class AppConfig
     public int AutoCollapseSeconds { get; set; } = 3;
 
     /// <summary>
-    /// 音乐播放期间保持展开（不做自动收纳）。默认开——否则 3 秒就收成细条，歌词没得看。
+    /// 音乐播放期间保持展开（不做自动收纳）。默认**关**——v0.2.17 工单B 要求
+    /// 「活跃状态也走全局收纳倒计时，超时自动收纳」，与空闲/通知统一一套时序；
+    /// 打开它 = 回到旧行为（播放时岛不收起，方便盯歌词）。
     /// </summary>
-    public bool KeepOpenWhilePlaying { get; set; } = true;
+    public bool KeepOpenWhilePlaying { get; set; }
 
     /// <summary>
     /// 灵动岛总长度（百分比，v0.2.9 需求 6）：100 = 默认自适应宽度，
@@ -318,7 +342,21 @@ public sealed class AppConfig
 
         IslandWidthPercent = Math.Clamp(IslandWidthPercent, MinIslandWidthPercent, MaxIslandWidthPercent);
         IslandSplitRatio = Math.Clamp(IslandSplitRatio, MinIslandSplitRatio, MaxIslandSplitRatio);
+
+        // v0.2.17 工单C：长按上滑参数收敛到安全区间
+        LongPressHoldMs = Math.Clamp(LongPressHoldMs, MinLongPressHoldMs, MaxLongPressHoldMs);
+        LongPressSwipePx = Math.Clamp(LongPressSwipePx, MinLongPressSwipePx, MaxLongPressSwipePx);
     }
+
+    /// <summary>长按判定时长允许范围（毫秒）。</summary>
+    public const int MinLongPressHoldMs = 120;
+
+    public const int MaxLongPressHoldMs = 800;
+
+    /// <summary>上滑触发距离允许范围（物理像素）。</summary>
+    public const int MinLongPressSwipePx = 12;
+
+    public const int MaxLongPressSwipePx = 96;
 
     /// <summary>浏览器选择收敛到合法值。</summary>
     public static string NormalizeBrowserChoice(string? choice) => choice switch

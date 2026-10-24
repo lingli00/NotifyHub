@@ -71,6 +71,20 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetCursorPos(out POINT point);
 
+    /// <summary>鼠标左键虚拟键号。</summary>
+    public const int VK_LBUTTON = 0x01;
+
+    /// <summary>
+    /// 查询虚拟键状态（v0.2.17 工单C）：长按上滑手势靠它判断"按住没有"。
+    /// 岛是点穿窗口（WM_NCHITTEST 返回 HTTRANSPARENT），收不到鼠标消息，
+    /// 只能轮询。返回值最高位 = 按下。
+    /// </summary>
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
+    /// <summary>鼠标左键是否正按着。</summary>
+    public static bool IsLeftButtonDown() => (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+
     /// <summary>
     /// 挪动鼠标指针（离屏截图前把指针挪到角落，避免鼠标恰好压住某个播放键，
     /// 把 hover 底色一起拍进 PNG —— v0.2.8 实拍就踩到过这个假 bug）。

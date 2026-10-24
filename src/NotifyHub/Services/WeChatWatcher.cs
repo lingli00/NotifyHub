@@ -27,28 +27,25 @@ public sealed class WeChatWatcher : ChatAppWatcher
 
     protected override bool ShouldEmit(SessionRow row, AppConfig config)
     {
-        // 类型判定（真实信号：未读证据 / 免打扰 / 官方会话规范名 / 文章链接）
-        var kind = WeChatFilter.Classify(row);
+        // v0.2.17 工单A：一次判定同时给出"拦不拦 / 为什么 / 来源渠道标签 / 内容类型"。
+        // 判定拆成两个维度：渠道标签（官方/免打扰/好友群聊/自己发送）只作风险权重，
+        // 内容类型（图片/视频/表情/语音/文件）决定好友群聊多媒体是否放行。
+        var decision = WeChatFilter.Decide(row, config);
+        var content = WeChatFilter.ContentName(decision.Content);
         var preview = LogService.Truncate(row.Summary, 40);
 
-        // 需求 4：自己发的消息一律不推送（与过滤开关无关的硬规则）。
-        // 裸内容 + 无未读证据 = 自己发的（自己发的消息不进未读数；
-        // 私聊的别人消息也是裸内容，但一定带未读证据，不能按“有没有发言人前缀”判）。
-        if (kind == WeChatFilter.WeChatSessionKind.FromSelf)
+        if (!decision.Blocked)
         {
-            // 每条消息都要留日志，不做时间节流
-            Log.Write(LogLevel.Debug, Name, $"跳过自己发送的消息: {row.Contact} → {preview}");
-            return false;
-        }
-
-        if (!WeChatFilter.ShouldBlock(row, config, out var reason))
-        {
-            // 放行：他人私聊 / 普通群聊
-            Log.Info(Name, $"放行{WeChatFilter.KindName(kind)}: {row.Contact} → {LogService.Truncate(row.Summary, 50)}");
+            // 放行：他人私聊 / 普通群聊（含图片/视频/表情包等多媒体）
+            Log.Info(Name,
+                $"放行{WeChatFilter.KindName(WeChatFilter.Classify(row))}: {row.Contact} → {preview}",
+                $"渠道={decision.Source} 内容={content}{(decision.Reason.Length > 0 ? " " + decision.Reason : "")}");
             return true;
         }
 
-        Log.Write(LogLevel.Debug, Name, $"已过滤微信会话: {row.Contact}（{reason}）");
+        Log.Write(LogLevel.Debug, Name,
+            $"已过滤微信会话: {row.Contact}（{decision.Reason}）",
+            $"渠道={decision.Source} 内容={content}");
         return false;
     }
 

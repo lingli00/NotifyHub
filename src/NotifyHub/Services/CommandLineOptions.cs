@@ -22,6 +22,7 @@ public enum AppMode
     NoticeShot,
     Snapshot,
     OpenSettings,
+    Feedback,
     Help,
 }
 
@@ -81,6 +82,10 @@ public sealed record CommandLineOptions(
                 case "--open-settings":
                     // --open-settings：让常驻实例把设置窗口叫到前台（v0.2.15 需求 4）
                     return new CommandLineOptions(AppMode.OpenSettings, 0);
+                case "--feedback":
+                    // --feedback：打开"误拦截反馈"窗（v0.2.17 工单A）：选一条最近被拦截的
+                    // 记录或手动填写，提交成 JSON 反馈给开发者
+                    return new CommandLineOptions(AppMode.Feedback, 0);
                 case "--island-stream":
                     // --island-stream：从标准输入逐行读状态并转发（长连接，更新延迟 <100ms）
                     return new CommandLineOptions(AppMode.IslandStream, 0);

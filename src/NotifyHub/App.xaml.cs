@@ -98,6 +98,7 @@ public partial class App : Application
                 ConsoleBridge.WriteLine("  NotifyHub.exe --notice-shot 离屏渲染岛内通知三种来源配色（验收用）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --snapshot    导出一条 Bug 快照（截图+前后10秒核心日志）并打开查看页");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --open-settings  把常驻实例的设置窗口叫到前台（可绑热键）");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --feedback    打开「误拦截反馈」窗：上报被错误拦截的消息（工单A）");
                 Shutdown();
                 return;
 
@@ -437,6 +438,16 @@ public partial class App : Application
                     noticeJobs[0].Run();
                     noticeIndex = 1;
                     noticeStep.Start();
+                    return;
+                }
+
+            case AppMode.Feedback:
+                {
+                    // --feedback（v0.2.17 工单A）：打开"误拦截反馈"窗。
+                    // 不启动监听、不留托盘——就是一张填表，提交完自动关闭进程。
+                    AppPaths.EnsureCreated();
+                    var feedback = new FeedbackWindow();
+                    feedback.Show();
                     return;
                 }
 

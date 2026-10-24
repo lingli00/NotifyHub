@@ -1,0 +1,106 @@
+<Window x:Class="NotifyHub.UI.FeedbackWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="NotifyHub · 误拦截反馈"
+        Width="620" Height="520"
+        MinHeight="420" MinWidth="520"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource WinBg}"
+        FontFamily="Microsoft YaHei UI, Segoe UI"
+        TextOptions.TextRenderingMode="ClearType">
+
+    <Window.Resources>
+        <Style TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Foreground" Value="{DynamicResource FgBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Foreground" Value="{DynamicResource SubFgBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="Field" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource SubFgBrush}" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="Background" Value="{DynamicResource InputBg}" />
+            <Setter Property="Foreground" Value="{DynamicResource FgBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}" />
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="Padding" Value="6,4" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Background" Value="{DynamicResource InputBg}" />
+            <Setter Property="Foreground" Value="{DynamicResource FgBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource FgBrush}" />
+        </Style>
+        <Style TargetType="ListBox">
+            <Setter Property="Background" Value="{DynamicResource InputBg}" />
+            <Setter Property="Foreground" Value="{DynamicResource FgBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource InputBorder}" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Style="{StaticResource Hint}" Margin="0,0,0,10"
+                   Text="某条消息被错误拦截了（比如好友/群聊里的图片、视频、表情包没有提醒）？在下面选一条最近被拦截的记录，或直接手动填写，提交后会把详情保存成 JSON 并复制到剪贴板，贴给开发者即可定位。" />
+
+        <TextBlock Grid.Row="1" Style="{StaticResource Field}" Margin="0,0,0,4"
+                   Text="最近被拦截的记录（来自运行日志，点一条自动填入）" />
+
+        <ListBox Grid.Row="2" x:Name="BlockList" MaxHeight="168" MinHeight="60"
+                 SelectionChanged="OnBlockSelected" />
+
+        <Grid Grid.Row="3" Margin="0,10,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource Field}" Text="会话名" />
+            <TextBox Grid.Row="0" Grid.Column="1" x:Name="ContactBox" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource Field}" Text="拦截原因" Margin="0,6,8,0" />
+            <TextBox Grid.Row="1" Grid.Column="1" x:Name="ReasonBox" Margin="0,6,0,0" />
+        </Grid>
+
+        <TextBlock Grid.Row="4" Style="{StaticResource Field}" Margin="0,10,0,4"
+                   Text="补充说明（可选：这条消息本该放行的理由）" />
+        <TextBox Grid.Row="5" x:Name="CommentBox" Height="52" TextWrapping="Wrap"
+                 AcceptsReturn="True" VerticalScrollBarVisibility="Auto" />
+
+        <TextBlock Grid.Row="6" x:Name="StatusText" Style="{StaticResource Hint}"
+                   Margin="0,10,0,8" VerticalAlignment="Bottom" />
+
+        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="SubmitButton" Content="提交反馈" Click="OnSubmitClick" />
+            <Button x:Name="OpenFolderButton" Content="打开反馈文件夹" Click="OnOpenFolderClick" />
+            <Button Content="关闭" Click="OnCloseClick" />
+        </StackPanel>
+    </Grid>
+</Window>

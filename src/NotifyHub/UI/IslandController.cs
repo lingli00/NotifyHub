@@ -121,6 +121,10 @@ public sealed class IslandController : IDisposable
             try
             {
                 Island().SetPresence(musicRunning, workBuddyRunning, _presence.MusicProcessName);
+
+                // v0.2.17 工单B 规则 1：进程在线数据首报到位的瞬间，
+                // 补一次"启动仅展开一次"（与 Start 里的延时调用幂等，只有一个生效）
+                Island().TryStartupExpand();
             }
             catch (Exception ex)
             {
@@ -162,8 +166,7 @@ public sealed class IslandController : IDisposable
         // 歌词看门狗：常驻跑着，成本是每 2 秒一次字典查询 + 几次字段判断
         _lyricWatch.Start();
 
-        // v0.2.9 需求 2：启动即常驻——此时没有音乐也没有任务，先把顶部窄条亮出来，
-        // 用户能一眼确认程序在跑；有内容时它会自己展开。
+        // v0.2.9 需求 2：启动即常驻——先把顶部窄条亮出来，用户能一眼确认程序在跑。
         _ = _dispatcher.BeginInvoke(new Action(() =>
         {
             try
@@ -175,6 +178,27 @@ public sealed class IslandController : IDisposable
                 _log.Warn("Island", "启动常驻细条失败", ex.Message);
             }
         }));
+
+        // v0.2.17 工单B 规则 1：启动**只展开一次**。
+        // PresenceWatcher 首轮约 400ms 出结果，等 600ms 让进程在线数据到位：
+        // 有占位内容（WorkBuddy 在线行 / 待机播放器左栏）就展开这么一次，
+        // 之后一律按空闲/活跃/通知规则走，不会反复自动展开。
+        // （presence 首报也会触发同一次调用，两边幂等。）
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(600).ConfigureAwait(false);
+            _ = _dispatcher.BeginInvoke(new Action(() =>
+            {
+                try
+                {
+                    Island().TryStartupExpand();
+                }
+                catch (Exception ex)
+                {
+                    _log.Warn("Island", "启动展开一次失败", ex.Message);
+                }
+            }));
+        });
 
         // 预热灵动岛窗口（离屏建 HWND + 首帧渲染），
         // 让第一条状态更新也能在 100ms 内上屏，而不是被窗口创建时间吃掉。
@@ -442,6 +466,11 @@ public sealed class IslandController : IDisposable
         island.AutoCollapseEnabledProvider = () => _config.Current.AutoCollapseEnabled;
         island.AutoCollapseSecondsProvider = () => _config.Current.AutoCollapseSeconds;
         island.KeepOpenWhilePlayingProvider = () => _config.Current.KeepOpenWhilePlaying;
+
+        // v0.2.17 工单C：长按上滑强制收纳（开关 + 两个判定参数）
+        island.LongPressCollapseEnabledProvider = () => _config.Current.LongPressCollapseEnabled;
+        island.LongPressHoldMsProvider = () => _config.Current.LongPressHoldMs;
+        island.LongPressSwipePxProvider = () => _config.Current.LongPressSwipePx;
 
         // v0.2.9 需求 6：两个滑块（拖的时候读预览副本，松手保存后读真配置）
         island.IslandWidthPercentProvider = () => (_preview ?? _config.Current).IslandWidthPercent;

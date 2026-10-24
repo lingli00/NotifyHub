@@ -19,35 +19,32 @@ public enum StripZone
 }
 
 /// <summary>
-/// 待机窄条（v0.2.10 需求 2 重做）。
+/// 收纳窄条（v0.2.10 需求 2 重做，v0.2.17 工单B 规则 6 定稿）。
 ///
-/// 交互规则（这次按需求逐条对齐）：
-///   · 悬停：整条**轻微放大**（1.06 倍 + 回弹），不展开、不变色遮罩；
-///   · 按「左右分配比例」把窄条分成两段：左段 = 音乐播放器，右段 = WorkBuddy；
-///   · 悬停左段 → 指示器换成音乐配色；悬停右段 → 换成 WorkBuddy 琥珀；
-///   · 双击左段 → 打开音乐播放器；双击右段 → 打开 WorkBuddy。
+/// 交互规则：
+///   · 悬停：整条**轻微放大**（1.06 倍 + 回弹）+ 左右分区配色，**不展开岛**；
+///   · 悬停 + **单击**：展开信息面板（含暂存的最新通知）；
+///   · 悬停 + **双击**：唤起对应应用（左=音乐播放器 / 右=WorkBuddy）并置顶；
+///   · 单击/双击用 260ms 定时器消歧：第一下排展开，第二下到达就改判双击。
 ///
-/// 注意：这里**不再"鼠标移入就展开岛"**。上一版这么做，而窄条正好常驻在屏幕顶部中央
-/// （指针常年停在那），于是展开 → 超时收起 → 又落回指针下，每 N 秒自己开合一次；
-/// 而且没有内容时展开出来的是个空壳（宽度塌缩 + 圆角 → 屏幕上出现一个竖立白色椭圆）。
-/// 现在只有"确实有内容"时岛才会自己展开，窄条只负责这两件事：悬停反馈 + 双击开应用。
+/// 注意：**悬停本身绝不展开岛**。旧版"悬停 180ms 自动展开"正是"空闲常驻时岛无规律
+/// 自动展开"的投诉来源——窄条常驻屏幕顶部中央，指针路过就弹。现在展开只能靠
+/// 单击、新通知、开始播放、启动任务（或长按上滑前的主动展开）。
 /// </summary>
 public sealed class SnapStripWindow : Window
 {
-    /// <summary>双击某一段（左=音乐 / 右=WorkBuddy）。仅待机空闲模式会触发。</summary>
+    /// <summary>双击某一段（左=音乐 / 右=WorkBuddy）：唤起对应应用并置顶。</summary>
     public event EventHandler<StripZone>? ZoneDoubleClicked;
 
-    /// <summary>悬停一段时间后请求展开岛（信息展示模式用，v0.2.11 需求 2 的补充规则）。</summary>
-    public event EventHandler? HoverExpandRequested;
+    /// <summary>
+    /// 单击窄条（v0.2.17 工单B 规则 6）：展开信息面板（含暂存的最新通知）。
+    /// 与双击的区分靠 <see cref="ClickConfirmMs"/> 消歧：第一下只排定时器，
+    /// 第二下在定时器内到达就改判双击（取消展开）。
+    /// </summary>
+    public event EventHandler? ZoneClicked;
 
     /// <summary>是否处于「待机快捷模式」：true=左右分区配色 + 双击唤起；false=纯信息态。</summary>
     private bool _standbyMode = true;
-
-    /// <summary>
-    /// 悬停展开的延时（v0.2.12 需求 4：260 → 180ms）。
-    /// 窄条只有 12px 厚，用户"停在上面"的意图已经很明显，不需要那么长的确认期。
-    /// </summary>
-    private const int HoverExpandDelayMs = 180;
 
     /// <summary>左右分段比例（百分比，来自设置里的"区域比例"滑块；50 = 对半）。</summary>
     public Func<int>? SplitRatioProvider { get; set; }
@@ -112,11 +109,7 @@ public sealed class SnapStripWindow : Window
         Opacity = 0;
         Cursor = Cursors.Hand;
 
-        MouseEnter += (_, _) =>
-        {
-            ApplyHover(true);
-            ArmHoverExpand();
-        };
+        MouseEnter += (_, _) => ApplyHover(true);
 
         // 有的机器上 MouseEnter 之后就不再派发 MouseMove（NOACTIVATE 分层窗），
         // 所以进入那一刻先把分区定下来，别等 MouseMove（需求 2 的分区配色靠它）。
@@ -131,7 +124,7 @@ public sealed class SnapStripWindow : Window
         MouseLeave += (_, _) =>
         {
             ApplyHover(false);
-            DisarmHoverExpand();
+            DisarmClickExpand();
         };
 
         MouseMove += (_, e) =>
@@ -143,29 +136,26 @@ public sealed class SnapStripWindow : Window
             }
         };
 
-        // 双击分区打开对应应用（单击不再承担"展开"职责，否则双击会被第一下打断）
+        // v0.2.17 工单B 规则 6：单击 = 展开信息面板；双击 = 唤起对应应用。
+        // 两段消歧：ClickCount==1 只排 260ms 确认定时器；ClickCount==2 取消定时器改判双击。
+        // （旧版"单击不做事"是为了避免吃掉双击；现在有定时器，两者可以共存。）
         MouseLeftButtonDown += (_, e) =>
         {
-            if (e.ClickCount < 2)
-            {
-                return;
-            }
-
-            if (!_standbyMode)
-            {
-                // 信息展示模式不接管双击（需求 2：快捷唤起只在待机空闲模式生效）
-                LogService.Shared.Write(LogLevel.Debug, "IslandStrip", "信息模式忽略双击", "待机快捷唤起已关闭");
-                return;
-            }
-
             var zone = ZoneAt(e.GetPosition(this).X);
             if (zone == StripZone.None)
             {
                 return;
             }
 
-            e.Handled = true;
-            ZoneDoubleClicked?.Invoke(this, zone);
+            if (e.ClickCount >= 2)
+            {
+                DisarmClickExpand();
+                e.Handled = true;
+                ZoneDoubleClicked?.Invoke(this, zone);
+                return;
+            }
+
+            ArmClickExpand(zone);
         };
     }
 
@@ -175,11 +165,19 @@ public sealed class SnapStripWindow : Window
     /// <summary>当前是否处于待机快捷模式（诊断用）。</summary>
     public bool IsStandbyMode => _standbyMode;
 
-    private DispatcherTimer? _hoverExpandTimer;
+    /// <summary>
+    /// 单击→展开 的确认延时（v0.2.17 工单B 规则 6）：第一下点击后等这么久，
+    /// 期间没有第二下就判"单击"并展开岛；来了第二下就改判"双击"唤起应用。
+    /// </summary>
+    private const int ClickConfirmMs = 260;
+
+    private DispatcherTimer? _clickTimer;
+    private StripZone _pendingZone = StripZone.None;
 
     /// <summary>
     /// 切"待机快捷模式 / 信息展示模式"（v0.2.11 需求 2/4）。
-    /// 待机：悬停分区换色、双击唤起；信息：悬停只放大、停留片刻则展开看信息，不换待机配色。
+    /// 待机：悬停分区换色、双击唤起；信息：悬停只放大，不换待机配色。
+    /// v0.2.17 起两种模式都响应单击展开与双击唤起（规则 6 不区分模式）。
     /// </summary>
     public void SetStandbyMode(bool standby)
     {
@@ -195,48 +193,49 @@ public sealed class SnapStripWindow : Window
         {
             HoverZone = StripZone.None;
             _indicator.HoverZone = StripZone.None;
-            _hoverExpandTimer?.Stop();
         }
     }
 
-    /// <summary>信息模式下，悬停停留 260ms 就请求展开岛（把音乐控制台/歌词/任务显示出来）。</summary>
-    private void ArmHoverExpand()
+    /// <summary>排一个"单击展开"确认；第二下点击到来时由 <see cref="OnMouseLeftButtonDown"/> 取消。</summary>
+    private void ArmClickExpand(StripZone zone)
     {
-        if (_standbyMode)
-        {
-            return;
-        }
-
-        _hoverExpandTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(HoverExpandDelayMs) };
-        _hoverExpandTimer.Stop();
-        _hoverExpandTimer.Tick -= OnHoverExpandTick;
-        _hoverExpandTimer.Tick += OnHoverExpandTick;
-        _hoverExpandTimer.Start();
+        _pendingZone = zone;
+        _clickTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(ClickConfirmMs) };
+        _clickTimer.Stop();
+        _clickTimer.Tick -= OnClickConfirmTick;
+        _clickTimer.Tick += OnClickConfirmTick;
+        _clickTimer.Start();
     }
 
-    private void DisarmHoverExpand() => _hoverExpandTimer?.Stop();
-
-    private void OnHoverExpandTick(object? sender, EventArgs e)
+    private void DisarmClickExpand()
     {
-        _hoverExpandTimer?.Stop();
+        _clickTimer?.Stop();
+        _pendingZone = StripZone.None;
+    }
 
-        if (_standbyMode)
+    private void OnClickConfirmTick(object? sender, EventArgs e)
+    {
+        _clickTimer?.Stop();
+
+        if (_pendingZone == StripZone.None)
         {
             return;
         }
 
         // **不要用 IsMouseOver**（v0.2.12 需求 4 的根因）：
         // 窄条是 WS_EX_NOACTIVATE + AllowsTransparency 的分层窗，鼠标一走神
-        // 系统就不会再给它派发鼠标消息，IsMouseOver 随时可能是 false；
-        // 结果就是"悬停只放大、永远不展开"。这里直接比对光标与窗口矩形。
+        // 系统就不再派发鼠标消息，IsMouseOver 随时可能是 false。
+        // 这里直接比对光标与窗口矩形——手还压在窄条上才算数。
         if (!IsCursorInside())
         {
-            LogService.Shared.Routine("IslandStrip", "悬停展开取消", "光标已离开窄条");
+            LogService.Shared.Routine("IslandStrip", "单击展开取消", "光标已离开窄条");
+            DisarmClickExpand();
             return;
         }
 
-        LogService.Shared.Write(LogLevel.Debug, "IslandStrip", "悬停展开窄条", $"zone={HoverZone}");
-        HoverExpandRequested?.Invoke(this, EventArgs.Empty);
+        LogService.Shared.Write(LogLevel.Debug, "IslandStrip", "单击窄条", $"zone={_pendingZone}");
+        ZoneClicked?.Invoke(this, EventArgs.Empty);
+        DisarmClickExpand();
     }
 
     /// <summary>光标是否落在窄条窗口矩形内（物理像素比较，避开 DPI 换算误差）。</summary>

@@ -28,6 +28,9 @@ public static class AppPaths
 
     public static string LogDir => Path.Combine(Root, "logs");
 
+    /// <summary>误拦截反馈上报目录（v0.2.17 工单A）：每条反馈一个 JSON，可整目录打包。</summary>
+    public static string FeedbackDir => Path.Combine(Root, "feedback");
+
     public static string DumpDir => Path.Combine(Root, "dump");
 
     public static string SoundDir => Path.Combine(Root, "sounds");
@@ -40,6 +43,7 @@ public static class AppPaths
             Directory.CreateDirectory(LogDir);
             Directory.CreateDirectory(DumpDir);
             Directory.CreateDirectory(SoundDir);
+            Directory.CreateDirectory(FeedbackDir);
         }
         catch
         {

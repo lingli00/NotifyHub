@@ -229,7 +229,6 @@ public partial class SettingsWindow : Window
         WeChatCheck.IsChecked = config.WeChatEnabled;
         QQCheck.IsChecked = config.QQEnabled;
         IntervalBox.Text = config.PollIntervalMs.ToString();
-        DurationBox.Text = config.NotificationDurationMs.ToString();
         AutoStartCheck.IsChecked = config.AutoStart;
         DumpOnStartCheck.IsChecked = config.DumpUiaOnStart;
         IslandFixedRadio.IsChecked = config.IslandMode != "Free";
@@ -250,6 +249,7 @@ public partial class SettingsWindow : Window
         SuppressAppSoundsCheck.IsChecked = config.SuppressAppSounds;
 
         WeChatFilterCheck.IsChecked = config.WeChatFilterEnabled;
+        WeChatAllowChatMultimediaCheck.IsChecked = config.WeChatAllowChatMultimedia;
         FilterKeywordsBox.Text = config.WeChatBlockedKeywords;
 
         // v0.2.6 外观：主题固定毛玻璃（v0.2.9 需求 6 起不再可配）
@@ -284,6 +284,7 @@ public partial class SettingsWindow : Window
         AutoCollapseSlider.Value = collapseSeconds;
         AutoCollapseText.Text = $"{collapseSeconds} 秒";
         KeepOpenWhilePlayingCheck.IsChecked = config.KeepOpenWhilePlaying;
+        LongPressCollapseCheck.IsChecked = config.LongPressCollapseEnabled;
         UpdateAutoCollapseEnabledState();
 
         MarqueeSpeedSlider.Value = Math.Clamp(config.MarqueeSpeed, 10, 120);
@@ -806,19 +807,8 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        if (!int.TryParse(DurationBox.Text.Trim(), out var duration)
-            || duration < AppConfig.MinDurationMs
-            || duration > AppConfig.MaxDurationMs)
-        {
-            MessageBox.Show(
-                this,
-                $"通知时长必须是 {AppConfig.MinDurationMs} ~ {AppConfig.MaxDurationMs} 之间的整数（毫秒）。",
-                "参数不合法",
-                MessageBoxButton.OK,
-                MessageBoxImage.Warning);
-            DurationBox.Focus();
-            return;
-        }
+        // v0.2.17 工单B：四角弹窗固定 10 秒，不再有"通知时长"输入框
+        // （NotificationDurationMs 字段保留仅为兼容旧配置，实际不再读取）
 
         var next = _config.Current.Clone();
         next.NtfyEnabled = NtfyEnabledCheck.IsChecked == true;
@@ -827,7 +817,6 @@ public partial class SettingsWindow : Window
         next.WeChatEnabled = WeChatCheck.IsChecked == true;
         next.QQEnabled = QQCheck.IsChecked == true;
         next.PollIntervalMs = interval;
-        next.NotificationDurationMs = duration;
         next.AutoStart = AutoStartCheck.IsChecked == true;
         next.DumpUiaOnStart = DumpOnStartCheck.IsChecked == true;
         next.IslandMode = IslandFreeRadio.IsChecked == true ? "Free" : "Fixed";
@@ -844,6 +833,7 @@ public partial class SettingsWindow : Window
         next.SuppressAppSounds = SuppressAppSoundsCheck.IsChecked == true;
 
         next.WeChatFilterEnabled = WeChatFilterCheck.IsChecked == true;
+        next.WeChatAllowChatMultimedia = WeChatAllowChatMultimediaCheck.IsChecked == true;
         next.WeChatBlockedKeywords = FilterKeywordsBox.Text.Trim();
 
         next.MarqueeSpeed = (int)Math.Round(Math.Clamp(MarqueeSpeedSlider.Value, 10, 120));
@@ -869,6 +859,9 @@ public partial class SettingsWindow : Window
         next.AutoCollapseSeconds = (int)Math.Round(Math.Clamp(
             AutoCollapseSlider.Value, AppConfig.MinAutoCollapseSeconds, AppConfig.MaxAutoCollapseSeconds));
         next.KeepOpenWhilePlaying = KeepOpenWhilePlayingCheck.IsChecked == true;
+
+        // v0.2.17 工单C：长按上滑强制收纳开关
+        next.LongPressCollapseEnabled = LongPressCollapseCheck.IsChecked == true;
 
         // 浏览器四选项（v0.2.4 需求 7）：前三项自动定位，Other 用用户提供的路径
         var browserChoice = AppConfig.NormalizeBrowserChoice(ComboTag(BrowserChoiceCombo, "System"));
@@ -1028,6 +1021,37 @@ public partial class SettingsWindow : Window
         {
             SnapshotStatus.Text = "导出失败：" + ex.Message;
             LogService.Shared.Error("Snapshot", "导出 Bug 快照失败", ex.ToString());
+        }
+    }
+
+    /// <summary>
+    /// 误拦截反馈（v0.2.17 工单A）：打开反馈窗。窗口是独立标准窗，
+    /// 不做 Owner 绑定——设置窗被收进托盘时反馈窗仍可操作。
+    /// </summary>
+    private void OnFeedbackClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var existing = Application.Current.Windows.OfType<FeedbackWindow>().FirstOrDefault();
+            if (existing is not null)
+            {
+                // 已经开着：直接叫到前台（最小化也会还原）
+                if (existing.WindowState == WindowState.Minimized)
+                {
+                    existing.WindowState = WindowState.Normal;
+                }
+
+                existing.Show();
+                existing.Activate();
+                return;
+            }
+
+            new FeedbackWindow().Show();
+        }
+        catch (Exception ex)
+        {
+            SnapshotStatus.Text = "打开反馈窗失败：" + ex.Message;
+            LogService.Shared.Error("Feedback", "打开误拦截反馈窗失败", ex.ToString());
         }
     }
 

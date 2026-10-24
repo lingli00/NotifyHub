@@ -270,6 +270,67 @@ public static class SelfTest
                    && WeChatFilter.Classify(self) == WeChatFilter.WeChatSessionKind.FromSelf;
         });
 
+        Check("v0.2.17 工单A：好友/群聊多媒体一律放行（图片/视频/表情不再被误拦）", () =>
+        {
+            var config = new AppConfig { WeChatFilterEnabled = true };
+
+            // ① 内容类型识别：只认方括号占位符，"图片发你了"这种文本不算多媒体
+            var classifyOk =
+                WeChatFilter.ClassifyContent("[图片]") == MessageContentKind.Image
+                && WeChatFilter.ClassifyContent("王五: [视频]") == MessageContentKind.Video
+                && WeChatFilter.ClassifyContent("Flyme: [动画表情]") == MessageContentKind.Sticker
+                && WeChatFilter.ClassifyContent("[语音]") == MessageContentKind.Voice
+                && WeChatFilter.ClassifyContent("[文件]") == MessageContentKind.File
+                && WeChatFilter.ClassifyContent("图片发你了，记得看") == MessageContentKind.Text
+                && WeChatFilter.ClassifyContent((string?)null) == MessageContentKind.Text;
+
+            // ② 群聊多媒体（发言人前缀 + 未读）放行
+            var groupImage = new SessionRow("阿里云", "[20条] Flyme: [图片]", HasUnread: true, UnreadCount: 20);
+            var groupSticker = new SessionRow("阿里云", "Flyme: [动画表情]", HasUnread: true, UnreadCount: 20);
+
+            // ③ 私聊好友发来的图片：摘要裸内容 + 未读证据没被 UIA 捕获 → FromSelf 误判路径，
+            //    旧版在这里把图拦掉（工单A 误伤现场），现在按好友多媒体放行
+            var privateImage = new SessionRow("张三", "[图片]", FromSelf: true);
+
+            // ④ 渠道标签只作风险权重：免打扰/官方会话仍按用户显式设置拦截
+            var mutedImage = new SessionRow("产品群", "王五: [图片]", Muted: true, Signals: "消息免打扰");
+            var officialImage = new SessionRow("服务号", "中国银行微银行: [图片]", HasUnread: true, UnreadCount: 1);
+
+            // ⑤ 自己发送的文本仍然拦（自己发的消息不进未读数，是噪声不是误伤）
+            var selfText = new SessionRow("张三", "ok", FromSelf: true);
+
+            // ⑥ 自定义拦截词仍然拦
+            var keywordHit = new SessionRow("推广号", "点击链接领取优惠");
+
+            var groupDecision = WeChatFilter.Decide(groupImage, config);
+            var privateDecision = WeChatFilter.Decide(privateImage, config);
+            var selfDecision = WeChatFilter.Decide(selfText, config);
+            var mutedDecision = WeChatFilter.Decide(mutedImage, config);
+            var officialDecision = WeChatFilter.Decide(officialImage, config);
+
+            report.AppendLine(
+                $"      诊断: 群图={groupDecision.Blocked}({groupDecision.Reason}) " +
+                $"私聊图={privateDecision.Blocked}({privateDecision.Reason}) 渠道={privateDecision.Source} " +
+                $"自己文本={selfDecision.Blocked} 免打扰图={mutedDecision.Blocked}({mutedDecision.Source}) " +
+                $"官方图={officialDecision.Blocked}({officialDecision.Source})");
+
+            var keywordConfig = new AppConfig { WeChatFilterEnabled = true, WeChatBlockedKeywords = "推广" };
+
+            // ⑦ 关掉"好友多媒体放行"开关 → 回到旧行为（仍按渠道规则拦）
+            var strictConfig = new AppConfig { WeChatFilterEnabled = true, WeChatAllowChatMultimedia = false };
+
+            return classifyOk
+                   && !groupDecision.Blocked && groupDecision.Content == MessageContentKind.Image
+                   && !privateDecision.Blocked && privateDecision.Content == MessageContentKind.Image
+                   && !WeChatFilter.Decide(groupSticker, config).Blocked
+                   && selfDecision.Blocked
+                   && mutedDecision.Blocked && mutedDecision.Source == "免打扰会话"
+                   && officialDecision.Blocked && officialDecision.Source == "公众号/官方渠道"
+                   && WeChatFilter.Decide(keywordHit, keywordConfig).Blocked
+                   && WeChatFilter.Decide(privateImage, strictConfig).Blocked
+                   && WeChatFilter.SourceTag(WeChatFilter.WeChatSessionKind.Chat) == "好友/群聊";
+        });
+
         Check("v0.2.5：解析未读数与 FromSelf 判据（自己发的不带未读证据）", () =>
         {
             // 别人发来的未读消息：[N条] + 发言人前缀
@@ -1875,6 +1936,44 @@ public static class SelfTest
                    && !IslandWindow.NoticeGoesToIsland(true, true);
         });
 
+        Check("v0.2.17 工单B 规则8：四角弹窗固定 10 秒收纳（不受全局收纳时长配置影响）", () =>
+            NotificationManager.CornerNoticeDurationMs == 10_000);
+
+        Check("v0.2.17 工单C：长按上滑手势识别（按住够久+上滑 / 快速大距离上甩 / 松手重置）", () =>
+        {
+            // 时序 1：按下不动 → 跟踪；按住差 1ms 不触发；按住 221ms + 上滑 30px → 触发；触发后不重复报
+            var t1 = new SwipeUpCollapseTracker();
+            var s1a = t1.Sample(true, 500, 1000, 220, 24);
+            var s1b = t1.Sample(true, 500, 1100, 220, 24);
+            var s1c = t1.Sample(true, 500, 1219, 220, 24);
+            var s1d = t1.Sample(true, 470, 1221, 220, 24);
+            var s1e = t1.Sample(true, 400, 1300, 220, 24);
+
+            // 时序 2：按住不够久（150ms）只滑 20px → 不触发；松手回 Idle；再按下重新从起点计
+            var t2 = new SwipeUpCollapseTracker();
+            var s2a = t2.Sample(true, 500, 2000, 220, 24);
+            var s2b = t2.Sample(true, 480, 2150, 220, 24);
+            var s2c = t2.Sample(false, 480, 2160, 220, 24);
+            var s2d = t2.Sample(true, 480, 2200, 220, 24);
+
+            // 时序 3：快速大距离上甩（60px ≥ 56px）不看按住时长
+            var t3 = new SwipeUpCollapseTracker();
+            var s3a = t3.Sample(true, 500, 3000, 220, 24);
+            var s3b = t3.Sample(true, 440, 3040, 220, 24);
+
+            return s1a == SwipeGestureState.Tracking
+                   && s1b == SwipeGestureState.Tracking
+                   && s1c == SwipeGestureState.Tracking
+                   && s1d == SwipeGestureState.Triggered
+                   && s1e == SwipeGestureState.Triggered
+                   && s2a == SwipeGestureState.Tracking
+                   && s2b == SwipeGestureState.Tracking
+                   && s2c == SwipeGestureState.Idle
+                   && s2d == SwipeGestureState.Tracking
+                   && s3a == SwipeGestureState.Tracking
+                   && s3b == SwipeGestureState.Triggered;
+        });
+
         Check("v0.2.9 需求3：岛内通知整行可点（点击能到达 WPF，不被穿透）", () =>
         {
             var ok = false;
@@ -1890,7 +1989,7 @@ public static class SelfTest
             return ok;
         });
 
-        static bool RunNoticeHitTest()
+        bool RunNoticeHitTest()
         {
             // 岛的窗口是 NOACTIVATE + 分层的，WM_NCHITTEST 默认返回 HTTRANSPARENT（点穿），
             // 只有落在 Button 上才放行。通知行整行被包进一个透明底的 Button，
@@ -1907,7 +2006,8 @@ public static class SelfTest
             try
             {
                 island.ApplyTheme(ThemePalette.Create(new AppConfig()));
-                island.SetMedia(new MediaInfo("侧脸", "魏语诺", "FOLIA", true, "", "Folia", 30, 200));
+
+                // v0.2.17 工单B：空闲状态下收到通知 → 自动展开并展示（规则 3）
                 island.ShowNotice(new NotifyMessage
                 {
                     Source = MessageSource.WeChat,
@@ -1930,7 +2030,27 @@ public static class SelfTest
                     new System.Windows.Point(button.ActualWidth / 2, button.ActualHeight / 2), island);
 
                 // 通知行中间必须是"可交互"，且状态标记为已展示
-                return island.IsNoticeShown && island.HitTestInteractive(center);
+                var rowClickable = island.IsNoticeShown && island.HitTestInteractive(center);
+
+                // v0.2.17 工单B 规则 7：先已读收掉，再让音乐进入播放态，
+                // 此时来新通知必须**只暂存**（单应用模式不主动弹，防"一闪而过"的反面——
+                // 不覆盖用户正在听的歌，悬浮到岛上时才展示）。
+                island.HideNotice();
+                island.SetMedia(new MediaInfo("侧脸", "魏语诺", "FOLIA", true, "", "Folia", 30, 200));
+                island.ShowNotice(new NotifyMessage
+                {
+                    Source = MessageSource.WeChat,
+                    Sender = "李四",
+                    Content = "第二条：歌挺好听",
+                    Time = DateTime.Now,
+                });
+
+                var stashedOnly = !island.IsNoticeShown && island.HasVisibleContent;
+
+                report.AppendLine(
+                    $"      诊断: 行可点={rowClickable} 单应用只暂存={stashedOnly}");
+
+                return rowClickable && stashedOnly;
             }
             finally
             {
@@ -2043,24 +2163,31 @@ public static class SelfTest
             return ok;
         });
 
-        Check("v0.2.7 需求2：收纳配置默认 3 秒 / 区间收敛 / 音乐例外默认开", () =>
+        Check("v0.2.7 需求2：收纳配置默认 3 秒 / 区间收敛 / 音乐例外默认关（v0.2.17 统一时序）", () =>
         {
             var defaults = new AppConfig();
             var defaultsOk = defaults.AutoCollapseEnabled
                              && defaults.AutoCollapseSeconds == 3
-                             && defaults.KeepOpenWhilePlaying
+                             && !defaults.KeepOpenWhilePlaying
                              && defaults.LyricsEnabled
-                             && defaults.LyricsFontSize == 13;
+                             && defaults.LyricsFontSize == 13
+                             // v0.2.17 工单A/C 新配置默认值
+                             && defaults.WeChatAllowChatMultimedia
+                             && defaults.LongPressCollapseEnabled
+                             && defaults.LongPressHoldMs == 220
+                             && defaults.LongPressSwipePx == 24;
 
-            var high = new AppConfig { AutoCollapseSeconds = 999, LyricsFontSize = 99 };
+            var high = new AppConfig { AutoCollapseSeconds = 999, LyricsFontSize = 99, LongPressHoldMs = 9999, LongPressSwipePx = 999 };
             high.Normalize();
             var highOk = high.AutoCollapseSeconds == AppConfig.MaxAutoCollapseSeconds
                          && high.LyricsFontSize == AppConfig.MaxLyricsFontSize;
 
-            var low = new AppConfig { AutoCollapseSeconds = 0, LyricsFontSize = 1 };
+            var low = new AppConfig { AutoCollapseSeconds = 0, LyricsFontSize = 1, LongPressHoldMs = 1, LongPressSwipePx = 1 };
             low.Normalize();
             var lowOk = low.AutoCollapseSeconds == AppConfig.MinAutoCollapseSeconds
-                        && low.LyricsFontSize == AppConfig.MinLyricsFontSize;
+                        && low.LyricsFontSize == AppConfig.MinLyricsFontSize
+                        && low.LongPressHoldMs == AppConfig.MinLongPressHoldMs
+                        && low.LongPressSwipePx == AppConfig.MinLongPressSwipePx;
 
             return defaultsOk && highOk && lowOk;
         });
@@ -2311,7 +2438,7 @@ public static class SelfTest
             });
         });
 
-        Check("v0.2.15 需求2：待机展示态保留播放器左栏（不再塌成一根竖线）", () =>
+        Check("v0.2.17 工单B 规则5：后台挂着的播放器不占岛；唤起保持期才显示左栏", () =>
         {
             return RunSta(() =>
             {
@@ -2330,12 +2457,29 @@ public static class SelfTest
                 {
                     island.ApplyTheme(ThemePalette.Create(new AppConfig()));
 
-                    // 场景 B：WorkBuddy 在跑 + 播放器进程在跑、但没有播放会话。
-                    // 先报 presence（岛会因此真正展开、拿到布局），再清一次媒体状态。
-                    // 顺序不能反：SetMedia(null) 先来会触发一次"收细条"，
-                    // 紧接着的 SetPresence 会被 400ms 展开冷却挡住 → 岛不上屏 → 宽度量到 0。
+                    // 场景 1（稳态）：WorkBuddy 在跑 + 播放器进程在跑、但没有播放会话。
+                    // v0.2.17 工单B 规则 5："无任务无播放的应用不展示"——
+                    // 旧版（v0.2.15 需求2）会把待机左栏撑出来占着岛；现在稳态下
+                    // 左栏与在线行都不显示，岛收成窄条（只展示活跃项）。
                     island.SetPresence(true, true);
                     island.SetMedia(null);
+
+                    var standbyGone = !island.IsStandbyMusicShown;
+                    var steadyNoContent = !island.HasVisibleContent;
+
+                    // 场景 2（唤起保持期）：双击窄条唤起播放器后的 15s 内，待机左栏
+                    // 回归（用户可以直接点左栏的播放键），岛从细条重新展开。
+                    // 注意 NoteUserLaunch 内部会因"当前无内容"再走一次收纳、刷新细条
+                    // 落幕时间，所以前后各越过一次 400ms 展开冷却，最后的 SetMedia
+                    // 才真正走 ExpandFromStrip 把岛拉回来。
+                    Thread.Sleep(450);
+                    island.NoteUserLaunch();
+                    Thread.Sleep(450);
+                    island.SetMedia(null);
+
+                    var standbyBack = island.IsStandbyMusicShown;
+                    var holdHasContent = island.HasVisibleContent;
+                    var expandedBack = !island.IsStripMode;
 
                     island.Measure(new Size(900, 300));
                     island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
@@ -2349,8 +2493,8 @@ public static class SelfTest
                     report.AppendLine(
                         $"      诊断: left={leftPane?.Visibility.ToString() ?? "null"} " +
                         $"divider={divider?.Visibility.ToString() ?? "null"} " +
-                        $"width={island.DesiredSize.Width:F0} content={island.HasVisibleContent} " +
-                        $"standby={island.IsStandbyMusicShown} music={island.HasMusicContent}");
+                        $"width={island.DesiredSize.Width:F0} content={holdHasContent} " +
+                        $"standby={standbyBack} strip={island.IsStripMode}");
 
                     if (leftPane is null || divider is null)
                     {
@@ -2363,21 +2507,12 @@ public static class SelfTest
                     var dividerVisible = divider.Visibility == Visibility.Visible;
                     var wideEnough = island.DesiredSize.Width >= 200;
 
-                    // 待机展示态本身不算"内容"，超时仍应正常收纳
-                    var presenceIsContent = island.HasVisibleContent;
-
-                    LogService.Shared.Write(
-                        LogLevel.Info,
-                        "SelfTest",
-                        "待机分裂诊断",
-                        $"left={leftPane.Visibility} divider={divider.Visibility} " +
-                        $"width={island.DesiredSize.Width:F0} content={presenceIsContent} " +
-                        $"standby={island.IsStandbyMusicShown} music={island.HasMusicContent}");
-
-                    return leftVisible && dividerVisible && wideEnough && presenceIsContent;
+                    return standbyGone && steadyNoContent && standbyBack && holdHasContent
+                           && expandedBack && leftVisible && dividerVisible && wideEnough;
                 }
                 finally
                 {
+                    // 这些调用会顺手建出窄条窗口（Evaluate → CollapseToStrip），收干净别留痕
                     try { island.Close(); } catch { }
                 }
             });

@@ -40,6 +40,8 @@
 - **调参时岛闪一下**：预览不再重建/反复 Show-Hide 窗口；设置页的 `RefreshPreview` 用
   `DispatcherPriority.Render` 做帧内合并（一次拖动几十个 `ValueChanged` 只重排一次），
   相同配置直接跳过（`SamePreview`）。
+- **歌词被岛体裁掉半截**：高度是固定值，放不下「当前句 + 译文 + 下一句」三行时，
+  `ApplyLyricLineBudget` 按预算从下往上折叠（当前句 → 译文 → 下一句），宁可少一行也不留半截字。
 
 ### 需求2：收纳手势 长按上滑 → 短按上滑
 - 删掉"按住 ≥220ms"的判定，`SwipeUpCollapseTracker.Sample(pressing, y, nowMs, swipePx)`

@@ -82,6 +82,9 @@ public sealed class IslandController : IDisposable
 
     private string? _lastStatusTag;
 
+    /// <summary>预览日志去重签名（场景 + 长宽百分比）。</summary>
+    private string? _previewLogSignature;
+
     /// <summary>岛读配置的唯一入口：预览态读临时副本，其余读真配置。</summary>
     private AppConfig Live => _previewConfig ?? _config.Current;
 
@@ -306,6 +309,17 @@ public sealed class IslandController : IDisposable
         {
             _previewConfig = config;
             Island().EnterLayoutPreview(config, scene);
+
+            // 只在"场景/尺寸"真的变了时记一条（滑块拖动会有几十次调用）
+            var signature = $"{scene}|{config.IslandWidthPercent}|{config.IslandHeightPercent}";
+            if (signature != _previewLogSignature)
+            {
+                _previewLogSignature = signature;
+                _log.Info(
+                    "Island",
+                    "布局实况预览",
+                    $"场景={scene} 长度={config.IslandWidthPercent}% 高度={config.IslandHeightPercent}%");
+            }
         }
         catch (Exception ex)
         {
@@ -351,7 +365,8 @@ public sealed class IslandController : IDisposable
                 island.ShowRunning(_lastStatusText, _lastStatusTag);
             }
 
-            _log.Routine("Island", "退出布局预览", "已恢复真实运行状态");
+            _previewLogSignature = null;
+            _log.Info("Island", "退出布局预览", "已恢复真实运行状态");
         }
         catch (Exception ex)
         {

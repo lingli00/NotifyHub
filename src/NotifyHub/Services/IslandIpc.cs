@@ -49,6 +49,34 @@ public static class IslandIpc
         => TrySend("MEDIA|" + action, log);
 
     /// <summary>
+    /// 让常驻实例把设置窗口叫到前台（v0.2.15 需求 4）：
+    /// `NotifyHub.exe --open-settings` 走这条路，用户可以把快捷方式绑到热键上。
+    /// </summary>
+    public static bool TryForwardOpenSettings(LogService log)
+        => TrySend("SETTINGS|", log);
+
+    /// <summary>
+    /// 常驻实例收到"打开设置"请求（由 App 订阅后调用 ShowSettings）。
+    /// 用静态事件而不是直接引用 App，避免服务层反向依赖 UI 层。
+    /// </summary>
+    public static event Action? SettingsRequested;
+
+    private static void RaiseSettingsRequested(Dispatcher dispatcher, LogService log)
+    {
+        dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                SettingsRequested?.Invoke();
+            }
+            catch (Exception ex)
+            {
+                log.Error("设置", "打开设置窗口失败", $"{ex.GetType().Name}: {ex.Message}");
+            }
+        }));
+    }
+
+    /// <summary>
     /// 常驻流模式：从标准输入逐行读取命令并转发，直到 stdin 关闭。
     /// 每次状态更新只做一次管道写入（不含进程启动），用于满足"更新延迟 &lt;100ms"。
     /// 返回转发成功的行数。
@@ -243,6 +271,13 @@ public static class IslandIpc
 
     private static void HandleLine(string line, Dispatcher dispatcher, LogService log)
     {
+        // 打开设置（v0.2.15 需求 4）：--open-settings 转发过来的
+        if (line.StartsWith("SETTINGS|", StringComparison.Ordinal))
+        {
+            RaiseSettingsRequested(dispatcher, log);
+            return;
+        }
+
         // 媒体控制命令：MEDIA|toggle|play|pause|next|prev
         if (line.StartsWith("MEDIA|", StringComparison.Ordinal))
         {

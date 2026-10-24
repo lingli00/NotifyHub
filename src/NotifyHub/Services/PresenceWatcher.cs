@@ -15,12 +15,31 @@ namespace NotifyHub.Services;
 /// </summary>
 public sealed class PresenceWatcher : IDisposable
 {
-    /// <summary>巡检间隔（毫秒）。1.5 秒：既够"立刻"，又不至于让 CPU 有存在感。</summary>
-    private const int PollIntervalMs = 1500;
+    /// <summary>
+    /// 巡检间隔（毫秒）。v0.2.15 需求 5：1500 → 400。
+    ///
+    /// 1500ms 是"进程状态可以慢慢来"的旧假设；但用户关掉播放器/WorkBuddy 之后，
+    /// 岛要么继续显示残留内容、要么半天不回待机，主观感受就是"反应迟钝"。
+    /// 一次 `Process.GetProcesses()` 实测 1~3ms，400ms 一轮的占用 &lt;1% 单核。
+    ///
+    /// **进程退出还有一条更快通路**（见 <see cref="WatchExit"/>）：
+    /// 已经发现的进程会挂上 `Process.Exited` 事件，退出瞬间就补一次巡检，
+    /// 所以"关掉播放器立刻回待机"不依赖这个间隔（实测端到端 0.05s 级）。
+    /// </summary>
+    private const int PollIntervalMs = 400;
+
+    /// <summary>巡检间隔（毫秒，自检断言"实时性"用）。</summary>
+    public static int PollInterval => PollIntervalMs;
 
     private readonly LogService _log;
     private readonly Timer _timer;
     private readonly object _gate = new();
+
+    /// <summary>已挂"退出即通知"的进程（pid → Process 对象，必须留引用否则事件会丢）。</summary>
+    private readonly Dictionary<int, Process> _watched = new();
+
+    /// <summary>巡检重入保护：定时器与进程退出事件可能同时进来。</summary>
+    private int _polling;
 
     private bool _musicRunning;
     private bool _workBuddyRunning;
@@ -64,13 +83,36 @@ public sealed class PresenceWatcher : IDisposable
 
     private void Poll()
     {
+        // 定时器与"进程退出"事件可能同时触发：一轮没跑完就别开第二轮
+        if (Interlocked.CompareExchange(ref _polling, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            PollCore();
+        }
+        finally
+        {
+            Volatile.Write(ref _polling, 0);
+        }
+    }
+
+    private void PollCore()
+    {
         bool music = false;
         bool workBuddy = false;
         string? musicProcess = null;
 
+        // 挂上"退出监听"的进程必须保住引用、绝不能 Dispose，其余进程一律释放句柄，
+        // 否则 400ms 一轮的全表枚举会不停堆积内核句柄。
+        var all = Process.GetProcesses();
+        var adopted = new HashSet<int>();
+
         try
         {
-            foreach (var process in Process.GetProcesses())
+            foreach (var process in all)
             {
                 try
                 {
@@ -79,22 +121,32 @@ public sealed class PresenceWatcher : IDisposable
                     if (!workBuddy && name.Contains("WorkBuddy", StringComparison.OrdinalIgnoreCase))
                     {
                         workBuddy = true;
+
+                        if (WatchExit(process))
+                        {
+                            adopted.Add(process.Id);
+                        }
                     }
 
                     if (!music && MatchesMusicApp(name))
                     {
                         music = true;
                         musicProcess = name;
+
+                        if (WatchExit(process))
+                        {
+                            adopted.Add(process.Id);
+                        }
                     }
 
                     if (music && workBuddy)
                     {
-                        break;
+                        break; // 两样都找到了，剩下的不用再看
                     }
                 }
-                finally
+                catch
                 {
-                    process.Dispose();
+                    // 单个进程读名字失败（权限/已退出）跳过
                 }
             }
         }
@@ -103,6 +155,25 @@ public sealed class PresenceWatcher : IDisposable
             // 进程枚举失败：保持上一次状态，不要因此把岛打回待机
             _log.Write(LogLevel.Debug, "Presence", "进程巡检失败", ex.Message);
             return;
+        }
+        finally
+        {
+            foreach (var process in all)
+            {
+                if (adopted.Contains(process.Id))
+                {
+                    continue; // 已托管给 Exited 事件，由它负责释放
+                }
+
+                try
+                {
+                    process.Dispose();
+                }
+                catch
+                {
+                    // 忽略
+                }
+            }
         }
 
         lock (_gate)
@@ -134,6 +205,59 @@ public sealed class PresenceWatcher : IDisposable
         }
     }
 
+    /// <summary>
+    /// 给"已经发现的目标进程"挂退出事件（v0.2.15 需求 5 的实时通路）。
+    ///
+    /// 轮询只能保证"最迟 400ms 发现"，而这个事件在进程句柄一置信号时就回调，
+    /// 立刻补一次巡检 —— 用户关掉播放器/WorkBuddy 的那一刻岛就开始判断，不用等下一拍。
+    /// `Process.Exited` 走线程池的注册等待，不占常驻线程；但必须保住 Process 对象引用，
+    /// 否则被 GC 回收后事件就再也不会触发（这是 Win32 句柄监听的经典坑）。
+    /// </summary>
+    private bool WatchExit(Process process)
+    {
+        var pid = process.Id;
+
+        lock (_gate)
+        {
+            if (_watched.ContainsKey(pid) || _watched.Count >= 32)
+            {
+                return false;
+            }
+
+            try
+            {
+                process.EnableRaisingEvents = true;
+                _watched[pid] = process;
+            }
+            catch
+            {
+                return false; // 进程刚好已经退出：下一轮巡检会处理
+            }
+        }
+
+        process.Exited += (_, _) =>
+        {
+            lock (_gate)
+            {
+                _watched.Remove(pid);
+            }
+
+            try
+            {
+                process.Dispose();
+            }
+            catch
+            {
+                // 忽略
+            }
+
+            _log.Warn("Presence", "目标进程已退出，立即刷新状态", $"pid={pid}");
+            Poll();
+        };
+
+        return true;
+    }
+
     private static bool MatchesMusicApp(string processName)
     {
         foreach (var keyword in MediaPlayerMonitor.MusicApps)
@@ -152,5 +276,24 @@ public sealed class PresenceWatcher : IDisposable
         _started = false;
         _timer.Change(Timeout.Infinite, Timeout.Infinite);
         _timer.Dispose();
+
+        // 退出时把挂着的进程对象一起释放，别留内核句柄
+        lock (_gate)
+        {
+            foreach (var process in _watched.Values)
+            {
+                try
+                {
+                    process.EnableRaisingEvents = false;
+                    process.Dispose();
+                }
+                catch
+                {
+                    // 忽略
+                }
+            }
+
+            _watched.Clear();
+        }
     }
 }

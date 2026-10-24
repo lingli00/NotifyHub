@@ -21,6 +21,7 @@ public enum AppMode
     EnvReport,
     NoticeShot,
     Snapshot,
+    OpenSettings,
     Help,
 }
 
@@ -77,6 +78,9 @@ public sealed record CommandLineOptions(
                 case "--settings":
                     // --settings：仅打开设置窗口（排版验证/人工检查用，不启动监听）
                     return new CommandLineOptions(AppMode.Settings, 0);
+                case "--open-settings":
+                    // --open-settings：让常驻实例把设置窗口叫到前台（v0.2.15 需求 4）
+                    return new CommandLineOptions(AppMode.OpenSettings, 0);
                 case "--island-stream":
                     // --island-stream：从标准输入逐行读状态并转发（长连接，更新延迟 <100ms）
                     return new CommandLineOptions(AppMode.IslandStream, 0);

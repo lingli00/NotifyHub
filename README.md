@@ -5,8 +5,8 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
-**下载**：[Release v0.2.14](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.14)
-→ `NotifyHub-v0.2.14-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.14-source.zip`（完整工程）。
+**下载**：[Release v0.2.15](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.15)
+→ `NotifyHub-v0.2.15-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.15-source.zip`（完整工程）。
 
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
@@ -368,6 +368,14 @@ python tools\stream_latency.py         # 状态流延迟
 ---
 
 ## 八、版本
+
+**v0.2.15** — 待机条双击唤起修好 / 白色椭圆 / 桌面残留色块 / 设置窗口二次打开 / 进程退出即刻回待机
+
+* **待机条双击失灵**：`LaunchedKeywords` 写进去再也不删，关掉软件后再双击只会命中"已启动过，等待窗口"、返回 Launched 却什么都不做。改为"关键字 → 启动时刻"，按**进程是否还活着**判定（在跑就只激活、刚拉起 2 秒内算启动中、已退出就允许重新拉起）；左段不再写死 Folia，按"进程名 + 路径"配对 Folia / 网易云 / QQ音乐
+* **白色椭圆**：`Evaluate` 曾把"双击后的 15 秒保持期"算成内容 → 软件还没起来那几秒岛上一片空白却被 Show 出来（宽 54、圆角 22）。现在统一走 `HasVisibleContent`，`ShowIsland` 再加一道"没内容拒绝展开"的闸；待机展示态的左右分裂也不会再塌成一根竖线（岛宽 54 → 460）
+* **残留色块**：通知卡加卡死兜底（显示时长 + 3 秒必收，悬停顺延；淡出回调丢失也强制关闭）；岛预热改离屏；退出时显式关窗；Bug 快照新增窗口清单便于定位
+* **设置窗口二次打开**：`Activate()` 对最小化窗口只"提前台"不还原，窗口停在 `0,1012 160×28` 就再也进不去。现在先 `Normal` 再 `Show/Activate`，关掉则重建；新增 `--open-settings`（可绑热键）
+* **回待机慢**：巡检 1500→400ms + `Process.Exited` 退出即刷新 + 无内容时直接切细条（跳过 380ms 动画）、进程退出不再等 2.2s 换曲缓冲。实测杀 Folia 后 **0.55s** 收敛（改造前最长约 4 秒）
 
 **v0.2.14** — 微信旧消息去重 / WorkBuddy 跨任务通知隔离 / 收纳改播放·任务驱动 / 冷启动播放器控制 / 提示音增益
 

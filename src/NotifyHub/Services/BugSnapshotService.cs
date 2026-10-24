@@ -98,6 +98,7 @@ public static class BugSnapshotService
                 : new[] { Math.Round(rect.Value.X), Math.Round(rect.Value.Y), Math.Round(rect.Value.Width), Math.Round(rect.Value.Height) },
             ModuleCounts = before.GroupBy(l => l.Module).ToDictionary(g => g.Key, g => g.Count()),
             LogWindowSeconds = windowSeconds,
+            Windows = ProbeWindows(),
             Note = note ?? string.Empty,
         };
         WriteMeta(dir, meta);
@@ -137,6 +138,59 @@ public static class BugSnapshotService
         });
 
         return new SnapshotInfo(id, dir, now, false, before.Count, meta.Note);
+    }
+
+    /// <summary>
+    /// 采集本进程所有 WPF 顶层窗口的现场（v0.2.15 需求 3 的诊断基建）。
+    ///
+    /// 为什么用 <see cref="Application.Windows"/> 而不是 EnumWindows：
+    /// 本应用的窗口全是 WPF 窗口，WPF 自己就记着每个窗口的 Title / Left / Top /
+    /// ActualWidth / IsVisible / WindowState —— 比再写一套 P/Invoke 更准、更省事，
+    /// 而且能直接看出"某个窗口 Visible=true 但其实是 Minimized"这种假在场。
+    /// </summary>
+    private static List<WindowProbe> ProbeWindows()
+    {
+        var list = new List<WindowProbe>();
+
+        try
+        {
+            var app = Application.Current;
+            if (app is null)
+            {
+                return list;
+            }
+
+            foreach (Window window in app.Windows)
+            {
+                try
+                {
+                    var width = window.ActualWidth > 1 ? window.ActualWidth : window.Width;
+                    var height = window.ActualHeight > 1 ? window.ActualHeight : window.Height;
+
+                    list.Add(new WindowProbe
+                    {
+                        Title = window.Title,
+                        Left = (int)Math.Round(window.Left),
+                        Top = (int)Math.Round(window.Top),
+                        Width = (int)Math.Round(width),
+                        Height = (int)Math.Round(height),
+                        Visible = window.IsVisible,
+                        ClassName = window.GetType().Name,
+                        State = window.WindowState.ToString(),
+                    });
+                }
+                catch
+                {
+                    // 单个窗口读失败跳过
+                }
+            }
+        }
+        catch
+        {
+            // 快照里没有窗口清单不影响截图/日志
+        }
+
+        return list;
     }
 
     /// <summary>列出历史快照（新的在前）。</summary>
@@ -484,11 +538,39 @@ public static class BugSnapshotService
 
         public double[]? IslandRect { get; set; }
 
+        /// <summary>
+        /// 本进程所有顶层窗口的现场（v0.2.15 需求 3）：
+        /// "桌面上多出来的色块"到底是哪个窗口、在哪、可见不可见，一眼就能对上。
+        /// 之前只能看到"岛的位置"，通知卡/细条/设置窗有没有藏着的可见对象完全查不到。
+        /// </summary>
+        public List<WindowProbe> Windows { get; set; } = new();
+
         public Dictionary<string, int> ModuleCounts { get; set; } = new();
 
         /// <summary>实际采集的日志时间窗（秒）：正常 10（前）+10（后），空闲回退时是 60。</summary>
         public int LogWindowSeconds { get; set; } = WindowSeconds;
 
         public string Note { get; set; } = string.Empty;
+    }
+
+    /// <summary>一个顶层窗口的现场快照（标题 / 矩形 / 可见性）。</summary>
+    public sealed class WindowProbe
+    {
+        public string Title { get; set; } = string.Empty;
+
+        public int Left { get; set; }
+
+        public int Top { get; set; }
+
+        public int Width { get; set; }
+
+        public int Height { get; set; }
+
+        public bool Visible { get; set; }
+
+        public string ClassName { get; set; } = string.Empty;
+
+        /// <summary>Normal / Minimized / Maximized（最小化的窗口虽然 IsVisible=true，但不会渲染）。</summary>
+        public string State { get; set; } = string.Empty;
     }
 }

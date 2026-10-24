@@ -33,6 +33,26 @@ public partial class NotificationWindow : Window
 
     private readonly DispatcherTimer _timer = new();
     private readonly DispatcherTimer _swipeTimer = new();
+
+    /// <summary>
+    /// 卡死兜底（v0.2.15 需求 3）：卡片最迟在"显示时长 + 3 秒"后强制关闭。
+    ///
+    /// 正常路径是 <c>ContentRendered</c> → 启动倒计时 → 到点 Dismiss。
+    /// 万一窗口没有真正渲染（ContentRendered 不派发）、或淡出动画的 Completed 丢了，
+    /// 卡片就会永久留在屏幕上 —— 用户看到的就是"桌面角落多出一个白色/黑色方框，
+    /// 退出 NotifyHub 才消失"。这里用一条独立计时器兜住所有异常路径，
+    /// 悬停/按下时自动顺延（用户正在看，不能抢走）。
+    /// </summary>
+    private readonly DispatcherTimer _guard = new();
+
+    /// <summary>已关闭（避免兜底路径重复 Close；自检也用它判断卡片是否真的收掉了）。</summary>
+    private bool _closed;
+
+    /// <summary>卡片是否已关闭（自检用）。</summary>
+    public bool IsClosed => _closed;
+
+    /// <summary>兜底余量（毫秒）：显示时长之外最多再留这么久（自检断言用）。</summary>
+    public const int StuckGuardExtraMs = 3000;
     private readonly int _durationMs;
     private readonly double _marqueeSpeed;
     private readonly AppConfig _config;
@@ -80,6 +100,7 @@ public partial class NotificationWindow : Window
         _timer.Tick += (_, _) => Dismiss();
         _swipeTimer.Interval = TimeSpan.FromMilliseconds(16);
         _swipeTimer.Tick += OnSwipeTick;
+        _guard.Tick += (_, _) => OnGuardElapsed();
 
         Card.MouseEnter += OnCardMouseEnter;
         Card.MouseLeave += OnCardMouseLeave;
@@ -172,6 +193,10 @@ public partial class NotificationWindow : Window
         }
 
         Show();
+
+        // v0.2.15 需求 3：上屏即武装兜底计时器（比显示时长多 3 秒的余量）
+        _guard.Interval = TimeSpan.FromMilliseconds(_durationMs + StuckGuardExtraMs);
+        _guard.Start();
     }
 
     /// <summary>
@@ -204,6 +229,7 @@ public partial class NotificationWindow : Window
         _closing = true;
         _timer.Stop();
         _swipeTimer.Stop();
+        _guard.Stop();
 
         if (!animate || !IsVisible)
         {
@@ -217,6 +243,39 @@ public partial class NotificationWindow : Window
 
         var slide = new DoubleAnimation(CardTransform.X, 18, TimeSpan.FromMilliseconds(180));
         CardTransform.BeginAnimation(TranslateTransform.XProperty, slide);
+
+        // 动画 Completed 不是"一定会派发"（窗口被隐藏、合成器挂起时都可能丢）：
+        // 400ms 后还没关就直接关，绝不留一具空壳在屏幕上。
+        var fallback = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        fallback.Tick += (_, _) =>
+        {
+            fallback.Stop();
+
+            if (!_closed)
+            {
+                Close();
+            }
+        };
+        fallback.Start();
+    }
+
+    /// <summary>兜底到点：没被悬停/按下就直接收起（异常路径的唯一出口）。</summary>
+    private void OnGuardElapsed()
+    {
+        if (_closing || _closed)
+        {
+            _guard.Stop();
+            return;
+        }
+
+        // 用户正在看/正在拖：顺延一拍，不抢
+        if (_pressed || Card.IsMouseOver)
+        {
+            return;
+        }
+
+        LogService.Shared.Warn("通知", "卡片超时未关闭，强制收起", Title);
+        Dismiss(animate: false);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -235,6 +294,8 @@ public partial class NotificationWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
+        _closed = true;
+        _guard.Stop();
         _swipeTimer.Stop();
         Dismissed?.Invoke(this, EventArgs.Empty);
     }

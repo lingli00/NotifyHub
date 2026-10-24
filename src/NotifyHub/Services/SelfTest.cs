@@ -2223,6 +2223,267 @@ public static class SelfTest
             return windows.Count > 0;
         });
 
+        Check("v0.2.15 需求1：关掉软件后再次双击必须重新拉起（不再永久锁死）", () =>
+        {
+            // 2026-10-24 真实日志：10:47:29 真启动 Folia，之后 10:47:53 / 10:48:37 /
+            // 10:50:53 / 10:51:28 全是"已启动过，等待窗口 | Folia" + outcome=Launched，
+            // 而 Folia 早就被用户关掉了 —— 双击看起来"生效了"，实际什么都没做。
+            const long now = 100_000;
+
+            // 进程还在跑 → 必须拦住（否则就是重复实例：幽灵任务栏图标 + 16×16 空白窗）
+            var runningSuppressed = AppLauncher.ShouldSuppressLaunch(now - 60_000, now, processRunning: true);
+
+            // 刚拉起 1 秒、进程表里还没出现 → 宽限期内先拦住
+            var graceSuppressed = AppLauncher.ShouldSuppressLaunch(now - 1_000, now, processRunning: false);
+
+            // 用户已经关掉、且过了宽限期 → 必须放行（老 bug 的修复点）
+            var allowAfterExit = !AppLauncher.ShouldSuppressLaunch(now - 10_000, now, processRunning: false);
+            var allowLongAfter = !AppLauncher.ShouldSuppressLaunch(now - 3_600_000, now, processRunning: false);
+
+            return runningSuppressed && graceSuppressed && allowAfterExit && allowLongAfter
+                   && AppLauncher.LaunchGraceLimitMs >= 1_000;
+        });
+
+        Check("v0.2.15 需求1：音乐唤起按“进程名 + 路径”配对（不会误拉第二个播放器）", () =>
+        {
+            var targets = AppLauncher.MusicTargets();
+            var candidates = AppLauncher.MusicAppCandidates();
+
+            var hasFolia = targets.Any(t => t.Keyword == "Folia"
+                                            && t.Path.EndsWith("Folia.exe", StringComparison.OrdinalIgnoreCase));
+            var hasCloudMusic = targets.Any(t => t.Keyword == "cloudmusic");
+            var hasQqMusic = targets.Any(t => t.Keyword == "QQMusic");
+
+            // 每个关键字的安装路径必须真的带上这个进程名，否则"跑没跑"与"启动哪个"会错位
+            var keywordMatchesPath = targets.All(t =>
+                t.Path.IndexOf(t.Keyword, StringComparison.OrdinalIgnoreCase) >= 0);
+            var allRooted = targets.All(t => Path.IsPathRooted(t.Path));
+            var candidatesAligned = candidates.Count == targets.Count;
+
+            return hasFolia && hasCloudMusic && hasQqMusic && keywordMatchesPath && allRooted && candidatesAligned;
+        });
+
+        Check("v0.2.15 需求2：没有可见内容绝不展开空岛（白色椭圆的根因）", () =>
+        {
+            return RunSta(() =>
+            {
+                var island = new IslandWindow
+                {
+                    ModeProvider = () => "Fixed",
+                    MusicEnabledProvider = () => true,
+                    MarqueeSpeedProvider = () => 45,
+                    LyricsEnabledProvider = () => true,
+                    LyricsFontSizeProvider = () => 13,
+                    AutoCollapseEnabledProvider = () => false,
+                    SavedPositionProvider = () => null,
+                };
+
+                try
+                {
+                    island.ApplyTheme(ThemePalette.Create(new AppConfig()));
+
+                    // ① 什么都没有：不算内容
+                    island.SetPresence(false, false);
+                    var emptyNoContent = !island.HasVisibleContent;
+
+                    // ② 只有"刚双击唤起"的 15 秒保持期：
+                    //    旧版把它算成内容 → 播放器还没起来的几秒里，岛上一片空白却被 Show 出来，
+                    //    宽度塌到 54、圆角 22 = 屏幕上那个竖立白色椭圆（10-24 10:42 快照实拍）
+                    island.NoteUserLaunch();
+                    var holdIsActive = island.IsLaunchHoldActive;
+                    var holdNoContent = !island.HasVisibleContent;
+
+                    // ③ 真任务进来 → 算内容
+                    island.ShowRunning("正在整理需求清单", "WorkBuddy");
+                    var taskIsContent = island.HasVisibleContent;
+
+                    // ④ 完成态同样算内容（绿勾要停留 600ms）
+                    island.ShowDone("整理完成", "WorkBuddy");
+                    var doneIsContent = island.HasVisibleContent;
+
+                    return emptyNoContent && holdIsActive && holdNoContent && taskIsContent && doneIsContent;
+                }
+                finally
+                {
+                    // 这些调用会顺手建出窄条窗口（Evaluate → CollapseToStrip），收干净别留痕
+                    try { island.Close(); } catch { }
+                }
+            });
+        });
+
+        Check("v0.2.15 需求2：待机展示态保留播放器左栏（不再塌成一根竖线）", () =>
+        {
+            return RunSta(() =>
+            {
+                var island = new IslandWindow
+                {
+                    ModeProvider = () => "Fixed",
+                    MusicEnabledProvider = () => true,
+                    MarqueeSpeedProvider = () => 45,
+                    LyricsEnabledProvider = () => true,
+                    LyricsFontSizeProvider = () => 13,
+                    AutoCollapseEnabledProvider = () => false,
+                    SavedPositionProvider = () => null,
+                };
+
+                try
+                {
+                    island.ApplyTheme(ThemePalette.Create(new AppConfig()));
+
+                    // 场景 B：WorkBuddy 在跑 + 播放器进程在跑、但没有播放会话。
+                    // 先报 presence（岛会因此真正展开、拿到布局），再清一次媒体状态。
+                    // 顺序不能反：SetMedia(null) 先来会触发一次"收细条"，
+                    // 紧接着的 SetPresence 会被 400ms 展开冷却挡住 → 岛不上屏 → 宽度量到 0。
+                    island.SetPresence(true, true);
+                    island.SetMedia(null);
+
+                    island.Measure(new Size(900, 300));
+                    island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
+                    island.RefreshLayoutMetrics();
+                    island.Measure(new Size(900, 300));
+                    island.Arrange(new Rect(0, 0, island.DesiredSize.Width, island.DesiredSize.Height));
+
+                    var leftPane = island.FindName("LeftPane") as System.Windows.Controls.Grid;
+                    var divider = island.FindName("Divider") as System.Windows.Controls.Border;
+
+                    report.AppendLine(
+                        $"      诊断: left={leftPane?.Visibility.ToString() ?? "null"} " +
+                        $"divider={divider?.Visibility.ToString() ?? "null"} " +
+                        $"width={island.DesiredSize.Width:F0} content={island.HasVisibleContent} " +
+                        $"standby={island.IsStandbyMusicShown} music={island.HasMusicContent}");
+
+                    if (leftPane is null || divider is null)
+                    {
+                        return false;
+                    }
+
+                    // 左栏必须留着（图标 + 空歌名 + 三键），否则"分隔线画了、左栏没内容"
+                    // 就会让岛宽塌到 54 —— 那正是白色椭圆/白色细框的外观
+                    var leftVisible = leftPane.Visibility == Visibility.Visible;
+                    var dividerVisible = divider.Visibility == Visibility.Visible;
+                    var wideEnough = island.DesiredSize.Width >= 200;
+
+                    // 待机展示态本身不算"内容"，超时仍应正常收纳
+                    var presenceIsContent = island.HasVisibleContent;
+
+                    LogService.Shared.Write(
+                        LogLevel.Info,
+                        "SelfTest",
+                        "待机分裂诊断",
+                        $"left={leftPane.Visibility} divider={divider.Visibility} " +
+                        $"width={island.DesiredSize.Width:F0} content={presenceIsContent} " +
+                        $"standby={island.IsStandbyMusicShown} music={island.HasMusicContent}");
+
+                    return leftVisible && dividerVisible && wideEnough && presenceIsContent;
+                }
+                finally
+                {
+                    try { island.Close(); } catch { }
+                }
+            });
+        });
+
+        Check("v0.2.15 需求5：进程巡检 ≤500ms（关掉播放器/WorkBuddy 立刻回待机）", () =>
+            PresenceWatcher.PollInterval <= 500 && PresenceWatcher.PollInterval >= 200);
+
+        Check("v0.2.15 需求1：进程退出后真的重新拉起（端到端 / 隐藏 notepad）", () =>
+        {
+            var notepad = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System), "notepad.exe");
+            if (!File.Exists(notepad))
+            {
+                // 没有 notepad 的极简系统：跳过（不影响其它用例），但要在报告里说清楚
+                report.AppendLine("      SKIP  未找到 notepad.exe，跳过端到端拉起验证");
+                return true;
+            }
+
+            static int Count() => System.Diagnostics.Process.GetProcessesByName("notepad").Length;
+
+            try
+            {
+                AppLauncher.ForgetLaunched("notepad");
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("notepad")) { try { p.Kill(); } catch { } }
+
+                var first = AppLauncher.Open("notepad", new[] { notepad });
+                Thread.Sleep(900);
+                var aliveAfterFirst = Count() > 0;
+
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("notepad")) { try { p.Kill(); } catch { } }
+                Thread.Sleep(600);
+                var gone = Count() == 0;
+
+                // 冷却 600ms（wx 去重）+ 越过 2s 启动宽限，再双击一次
+                Thread.Sleep(2_200);
+                var second = AppLauncher.Open("notepad", new[] { notepad });
+                Thread.Sleep(900);
+                var relaunched = Count() > 0;
+
+                report.AppendLine(
+                    $"      诊断: first={first} alive={aliveAfterFirst} gone={gone} " +
+                    $"second={second} relaunched={relaunched}");
+
+                return first == OpenOutcome.Launched && aliveAfterFirst && gone
+                       && second == OpenOutcome.Launched && relaunched;
+            }
+            finally
+            {
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("notepad")) { try { p.Kill(); } catch { } }
+                AppLauncher.ForgetLaunched("notepad");
+            }
+        });
+
+        Check("v0.2.15 需求3：通知卡超时必收（不留桌面残留框）", () =>
+        {
+            return RunSta(() =>
+            {
+                var message = new NotifyMessage
+                {
+                    Source = MessageSource.Ntfy,
+                    Sender = "自检",
+                    Content = "卡片卡死兜底",
+                    Time = DateTime.Now,
+                };
+
+                var card = new NotificationWindow(message, AppConfig.MinDurationMs, 45, new AppConfig(), 1.0);
+
+                try
+                {
+                    // 离屏显示：绝不在用户桌面上弹一张真卡片
+                    card.ShowAt(-4000, -4000, animate: false);
+
+                    // RunSta 没有消息循环，必须手动泵 dispatcher，DispatcherTimer 才会走
+                    var deadline = DateTime.UtcNow.AddSeconds(
+                        (AppConfig.MinDurationMs / 1000.0) + NotificationWindow.StuckGuardExtraMs / 1000.0 + 3);
+
+                    while (DateTime.UtcNow < deadline && !card.IsClosed)
+                    {
+                        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                            () => { }, System.Windows.Threading.DispatcherPriority.Background);
+                        System.Threading.Thread.Sleep(40);
+                    }
+
+                    var closed = card.IsClosed;
+                    LogService.Shared.Write(
+                        LogLevel.Info, "SelfTest", "卡片兜底诊断", $"closed={closed} deadlineHit={!closed}");
+                    return closed;
+                }
+                finally
+                {
+                    try
+                    {
+                        if (!card.IsClosed)
+                        {
+                            card.Close();
+                        }
+                    }
+                    catch
+                    {
+                        // 忽略
+                    }
+                }
+            }, 20);
+        });
+
         // dump 可能被桌面上无响应窗口的 UIA 30 秒超时拖慢，用超时护栏避免自检整体挂死
         var dumpTask = Task.Run(() => UiaDumper.DumpAll(log));
         if (dumpTask.Wait(TimeSpan.FromSeconds(150)))

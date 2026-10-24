@@ -985,6 +985,19 @@ public sealed class IslandController : IDisposable
         _publisher.Dispose();
         _presence.Dispose();
 
+        // v0.2.15 需求 3：退出时把岛（以及它持有的细条）一起关掉。
+        // OnClosed 里已经 Stop 掉所有计时器并 Dispose 细条，这里只负责"别再留着窗口"。
+        try
+        {
+            _island?.Close();
+        }
+        catch
+        {
+            // 窗口可能已被关闭
+        }
+
+        _island = null;
+
         if (Current == this)
         {
             Current = null;

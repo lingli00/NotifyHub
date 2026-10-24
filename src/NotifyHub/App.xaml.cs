@@ -51,6 +51,20 @@ public partial class App : Application
             return;
         }
 
+        // --open-settings（v0.2.15 需求 4）：纯转发，一行都不要初始化。
+        // 常驻实例在跑 → 通过管道让它把设置窗口叫到前台（最小化也会还原）；
+        // 没在跑 → 老实用普通启动路径（用户看到托盘图标后就知道了）。
+        if (options.Mode is AppMode.OpenSettings)
+        {
+            if (IslandIpc.TryForwardOpenSettings(LogService.Shared))
+            {
+                Shutdown();
+                return;
+            }
+
+            // 转发失败：退回普通 GUI 启动（等价于用户双击 exe）
+        }
+
         base.OnStartup(e);
 
         var log = LogService.Shared;
@@ -83,6 +97,7 @@ public partial class App : Application
                 ConsoleBridge.WriteLine("  NotifyHub.exe --fps-test    实测 5 秒渲染帧率与卡顿（高刷屏验证）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --notice-shot 离屏渲染岛内通知三种来源配色（验收用）");
                 ConsoleBridge.WriteLine("  NotifyHub.exe --snapshot    导出一条 Bug 快照（截图+前后10秒核心日志）并打开查看页");
+                ConsoleBridge.WriteLine("  NotifyHub.exe --open-settings  把常驻实例的设置窗口叫到前台（可绑热键）");
                 Shutdown();
                 return;
 
@@ -855,6 +870,20 @@ public partial class App : Application
         // 灵动岛转发通道：常驻期间监听 --island 命令
         IslandIpc.StartServer(Dispatcher, log);
 
+        // v0.2.15 需求 4：--open-settings / 托盘双击共用同一个入口，
+        // 保证"关掉设置后还能反复打开"这条路径只有一处实现（都走 ShowSettings 的还原逻辑）。
+        IslandIpc.SettingsRequested += () =>
+        {
+            try
+            {
+                ShowSettings();
+            }
+            catch (Exception ex)
+            {
+                log.Warn("设置", "响应外部打开设置请求失败", ex.Message);
+            }
+        };
+
         _eventFlushTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _eventFlushTimer.Tick += (_, _) =>
         {
@@ -1234,6 +1263,20 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// 打开设置窗口（v0.2.15 需求 4 重写生命周期）。
+    ///
+    /// 旧实现只有一句 `if (_settings is not null) { _settings.Activate(); return; }`，
+    /// 而 <c>Activate()</c> 对**最小化**的窗口只是把它"提到前台"，不会还原——
+    /// 屏幕上什么都不会出现，用户自然认为"关掉设置后就再也打不开了，只能重启"。
+    /// （2026-10-24 现场实测：窗口停在 0,1012 / 160×28 的 showCmd=2 状态，
+    /// 双击托盘只把日志刷了一行 TOOLWINDOW 激活，窗口纹丝不动。）
+    ///
+    /// 现在的规则：
+    ///   · 窗口对象还在、屏幕上可见  → 最小化就先 Normal，再 Show/Activate；
+    ///   · 窗口已经被关掉（Closed 已把它置 null，或对象失效）→ 新建一个；
+    ///   · 无论哪条路，都不允许"入口被锁死"。
+    /// </summary>
     private void ShowSettings()
     {
         if (_configService is null || _monitor is null || _notifications is null)
@@ -1241,24 +1284,53 @@ public partial class App : Application
             return;
         }
 
-        if (_settings is not null)
+        if (_settings is { } existing)
         {
-            _settings.Activate();
-            return;
+            try
+            {
+                if (existing.WindowState == WindowState.Minimized)
+                {
+                    existing.WindowState = WindowState.Normal;
+                }
+
+                // 隐藏态（理论上不会出现，防御性兜底）也一并救回来
+                if (!existing.IsVisible)
+                {
+                    existing.Show();
+                }
+
+                existing.Activate();
+                existing.Focus();
+                return;
+            }
+            catch (Exception ex)
+            {
+                // 窗口对象已失效（被外部销毁 / 句柄已释放）：丢掉它，下面重建
+                LogService.Shared.Warn("设置", "复用设置窗口失败，重建", ex.Message);
+                _settings = null;
+            }
         }
 
-        _settings = new SettingsWindow(_configService, LogService.Shared, _monitor, _notifications);
+        var window = new SettingsWindow(_configService, LogService.Shared, _monitor, _notifications);
+        _settings = window;
 
         // v0.2.9 需求 6：滑块拖动 → 岛立即重排（不落盘）
-        _settings.LivePreview = preview => _islandController?.PreviewLayout(preview);
+        window.LivePreview = preview => _islandController?.PreviewLayout(preview);
 
-        _settings.Closed += (_, _) =>
+        window.Closed += (_, _) =>
         {
             // 关窗时清掉预览态，岛回到真实配置（用户没点保存就该恢复原样）
             _islandController?.ClearPreview();
-            _settings = null;
+
+            // 只清自己：避免"旧窗口关闭"把新建的窗口引用一起抹掉
+            if (ReferenceEquals(_settings, window))
+            {
+                _settings = null;
+            }
         };
-        _settings.Show();
+
+        window.Show();
+        window.Activate();
     }
 
     private void OpenLogFolder()

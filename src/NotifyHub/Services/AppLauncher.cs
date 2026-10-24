@@ -37,8 +37,25 @@ public enum OpenOutcome
 /// </summary>
 public static class AppLauncher
 {
-    /// <summary>本次运行内已经启动过的进程（避免同一条双击链路里重复拉起）。</summary>
-    private static readonly HashSet<string> LaunchedKeywords = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// 本次运行内启动过的进程（关键字 → 启动时刻 TickCount64）。
+    ///
+    /// v0.2.15 需求 1：这里**必须记时间**，不能只记"启动过"。
+    /// 旧版是一个 HashSet，写进去就再也不删：用户用待机条双击拉起 Folia / WorkBuddy、
+    /// 用完手动关掉、再双击 —— 命中的是"已启动过，等待窗口"，直接返回 Launched
+    /// 而**什么都不做**，表现就是"待机条双击彻底失灵，只有重启 NotifyHub 才好"。
+    /// 2026-10-24 的日志实证：10:47:29 真启动 Folia，之后 10:47:53 / 10:48:37 / 10:50:53
+    /// / 10:51:28 全是"已启动过，等待窗口 | Folia" + outcome=Launched（用户早就把它关了）。
+    /// </summary>
+    private static readonly Dictionary<string, long> LaunchedAtMs = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 刚拉起不到这么久（毫秒）就算"还在启动中"，容忍进程表尚未出现。
+    /// 2 秒足够覆盖 Electron 应用"先起壳再起真身"的间隙；
+    /// 再长就会让"关掉后立刻双击"白等，实测（2026-10-24）3 秒时会出现
+    /// "返回 Launched 但进程没起来"的假成功。
+    /// </summary>
+    private const int LaunchGraceMs = 2000;
 
     /// <summary>最近一次唤起的时刻，用来吞掉 WPF 重复派发的双击（实测一次双击会触发两次 ClickCount==2）。</summary>
     private static long _lastOpenAtMs;
@@ -108,8 +125,16 @@ public static class AppLauncher
     public static bool TryActivateOrLaunch(string processNameKeyword, IReadOnlyList<string>? candidatePaths = null)
         => Open(processNameKeyword, candidatePaths) != OpenOutcome.Failed;
 
-    /// <summary>常见音乐播放器安装路径（没装就跳过）。</summary>
-    public static IReadOnlyList<string> MusicAppCandidates()
+    /// <summary>
+    /// 内置播放器名单（进程名关键字 + 安装路径），按优先级排列。
+    ///
+    /// v0.2.15 需求 1：旧版只有一张"路径数组"，按 Folia 关键字去匹配进程——
+    /// 用户装的是网易云时，`MatchingProcessNames("Folia")` 永远为空，于是每次双击都
+    /// 走到"启动第一个存在的路径"，一旦某台机器上 Folia 不存在、网易云在跑，
+    /// 就会**再拉一个网易云**（正是 v0.2.11 花大力气干掉的重复实例）。
+    /// 现在把关键字和路径绑成一组，逐个判"跑没跑"，跑着就激活、没跑才启动。
+    /// </summary>
+    public static IReadOnlyList<(string Keyword, string Path)> MusicTargets()
     {
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -118,14 +143,70 @@ public static class AppLauncher
 
         return new[]
         {
-            System.IO.Path.Combine(local, "Programs", "Folia", "Folia.exe"),
-            System.IO.Path.Combine(pf, "Folia", "Folia.exe"),
-            System.IO.Path.Combine(pf86, "Netease", "CloudMusic", "cloudmusic.exe"),
-            System.IO.Path.Combine(pf, "Netease", "CloudMusic", "cloudmusic.exe"),
-            System.IO.Path.Combine(pf86, "Tencent", "QQMusic", "QQMusic.exe"),
-            System.IO.Path.Combine(pf, "Tencent", "QQMusic", "QQMusic.exe"),
-            System.IO.Path.Combine(roaming, "Tencent", "QQMusic", "QQMusic.exe"),
+            ("Folia", System.IO.Path.Combine(local, "Programs", "Folia", "Folia.exe")),
+            ("Folia", System.IO.Path.Combine(pf, "Folia", "Folia.exe")),
+            ("cloudmusic", System.IO.Path.Combine(pf86, "Netease", "CloudMusic", "cloudmusic.exe")),
+            ("cloudmusic", System.IO.Path.Combine(pf, "Netease", "CloudMusic", "cloudmusic.exe")),
+            ("QQMusic", System.IO.Path.Combine(pf86, "Tencent", "QQMusic", "QQMusic.exe")),
+            ("QQMusic", System.IO.Path.Combine(pf, "Tencent", "QQMusic", "QQMusic.exe")),
+            ("QQMusic", System.IO.Path.Combine(roaming, "Tencent", "QQMusic", "QQMusic.exe")),
         };
+    }
+
+    /// <summary>常见音乐播放器安装路径（兼容旧调用；新代码请用 <see cref="OpenMusic"/>）。</summary>
+    public static IReadOnlyList<string> MusicAppCandidates()
+        => MusicTargets().Select(t => t.Path).ToArray();
+
+    /// <summary>
+    /// 打开"音乐播放器"（待机条左段双击，v0.2.15 需求 1 重写）：
+    ///   1) 有在播会话 → 直接按它的进程名激活；
+    ///   2) 名单里任一播放器进程在跑 → 激活它（**绝不重复启动第二个实例**）；
+    ///   3) 都不在跑 → 按名单顺序拉起第一个真实存在的可执行文件。
+    /// 返回 Failed 表示"既没找到可激活的，也没有可启动的路径"。
+    /// </summary>
+    public static OpenOutcome OpenMusic(string? currentProcessName)
+    {
+        if (!string.IsNullOrWhiteSpace(currentProcessName))
+        {
+            var bySession = Open(currentProcessName);
+            if (bySession != OpenOutcome.Failed)
+            {
+                return bySession;
+            }
+        }
+
+        // 进程在跑就只激活，不启动：哪怕它和 Folia 不是同一个播放器
+        foreach (var (keyword, _) in MusicTargets())
+        {
+            if (!IsRunning(keyword))
+            {
+                continue;
+            }
+
+            var activated = Open(keyword);
+            if (activated != OpenOutcome.Failed)
+            {
+                return activated;
+            }
+        }
+
+        // 都不在跑：按名单顺序找一个装了的拉起来
+        foreach (var (keyword, path) in MusicTargets())
+        {
+            if (!System.IO.File.Exists(path))
+            {
+                continue;
+            }
+
+            var outcome = Open(keyword, new[] { path });
+            if (outcome != OpenOutcome.Failed)
+            {
+                return outcome;
+            }
+        }
+
+        LogService.Shared.Warn("AppLauncher", "未找到已安装的音乐播放器", "名单内的路径都不存在");
+        return OpenOutcome.Failed;
     }
 
     /// <summary>WorkBuddy 常见安装路径。</summary>
@@ -142,15 +223,37 @@ public static class AppLauncher
     }
 
     /// <summary>
-    /// 隐藏启动：不走 ShellExecute（那会给控制台程序弹黑窗），拿到句柄后立刻释放。
+    /// 启动目标应用（v0.2.15 需求 1 重写"已启动过"的判定）。
+    ///
+    /// 旧逻辑只要本进程启动过一次就直接返回，导致"用户关掉软件后再双击没反应"。
+    /// 现在的判据是**目标进程还活不活**：
+    ///   · 进程在跑（刚拉起 / 已经建好窗口）→ 不重复启动，返回 Launched；
+    ///   · 进程不在、但上一次启动还不到 3 秒 → 可能进程表还没刷新，再等一等；
+    ///   · 进程不在、上次启动已超过 3 秒 → 用户确实关掉了，**清掉记录重新拉起**。
     /// </summary>
     private static OpenOutcome LaunchHidden(string keyword, IReadOnlyList<string> candidatePaths)
     {
-        if (LaunchedKeywords.Contains(keyword))
+        var now = Environment.TickCount64;
+
+        if (LaunchedAtMs.TryGetValue(keyword, out var launchedAt))
         {
-            // 本次运行内已经启动过一次：给系统一点时间把窗口建出来，别连着拉第二个
-            LogService.Shared.Write(LogLevel.Info, "AppLauncher", "已启动过，等待窗口", keyword);
-            return OpenOutcome.Launched;
+            var running = IsRunning(keyword);
+
+            if (ShouldSuppressLaunch(launchedAt, now, running))
+            {
+                // 进程已经在跑（或刚拉起、还没进进程表）：给系统一点时间把窗口建出来，
+                // 绝不连着拉第二个实例（v0.2.11 的幽灵图标就是这么来的）
+                LogService.Shared.Write(
+                    LogLevel.Info,
+                    "AppLauncher",
+                    "已启动过，等待窗口",
+                    $"{keyword} age={now - launchedAt}ms running={running}");
+                return OpenOutcome.Launched;
+            }
+
+            // 进程已经退出：这是"用户关掉之后又想拉开"，必须允许重新启动
+            LaunchedAtMs.Remove(keyword);
+            LogService.Shared.Info("AppLauncher", "上次拉起的进程已退出，允许重新拉起", keyword);
         }
 
         foreach (var path in candidatePaths)
@@ -167,7 +270,7 @@ public static class AppLauncher
 
                 // 需求 1：拉起后直接销毁句柄，不在这边留任何后台进程
                 process?.Dispose();
-                LaunchedKeywords.Add(keyword);
+                LaunchedAtMs[keyword] = now;
 
                 LogService.Shared.Info("AppLauncher", "已隐藏启动", path);
                 return OpenOutcome.Launched;
@@ -180,6 +283,33 @@ public static class AppLauncher
 
         LogService.Shared.Warn("AppLauncher", "未找到可用应用", keyword);
         return OpenOutcome.Failed;
+    }
+
+    /// <summary>清掉"启动过"的记录（自检复位用，正常流程靠进程存活判定自动清理）。</summary>
+    public static void ForgetLaunched(string processNameKeyword)
+        => LaunchedAtMs.Remove(Normalize(processNameKeyword));
+
+    /// <summary>宽限期（毫秒），自检/日志用。</summary>
+    public static int LaunchGraceLimitMs => LaunchGraceMs;
+
+    /// <summary>
+    /// "本次运行内启动过"要不要拦住这次启动（v0.2.15 需求 1，纯函数便于自检）。
+    ///
+    /// 只有两种情况该拦：
+    ///   1) 目标进程确实还在跑 —— 再拉一个就是重复实例（幽灵图标 / 16×16 空白窗）；
+    ///   2) 距上次启动还不到 <see cref="LaunchGraceMs"/> —— 进程表可能还没刷新，
+    ///      此刻放行容易在同一个双击里拉起两个。
+    /// 其余情况（进程已经退出、且过了宽限期）一律**放行**：
+    /// 用户关掉软件后再双击，就是要重新打开它。
+    /// </summary>
+    public static bool ShouldSuppressLaunch(long launchedAtMs, long nowMs, bool processRunning)
+    {
+        if (processRunning)
+        {
+            return true;
+        }
+
+        return nowMs - launchedAtMs < LaunchGraceMs;
     }
 
     /// <summary>

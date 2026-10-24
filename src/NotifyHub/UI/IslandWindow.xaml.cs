@@ -740,6 +740,27 @@ public partial class IslandWindow : Window
         => !_musicVisible && !_statusVisible && !_noticeVisible;
 
     /// <summary>
+    /// 岛上**真的有东西可看**吗（v0.2.15 需求 2 的硬守卫）。
+    ///
+    /// 这是"能不能把岛 Show 出来"的唯一判据，比 <see cref="IsIdleStandby"/> 严格：
+    ///   · 任务行 / 音乐行（正在播放）/ 通知行任一可见 → 有内容；
+    ///   · WorkBuddy 在线行必须**真的 Visible**（不只是 `_presenceVisible` 标志位，
+    ///     防止"标志说在、界面已收起"的错配把岛撑出来）；
+    ///   · 待机展示态的播放器左栏（`_standbyMusicShown`）**不算内容**——
+    ///     它只是形态（场景 B），不能让它撑住岛、更不能让岛在没内容时展开。
+    ///
+    /// 待机 15 秒保持（<see cref="IsLaunchHoldActive"/>）也**不算内容**：
+    /// 它的作用只是"别急着收"，不是"凭空弹一个空壳"。
+    /// 旧版把 `IsLaunchHoldActive` 当内容 → 双击唤起后播放器还没起来的那几秒，
+    /// 屏幕上就是一个 54×96 的竖立白色椭圆（2026-10-24 10:42 的 Bug 快照实拍）。
+    /// </summary>
+    public bool HasVisibleContent
+        => _statusVisible
+           || _musicVisible
+           || _noticeVisible
+           || (_presenceVisible && PresenceWbRow.Visibility == Visibility.Visible);
+
+    /// <summary>
     /// 由控制器推送"进程是否在线"（v0.2.11 需求 2）：进程一开就切信息展示模式，不等播放/任务。
     /// </summary>
     public void SetPresence(bool musicRunning, bool workBuddyRunning, string? musicProcess = null)
@@ -755,6 +776,14 @@ public partial class IslandWindow : Window
         _presenceWorkbuddy = workBuddyRunning;
         _presenceMusicProcess = musicProcess;
 
+        // v0.2.15 需求 5：播放器进程已经退出，就别再等那 2.2 秒的"换曲缓冲"。
+        // 缓冲本来是为了"切歌瞬间 SMTC 短暂无会话"不闪一下；进程都没了不需要缓冲，
+        // 留着只会让用户觉得"关掉播放器半天才回待机"。
+        if (!musicRunning && !_musicPlaying && _musicTimer.IsEnabled)
+        {
+            _musicTimer.Stop();
+        }
+
         LogService.Shared.Routine(
             "IslandMode",
             "进程在线状态更新",
@@ -763,7 +792,10 @@ public partial class IslandWindow : Window
         // 待机展示/音乐组是否显示取决于 presence，所以这边也要重建一次
         UpdateMusicGroup();
         UpdateChrome();
-        Evaluate();
+
+        // v0.2.15 需求 5：进程退出导致"什么都没剩下"时，**立即**收成待机细条——
+        // 不走 240ms 上滑 + 140ms 淡出那一套（那套是给"用户拖着岛回顶部"用的）。
+        Evaluate(instantWhenEmpty: true);
     }
 
     /// <summary>
@@ -811,6 +843,9 @@ public partial class IslandWindow : Window
 
     /// <summary>音乐行是否可见（展示策略判断用）。</summary>
     public bool HasMusicContent => _musicVisible;
+
+    /// <summary>是否正在展示"待机播放器左栏"（场景 B，诊断/自检用）。</summary>
+    public bool IsStandbyMusicShown => _standbyMusicShown;
 
     /// <summary>任务行是否可见（展示策略判断用）。</summary>
     public bool HasTaskContent => _statusVisible;
@@ -861,16 +896,31 @@ public partial class IslandWindow : Window
             return;
         }
 
+        // v0.2.15 需求 3：没有可见内容就不预热 —— 预热的意义是"第一条状态上屏更快"，
+        // 而空岛预热只会在屏幕顶部闪一个 54×96 的空壳（哪怕只有一帧，也可能被 DWM
+        // 合成到桌面上，看起来就是一块"不该存在的色块"）。
+        if (!HasVisibleContent)
+        {
+            return;
+        }
+
         try
         {
             PositionIsland();
             Opacity = 0;
             IslandShift.Y = -10;
 
+            // 预热期间把窗口挪到屏幕外：分层窗口的任何一帧都不会落在桌面可见区域
+            var (left, top) = (Left, Top);
+            Left = -4000;
+            Top = -4000;
+
             Show();
             UpdateLayout();
             Hide();
 
+            Left = left;
+            Top = top;
             Opacity = 1;
         }
         catch
@@ -1320,6 +1370,24 @@ public partial class IslandWindow : Window
 
         if (!_musicVisible)
         {
+            // v0.2.15 需求 2：场景 B（播放器进程在跑、但没在播）也要保留左栏。
+            // 旧版只看 `_musicVisible` 就把整条左栏 Collapsed，可 `UpdateChrome` 里的
+            // 分隔线用的是 `_musicVisible || _standbyMusicShown` —— 于是出现
+            // "分隔线画出来了、左栏却没内容"的畸形：岛宽塌成 54，屏幕上只剩一根竖线，
+            // 看起来就是一个细长的白色椭圆（用户报的"白色框"）。
+            if (_standbyMusicShown)
+            {
+                LeftPane.Visibility = Visibility.Visible;
+
+                if (double.IsNaN(MusicText.Width)
+                    || Math.Abs(MusicText.Width - MusicTitleMinWidth) > 0.5)
+                {
+                    MusicText.Width = MusicTitleMinWidth;
+                }
+
+                return;
+            }
+
             // 无音乐：左栏整体收起，任务区独占（不预留任何音乐/歌词空位）
             LeftPane.Visibility = Visibility.Collapsed;
             return;
@@ -1470,14 +1538,20 @@ public partial class IslandWindow : Window
     // ---------------- 显隐调度 ----------------
 
     /// <summary>
-    /// 显隐调度（v0.2.9 需求 2 改造）：**岛常驻**。
+    /// 显隐调度（v0.2.9 需求 2 改造，v0.2.15 需求 2/5 收口）：**岛常驻**。
     ///
     /// 旧逻辑：没有任务也没有音乐 → <see cref="CollapseIsland"/> 把窗口整个 Hide()，
     /// 桌面上什么都不剩，用户以为程序没跑。
     /// 现在：只要不在全屏，任何状态下都至少留一条顶部窄条；
-    /// 有音乐 / 任务 / 通知 / 手动展开时展开成完整岛，超时再收成窄条。
+    /// 有音乐 / 任务 / 通知 / 在线行时展开成完整岛，超时再收成窄条。
+    ///
+    /// v0.2.15 需求 2：判据从"一堆标志位"收敛成 <see cref="HasVisibleContent"/>。
+    /// 旧版把 `IsLaunchHoldActive` 也算内容，于是"双击唤起 → 软件还没起来"的空档里
+    /// 岛上什么都没有，窗口却能 Show 出来：所有栏 Collapsed、宽度塌到 50 左右、
+    /// Pill 圆角 22 —— 屏幕上就是一个竖立的白色椭圆（用户截图里的那个白框）。
+    /// 现在**没有可见内容就绝不展开**，只有窄条。
     /// </summary>
-    private void Evaluate()
+    private void Evaluate(bool instantWhenEmpty = false)
     {
         // 全屏（观影/游戏）：整岛与细条一起隐藏，退出全屏自动回来
         if (_fullscreen)
@@ -1486,21 +1560,14 @@ public partial class IslandWindow : Window
             return;
         }
 
-        // v0.2.10 需求 2：**不允许"没有任何内容却展开"**。
-        // 旧版把 _idleExpanded 也算成内容，于是空岛被 Show 出来：所有栏都 Collapsed，
-        // 宽度塌到 40 左右、Pill 圆角 22 → 屏幕上就是一个竖立的白色/浅灰椭圆（用户截图里的那个）。
-        // 待机态的正确形态只有一种：顶部窄条。
-        var hasContent = _statusVisible || _musicVisible || _noticeVisible || _presenceVisible
-                         || IsLaunchHoldActive;
-
-        if (hasContent)
+        if (HasVisibleContent)
         {
             CancelCollapse();
             ShowIsland();
             return;
         }
 
-        CollapseToStrip();
+        CollapseToStrip(instant: instantWhenEmpty);
     }
 
     /// <summary>全屏时把岛和细条都收掉（不销毁，退出全屏能立刻回来）。</summary>
@@ -1524,8 +1591,12 @@ public partial class IslandWindow : Window
     /// 收成顶部窄条（v0.2.9 需求 2 的常驻形态）。
     /// 三种入口：岛还隐着（启动/全屏恢复）→ 直接显示细条；
     /// 已经是细条 → 只刷新指示器；岛正展开 → 滑到顶再切换。
+    ///
+    /// v0.2.15 需求 5：<paramref name="instant"/>=true 时跳过"先上滑再淡出"的 380ms 动画，
+    /// 直接切细条。用于"播放器/WorkBuddy 进程刚退出、岛上已经没内容"这种场景——
+    /// 用户要的是瞬间回到待机，不是再看一遍滑行动画。
     /// </summary>
-    private void CollapseToStrip()
+    private void CollapseToStrip(bool instant = false)
     {
         if (_hidden || !IsVisible)
         {
@@ -1551,12 +1622,31 @@ public partial class IslandWindow : Window
             return;
         }
 
+        if (instant || !HasVisibleContent)
+        {
+            // 已经没内容了：没有"滑回顶部"的意义，立刻切细条（v0.2.15 需求 5）
+            SwitchToStrip(instant: true);
+            return;
+        }
+
         SnapToNearestEdge();
     }
 
     /// <summary>展开：180ms ease-out（淡入 + 自上而下落位）。已显示则只做内容更新。</summary>
     private void ShowIsland()
     {
+        // v0.2.15 需求 2：**最后一道闸**。
+        // 任何调用方（配置变更、预览、进程状态、全屏恢复…）想把岛 Show 出来，
+        // 都必须先过这里：没有可见内容就老老实实留窄条。
+        // 这一层是"白色椭圆"的终极防线——就算上层逻辑又漏掉某个标志位，
+        // 也绝不会在屏幕上画出一个空壳窗口。
+        if (!HasVisibleContent)
+        {
+            LogService.Shared.Routine("IslandAuto", "无可见内容，拒绝展开空岛", $"presence={_presenceVisible}");
+            CollapseToStrip(instant: true);
+            return;
+        }
+
         // 吸附细条形态下来了新内容：先展开成完整岛
         if (_stripMode)
         {
@@ -2130,11 +2220,11 @@ public partial class IslandWindow : Window
         _snapped = true;
 
         // 先顺滑滑到顶部，落定后整岛收成细条
-        SlideTo(targetLeft, targetTop, SlideDurationMs, SwitchToStrip);
+        SlideTo(targetLeft, targetTop, SlideDurationMs, () => SwitchToStrip());
     }
 
     /// <summary>滑到顶后：岛快速淡出，屏幕顶部只留一条横细条。</summary>
-    private void SwitchToStrip()
+    private void SwitchToStrip(bool instant = false)
     {
         if (_stripMode || _dragging)
         {
@@ -2145,6 +2235,20 @@ public partial class IslandWindow : Window
         _stripShownAtMs = Environment.TickCount64;
         EnsureStrip().ShowFor(CurrentStripMode(), IsDoneState, CurrentAccentColor());
         SyncStripMode();
+
+        // v0.2.15 需求 5：无内容时立即切，不等 140ms 淡出（岛已经什么都不显示了，
+        // 再淡出一遍只会让"关掉播放器后还挂着半透明残影"多持续 0.14 秒）
+        if (instant)
+        {
+            _animToken++;
+            BeginAnimation(OpacityProperty, null);
+            Opacity = 0;
+            _hidden = true;
+            Hide();
+            Opacity = 1;
+            SetHoverWatch(false);
+            return;
+        }
 
         var token = ++_animToken;
         BeginAnimation(OpacityProperty, null);
@@ -2162,7 +2266,9 @@ public partial class IslandWindow : Window
 
             BeginAnimation(OpacityProperty, null);
             Opacity = 0;
+            _hidden = true; // 与 IsVisible 保持一致（旧版漏了这一句，状态会长期半真半假）
             Hide();
+            SetHoverWatch(false);
             Opacity = 1; // 下次展开从 0 起手（窗口级淡入）
         };
         BeginAnimation(OpacityProperty, fade);
@@ -2183,9 +2289,10 @@ public partial class IslandWindow : Window
             return;
         }
 
-        // 没有任何内容就不展开（v0.2.10 需求 2）：待机态只有窄条，
-        // 展开一个空壳只会在屏幕上画出一个竖椭圆。
-        if (!_statusVisible && !_musicVisible && !_noticeVisible && !_presenceVisible)
+        // 没有任何内容就不展开（v0.2.10 需求 2 / v0.2.15 需求 2）：
+        // 待机态只有窄条，展开一个空壳只会在屏幕上画出一个竖椭圆。
+        // 判据统一走 HasVisibleContent，别再各自维护一套"什么算内容"。
+        if (!HasVisibleContent)
         {
             LogService.Shared.Routine("IslandAuto", "无内容，忽略展开请求", "只保留窄条");
             return;
@@ -2277,22 +2384,18 @@ public partial class IslandWindow : Window
 
             if (zone == StripZone.Left)
             {
-                // 优先用当前在播的播放器；没有就按常见播放器名单找（进程在跑就直接激活，绝不重复启动）
+                // v0.2.15 需求 1：交给 AppLauncher 统一判定——
+                // 有在播会话按它激活 → 名单里有进程在跑就激活那个 → 都没跑才按路径启动。
+                // 旧版写死 "Folia"：装网易云/QQ音乐的机器上永远匹配不到进程，
+                // 每次都去"启动 Folia 的路径"，再加上"已启动过"的永久记忆，双击直接失灵。
                 var running = _media?.ProcessName;
-                var outcome = string.IsNullOrWhiteSpace(running)
-                    ? OpenOutcome.Failed
-                    : AppLauncher.Open(running!);
-
-                if (outcome is OpenOutcome.Failed)
-                {
-                    outcome = AppLauncher.Open("Folia", AppLauncher.MusicAppCandidates());
-                }
+                var outcome = AppLauncher.OpenMusic(running);
 
                 LogService.Shared.Write(
                     outcome == OpenOutcome.Failed ? LogLevel.Warn : LogLevel.Info,
                     "IslandStrip",
                     "双击左段：打开音乐播放器",
-                    $"outcome={outcome} process={running}");
+                    $"outcome={outcome} process={running ?? "-"}");
 
                 // 真的是"冷启动拉起"的：保持岛展开一会儿，让用户能马上点播放键
                 // （需求 2：通过灵动岛按钮控制刚拉起的播放器）

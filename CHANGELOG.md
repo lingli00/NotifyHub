@@ -1,5 +1,31 @@
 # 变更记录
 
+## v0.2.16 — 2026-10-24
+
+修一个漏了一个多月的显示 bug：**设置窗口最小化后，屏幕左下角留下一块白色小方块**，
+只有退出 NotifyHub 才消失。
+
+### 修复
+- **左下角白块（用户两次报障的"桌面残留色块"真身）**：不是残影，真的是一扇窗口。
+  设置窗是 `WindowStyle=None + AllowsTransparency=True` 的分层窗口，WPF 对这类窗口
+  **不支持系统最小化动画** —— 它会把 HWND 缩成 160×28 左右、挪到主屏幕左下角，
+  并且**继续绘制**。实测中招后该窗口停在 `0,1012 / 160×28 / showCmd=2`，`IsWindowVisible` 仍为真，
+  截图在 (10,1020) 处能看到白色圆角块，与用户描述完全一致。
+  只有关掉 NotifyHub 才会消失，因为那时窗口对象才被销毁。
+- **修法**：新增 `UI/WindowSquashGuard.cs`。监听 `StateChanged`，一旦变成 `Minimized` 就立刻
+  拉回 `Normal`、恢复"最小化之前的位置和尺寸"、再 `Hide()` —— 也就是**最小化 = 收进托盘**。
+  这类窗口本来 `ShowInTaskbar=False`，没有任务栏按钮要照顾；托盘双击或 `--open-settings`
+  就能叫回来（`App.ShowSettings` 对隐藏态会 `Show() + Activate()`）。
+  自绘标题栏的 `—` 按钮与 Win+D / `SW_MINIMIZE` 走的是同一条拦截路径，都验过。
+
+### 验证
+- `--selftest` **86 → 88 项全通过**，新增 2 项：① 复刻同样式（无标题栏 + 分层透明）的窗口
+  `Show → Minimize`，断言变成 `IsVisible=false`、`WindowState=Normal`、尺寸仍是 420×300、
+  补丁只触发一次；② `IsSquashed` 不误伤正常窗口（未最小化 / 已显示都不判真）。
+- 真机三步：`--open-settings` 打开 920×780 居中 → 发 `WM_SYSCOMMAND/SC_MINIMIZE` →
+  窗口 `IsWindowVisible=False`、尺寸仍 920×780、**左下角截图白块消失**；
+  再用 `SW_MINIMIZE`（Win+D 同路径）复测同样被收起；最后 `--open-settings` 正常唤回 920×780。
+
 ## v0.2.15 — 2026-10-24
 
 五件事：待机条双击唤起彻底修好、关掉 WorkBuddy 后的白色椭圆、桌面残留色块、

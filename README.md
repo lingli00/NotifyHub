@@ -5,8 +5,8 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
-**下载**：[Release v0.2.15](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.15)
-→ `NotifyHub-v0.2.15-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.15-source.zip`（完整工程）。
+**下载**：[Release v0.2.16](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.16)
+→ `NotifyHub-v0.2.16-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.16-source.zip`（完整工程）。
 
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
@@ -368,6 +368,16 @@ python tools\stream_latency.py         # 状态流延迟
 ---
 
 ## 八、版本
+
+**v0.2.16** — 设置窗最小化后左下角白块（分层窗口被 WPF 压扁，只隐藏不绘制）
+
+* **左下角白块**：不是残影，是被"压缩"的设置窗口。设置窗为毛玻璃用 `WindowStyle=None + AllowsTransparency=True`，
+  WPF 对这类窗口不做系统最小化动画，而是把 HWND 缩成 **160×28 挪到主屏幕左下角并继续绘制**
+  （实测 `rect=0,1012 160×28 showCmd=2` 且 `IsWindowVisible=True`，截图可见白块）。只有退出进程才消失
+* **修法**：新增 `UI/WindowSquashGuard.cs` —— 监听 `StateChanged`，一发现 `Minimized` 就拉回 `Normal`、
+  恢复最小化前的坐标尺寸、再 `Hide()`，即"最小化 = 收进托盘"；托盘双击或 `--open-settings` 原样唤回
+* **验证**：自检 86 → **88 项全过**（新增 2 项：复刻同款分层窗最小化后必须隐藏且尺寸不变、判定函数不误伤）；
+  真机 `SC_MINIMIZE` 与 `SW_MINIMIZE`（Win+D 同路径）两条入口都验过，左下角截图无白块，唤回仍是 920×780
 
 **v0.2.15** — 待机条双击唤起修好 / 白色椭圆 / 桌面残留色块 / 设置窗口二次打开 / 进程退出即刻回待机
 

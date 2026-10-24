@@ -51,6 +51,13 @@ public partial class SettingsWindow : Window
         _monitor = monitor;
         _notifications = notifications;
 
+        // v0.2.16：本窗是「无系统标题栏 + AllowsTransparency」的分层窗口，
+        // WPF 的最小化会把 HWND 压成 160×28 挪到屏幕左下角并继续绘制（用户报的白块）。
+        // 统一拦成"收进托盘"，托盘双击 / --open-settings 再叫回来。
+        WindowSquashGuard.Attach(
+            this,
+            note => _log.Info("设置", "最小化已拦截", note));
+
         // 浏览器下拉的变更事件必须在 InitializeComponent 之后挂：
         // XAML 加载期（ItemsControl.EndInit → SelectedIndex 强制生效）也会派发
         // SelectionChanged，那时后面声明的命名元素还没建出来，处理器会踩 NRE。
@@ -183,6 +190,11 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>
+    /// 自绘标题栏的最小化按钮。v0.2.16 起只是"请求最小化"——
+    /// 真正的动作由 <see cref="WindowSquashGuard"/> 转成 Hide()，
+    /// 避免分层窗被压成 160×28 的白块停在屏幕左下角。
+    /// </summary>
     private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
     private void OnCloseClick(object sender, RoutedEventArgs e) => Close();

@@ -2484,6 +2484,127 @@ public static class SelfTest
             }, 20);
         });
 
+        Check("v0.2.16 需求1：分层窗最小化 → 收起隐藏（左下角白块的根因）", () =>
+        {
+            return RunSta(() =>
+            {
+                // 复刻设置窗的窗口属性：无系统标题栏 + 分层透明
+                var probe = new System.Windows.Window
+                {
+                    WindowStyle = System.Windows.WindowStyle.None,
+                    AllowsTransparency = true,
+                    Background = System.Windows.Media.Brushes.Transparent,
+                    ShowInTaskbar = false,
+                    Width = 420,
+                    Height = 300,
+                    Left = -4000,
+                    Top = -4000,
+                    Content = new System.Windows.Controls.Border
+                    {
+                        Background = System.Windows.Media.Brushes.White,
+                    },
+                };
+
+                var squashed = 0;
+                WindowSquashGuard.Attach(probe, _ => squashed++);
+
+                try
+                {
+                    probe.Show();
+
+                    // RunSta 不跑消息循环：手动泵到窗口真正上屏
+                    var shownBy = DateTime.UtcNow.AddSeconds(3);
+                    while (DateTime.UtcNow < shownBy && !probe.IsVisible)
+                    {
+                        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                            () => { }, System.Windows.Threading.DispatcherPriority.Background);
+                        System.Threading.Thread.Sleep(20);
+                    }
+
+                    var shown = probe.IsVisible && probe.WindowState == System.Windows.WindowState.Normal;
+
+                    // 触发最小化：补丁应把它转成 Normal + Hide
+                    probe.WindowState = System.Windows.WindowState.Minimized;
+
+                    var settled = DateTime.UtcNow.AddSeconds(3);
+                    while (DateTime.UtcNow < settled && probe.WindowState == System.Windows.WindowState.Minimized)
+                    {
+                        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                            () => { }, System.Windows.Threading.DispatcherPriority.Background);
+                        System.Threading.Thread.Sleep(20);
+                    }
+
+                    var hidden = !probe.IsVisible;
+                    var restoredState = probe.WindowState == System.Windows.WindowState.Normal;
+                    var sizeKept = probe.Width > 400 && probe.Width < 440
+                                   && probe.Height > 280 && probe.Height < 320;
+                    var notSquashed = !WindowSquashGuard.IsSquashed(probe);
+
+                    LogService.Shared.Write(
+                        LogLevel.Info,
+                        "SelfTest",
+                        "最小化补丁诊断",
+                        $"shown={shown} hidden={hidden} state={probe.WindowState} {probe.Width}x{probe.Height} squashedCount={squashed}");
+
+                    return shown && hidden && restoredState && sizeKept && notSquashed && squashed == 1;
+                }
+                finally
+                {
+                    try
+                    {
+                        probe.Close();
+                    }
+                    catch
+                    {
+                        // 忽略
+                    }
+                }
+            });
+        });
+
+        Check("v0.2.16 需求1：IsSquashed 只在“最小化且仍可见”时判真（不误伤正常窗口）", () =>
+        {
+            return RunSta(() =>
+            {
+                var probe = new System.Windows.Window
+                {
+                    WindowStyle = System.Windows.WindowStyle.None,
+                    AllowsTransparency = true,
+                    Width = 300,
+                    Height = 200,
+                    ShowInTaskbar = false,
+                    Left = -4000,
+                    Top = -4000,
+                    Content = new System.Windows.Controls.Border
+                    {
+                        Background = System.Windows.Media.Brushes.White,
+                    },
+                };
+
+                try
+                {
+                    // 未 Show：状态 Normal，不该被判成压扁
+                    var normalNotSquashed = !WindowSquashGuard.IsSquashed(probe);
+
+                    probe.Show();
+                    var shownNotSquashed = !WindowSquashGuard.IsSquashed(probe);
+
+                    return normalNotSquashed && shownNotSquashed;
+                }
+                finally
+                {
+                    try
+                    {
+                        probe.Close();
+                    }
+                    catch
+                    {
+                        // 忽略
+                    }
+                }
+            });
+        });
+
         // dump 可能被桌面上无响应窗口的 UIA 30 秒超时拖慢，用超时护栏避免自检整体挂死
         var dumpTask = Task.Run(() => UiaDumper.DumpAll(log));
         if (dumpTask.Wait(TimeSpan.FromSeconds(150)))

@@ -108,18 +108,16 @@ public sealed class AppConfig
     public bool WeChatAllowChatMultimedia { get; set; } = true;
 
     /// <summary>
-    /// 长按上滑手动收纳（v0.2.17 工单C）：展开的岛上长按鼠标并向上滑，强制收成窄收纳条。
-    /// 关闭后只能等自动收纳倒计时。
+    /// 短按上滑手动收纳（v0.2.18 需求2，取代 v0.2.17 的"长按上滑"）：
+    /// 展开的岛上短按鼠标并向上滑，强制收成窄收纳条。关闭后只能等自动收纳倒计时。
     /// </summary>
-    public bool LongPressCollapseEnabled { get; set; } = true;
+    public bool SwipeCollapseEnabled { get; set; } = true;
 
     /// <summary>
-    /// 长按上滑手势判定参数（v0.2.17 工单C）：按住至少这么久（毫秒）且向上滑动至少
-    /// 这么远（物理像素）才触发强制收纳；快速大距离上滑（≥56px）不看按住时长。
+    /// 短按上滑手势判定参数（v0.2.18 需求2）：按住（无时长要求）并向上滑动至少
+    /// 这么远（物理像素）即触发强制收纳。默认 24，范围 <see cref="MinSwipeCollapsePx"/>~<see cref="MaxSwipeCollapsePx"/>。
     /// </summary>
-    public int LongPressHoldMs { get; set; } = 220;
-
-    public int LongPressSwipePx { get; set; } = 24;
+    public int SwipeCollapsePx { get; set; } = 24;
 
     /// <summary>已推送消息去重缓存保留时长（小时）。</summary>
     public int DedupHours { get; set; } = 24;
@@ -223,11 +221,11 @@ public sealed class AppConfig
     public bool KeepOpenWhilePlaying { get; set; }
 
     /// <summary>
-    /// 灵动岛总长度（百分比，v0.2.9 需求 6）：100 = 默认自适应宽度，
-    /// 小于 100 整体收紧，大于 100 允许更长（长歌词能显示更多字）。
-    /// 只作用于"宽度上限"，内容短时岛仍然会自己收窄，不会硬撑。
+    /// 灵动岛**长度**（百分比，v0.2.18 起为固定尺寸）：长度 = 岛的**上下边长**（水平方向）。
+    /// 100 = 480px 内容宽 + 28 外边距；可到 160（长歌词 / 双栏时更宽），也可收到 60。
+    /// 内容再长也只在岛内滚动/裁剪，绝不把岛撑大。
     /// </summary>
-    public int IslandWidthPercent { get; set; } = 100;
+    public int IslandWidthPercent { get; set; } = DefaultIslandWidthPercent;
 
     /// <summary>
     /// 岛内左右区域分配比例（v0.2.9 需求 6）：左 = 播放器/歌词区占比（百分比）。
@@ -235,15 +233,92 @@ public sealed class AppConfig
     /// </summary>
     public int IslandSplitRatio { get; set; } = 50;
 
-    /// <summary>岛总长度允许范围（百分比）。</summary>
+    // ---------------- v0.2.18 需求1：布局预览参数（设置页实时预览联动） ----------------
+
+    /// <summary>
+    /// 灵动岛**高度**（百分比，v0.2.18 起为固定尺寸）：高度 = 岛的**左右边长**（垂直方向）。
+    /// 70 = 上限（108×70% ≈ 76px 内容高 + 28 外边距 ≈ 104px），还能往下压到 30。
+    /// 只缩放纵向留白与行高，不拉伸文字。
+    /// </summary>
+    public int IslandHeightPercent { get; set; } = DefaultIslandHeightPercent;
+
+    /// <summary>音乐模块尺寸缩放（百分比）：图标 / 播放三键 / 歌名区上限一起按比例缩放。</summary>
+    public int MusicModuleScale { get; set; } = 100;
+
+    /// <summary>歌词区域宽度缩放（百分比）：在既有自适应宽度上限上再乘一个系数。</summary>
+    public int LyricsWidthPercent { get; set; } = 100;
+
+    /// <summary>播放器行与歌词区域之间的上下间距（DIP，0~24）。</summary>
+    public int MusicLyricsGap { get; set; } = 4;
+
+    /// <summary>歌词区域横向偏移（DIP，负数向左 / 正数向右）：微调用，默认与歌名左边界对齐。</summary>
+    public int LyricsOffsetX { get; set; }
+
+    /// <summary>WorkBuddy 模块尺寸缩放（百分比）：任务/通知正文字号与宽度上限一起按比例缩放。</summary>
+    public int TaskModuleScale { get; set; } = 100;
+
+    /// <summary>WorkBuddy 模块内部"来源标签行 / 正文行"之间的上下间距（DIP，0~20）。</summary>
+    public int TaskLineSpacing { get; set; } = 4;
+
+    /// <summary>WorkBuddy 模块在岛内的上下位置偏移（DIP，负数向上 / 正数向下）。</summary>
+    public int TaskOffsetY { get; set; }
+
+    /// <summary>岛总长度允许范围（百分比）：70% 是上限（≈364px），只能更窄。</summary>
+    /// <summary>岛**长度**（上下边长）允许范围（百分比）：60~160。</summary>
     public const int MinIslandWidthPercent = 60;
 
     public const int MaxIslandWidthPercent = 160;
+
+    /// <summary>岛长度默认值（百分比）。</summary>
+    public const int DefaultIslandWidthPercent = 100;
 
     /// <summary>左右分配比例允许范围（百分比）。</summary>
     public const int MinIslandSplitRatio = 25;
 
     public const int MaxIslandSplitRatio = 75;
+
+    /// <summary>岛**高度**（左右边长）允许范围（百分比）：**70 是上限**，还能往下压到 40。</summary>
+    public const int MinIslandHeightPercent = 40;
+
+    public const int MaxIslandHeightPercent = 70;
+
+    /// <summary>岛高度默认值（百分比，= 上限）。</summary>
+    public const int DefaultIslandHeightPercent = 70;
+
+    /// <summary>模块尺寸缩放允许范围（百分比）。</summary>
+    public const int MinModuleScale = 70;
+
+    public const int MaxModuleScale = 140;
+
+    /// <summary>歌词区域宽度缩放允许范围（百分比）。</summary>
+    public const int MinLyricsWidthPercent = 50;
+
+    public const int MaxLyricsWidthPercent = 160;
+
+    /// <summary>播放器与歌词间距允许范围（DIP）。</summary>
+    public const int MinMusicLyricsGap = 0;
+
+    public const int MaxMusicLyricsGap = 24;
+
+    /// <summary>歌词横向偏移允许范围（DIP）。</summary>
+    public const int MinLyricsOffsetX = -60;
+
+    public const int MaxLyricsOffsetX = 120;
+
+    /// <summary>模块内行间距允许范围（DIP）。</summary>
+    public const int MinTaskLineSpacing = 0;
+
+    public const int MaxTaskLineSpacing = 20;
+
+    /// <summary>模块上下偏移允许范围（DIP）。</summary>
+    public const int MinTaskOffsetY = -24;
+
+    public const int MaxTaskOffsetY = 24;
+
+    /// <summary>短按上滑触发距离允许范围（物理像素）。</summary>
+    public const int MinSwipeCollapsePx = 12;
+
+    public const int MaxSwipeCollapsePx = 96;
 
     /// <summary>歌词时间微调允许范围（毫秒）。</summary>
     public const int MinLyricOffsetMs = -2000;
@@ -332,7 +407,7 @@ public sealed class AppConfig
         // v0.2.9 需求 6：岛宽度与左右分配比例
         if (IslandWidthPercent <= 0)
         {
-            IslandWidthPercent = 100; // 旧配置缺字段时反序列化成 0，按默认处理
+            IslandWidthPercent = DefaultIslandWidthPercent; // 旧配置缺字段时反序列化成 0，按默认处理
         }
 
         if (IslandSplitRatio <= 0)
@@ -343,20 +418,22 @@ public sealed class AppConfig
         IslandWidthPercent = Math.Clamp(IslandWidthPercent, MinIslandWidthPercent, MaxIslandWidthPercent);
         IslandSplitRatio = Math.Clamp(IslandSplitRatio, MinIslandSplitRatio, MaxIslandSplitRatio);
 
-        // v0.2.17 工单C：长按上滑参数收敛到安全区间
-        LongPressHoldMs = Math.Clamp(LongPressHoldMs, MinLongPressHoldMs, MaxLongPressHoldMs);
-        LongPressSwipePx = Math.Clamp(LongPressSwipePx, MinLongPressSwipePx, MaxLongPressSwipePx);
+        // v0.2.18 需求1：布局参数收敛（旧配置缺字段时反序列化成 0，按默认处理）
+        // 注意：**高度上限是 70**（左右边长），长度（上下边长）100 是基准、可到 160。
+        IslandHeightPercent = IslandHeightPercent <= 0
+            ? DefaultIslandHeightPercent
+            : Math.Clamp(IslandHeightPercent, MinIslandHeightPercent, MaxIslandHeightPercent);
+        MusicModuleScale = MusicModuleScale <= 0 ? 100 : Math.Clamp(MusicModuleScale, MinModuleScale, MaxModuleScale);
+        TaskModuleScale = TaskModuleScale <= 0 ? 100 : Math.Clamp(TaskModuleScale, MinModuleScale, MaxModuleScale);
+        LyricsWidthPercent = LyricsWidthPercent <= 0 ? 100 : Math.Clamp(LyricsWidthPercent, MinLyricsWidthPercent, MaxLyricsWidthPercent);
+        MusicLyricsGap = Math.Clamp(MusicLyricsGap, MinMusicLyricsGap, MaxMusicLyricsGap);
+        LyricsOffsetX = Math.Clamp(LyricsOffsetX, MinLyricsOffsetX, MaxLyricsOffsetX);
+        TaskLineSpacing = Math.Clamp(TaskLineSpacing, MinTaskLineSpacing, MaxTaskLineSpacing);
+        TaskOffsetY = Math.Clamp(TaskOffsetY, MinTaskOffsetY, MaxTaskOffsetY);
+
+        // v0.2.18 需求2：短按上滑参数收敛到安全区间
+        SwipeCollapsePx = Math.Clamp(SwipeCollapsePx, MinSwipeCollapsePx, MaxSwipeCollapsePx);
     }
-
-    /// <summary>长按判定时长允许范围（毫秒）。</summary>
-    public const int MinLongPressHoldMs = 120;
-
-    public const int MaxLongPressHoldMs = 800;
-
-    /// <summary>上滑触发距离允许范围（物理像素）。</summary>
-    public const int MinLongPressSwipePx = 12;
-
-    public const int MaxLongPressSwipePx = 96;
 
     /// <summary>浏览器选择收敛到合法值。</summary>
     public static string NormalizeBrowserChoice(string? choice) => choice switch

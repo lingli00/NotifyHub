@@ -1325,13 +1325,15 @@ public partial class App : Application
         var window = new SettingsWindow(_configService, LogService.Shared, _monitor, _notifications);
         _settings = window;
 
-        // v0.2.9 需求 6：滑块拖动 → 岛立即重排（不落盘）
-        window.LivePreview = preview => _islandController?.PreviewLayout(preview);
+        // v0.2.18 需求1（改版）：设置页的预览直接作用在屏幕顶部那条**真实灵动岛**上，
+        // 不给内嵌虚拟面板。拖动滑块即所见即所得，不保存就关窗 → 岛回到原配置 + 真实内容。
+        window.LivePreview = (config, scene) => _islandController?.BeginLayoutPreview(config, scene);
+        window.EndLivePreview = () => _islandController?.EndLayoutPreview();
 
         window.Closed += (_, _) =>
         {
-            // 关窗时清掉预览态，岛回到真实配置（用户没点保存就该恢复原样）
-            _islandController?.ClearPreview();
+            // 兜底：窗口被异常销毁时也确保退出预览态
+            _islandController?.EndLayoutPreview();
 
             // 只清自己：避免"旧窗口关闭"把新建的窗口引用一起抹掉
             if (ReferenceEquals(_settings, window))

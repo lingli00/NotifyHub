@@ -363,61 +363,175 @@
                                                Foreground="{DynamicResource AppSubFg}" Text="3 秒" />
                                     <CheckBox x:Name="KeepOpenWhilePlayingCheck" Content="音乐播放时保持展开"
                                               ToolTip="默认关：播放中也按上面的时长自动收纳（v0.2.17 统一时序）；勾选后播放期间一直显示歌词" />
-                                    <CheckBox x:Name="LongPressCollapseCheck" Content="长按上滑收纳" Margin="16,0,0,0"
-                                              ToolTip="展开的岛上长按鼠标并向上滑，直接收成窄收纳条；强制收纳后只有单击窄条/新通知/开始播放/启动任务才会再展开" />
+                                    <CheckBox x:Name="SwipeCollapseCheck" Content="上滑收纳" Margin="16,0,0,0"
+                                              ToolTip="展开的岛上短按鼠标并向上滑，直接收成窄收纳条；强制收纳后只有单击窄条/新通知/开始播放/启动任务才会再展开" />
                                 </StackPanel>
 
                                 <TextBlock Grid.Row="5" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
                                            Text="统一收纳规则（v0.2.17）：新消息 / 新任务 / 开始播放都会把灵动岛弹出来，并按上面的时长重新计时，超时收成顶部细条；空闲（无任务/播放/通知）到点同样收纳，之后不会自动再展开。鼠标停在岛上时不计时。「音乐播放时保持展开」是例外开关，默认关闭。多应用共存时只展示活跃项（在放歌/在跑任务），空闲挂着的不占岛。" />
 
                                 <TextBlock Grid.Row="6" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
-                                           Text="窄条交互：悬停 + 单击展开信息面板（含暂存的最新通知）；悬停 + 双击唤起对应应用并置顶。岛内已有两项以上内容时，新消息改走四角弹窗（固定 10 秒收起）。长按上滑可随时强制收纳。" />
+                                           Text="窄条交互：悬停 + 单击展开信息面板（含暂存的最新通知）；悬停 + 双击唤起对应应用并置顶。岛内有音乐/任务在跑时，新消息（微信/QQ/ntfy）一律走四角卡片（固定 10 秒收起），不在岛内混杂展示；只有岛内空闲时新通知才进岛。短按上滑可随时强制收纳。" />
                             </Grid>
                         </GroupBox>
 
-                        <!--  灵动岛外观（v0.2.9 需求 6：删掉主题/文字配色，改为毛玻璃跟随系统 + 两个实时滑块）  -->
-                        <GroupBox Header="灵动岛外观">
+                        <!--  灵动岛外观（v0.2.18：调参直接作用在屏幕顶部的真实岛上，无内嵌预览面板）  -->
+                        <GroupBox Header="灵动岛外观（实况预览 · 直接看屏幕顶部的岛）">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
-                                                                    <RowDefinition Height="Auto" />
-</Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="86" />
+                                    <ColumnDefinition Width="78" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="78" />
                                     <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
 
-                                <!--  滑块 1：岛总长度  -->
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="总长度" Margin="0,0,10,0" />
-                                <WrapPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal">
-                                    <Slider x:Name="IslandWidthSlider" Width="220" Height="24"
-                                            Minimum="60" Maximum="160" IsSnapToTickEnabled="True"
-                                            TickFrequency="5" VerticalAlignment="Center"
-                                            ToolTip="向左更短、向右更长（100% = 默认自适应宽度）" />
-                                    <TextBlock x:Name="IslandWidthText" Width="64" Margin="10,0,0,0"
-                                               Foreground="{DynamicResource AppSubFg}" Text="100%" />
-                                    <TextBlock Style="{StaticResource HintText}"
-                                               Text="只调上限，内容短时岛仍会自动收窄" />
+                                <!--  ============ 实况预览说明（v0.2.18 改版：不再有内嵌虚拟面板）  ============  -->
+                                <TextBlock Grid.Row="0" Grid.ColumnSpan="4" TextWrapping="Wrap"
+                                           Style="{StaticResource HintText}"
+                                           Text="下面任何一项改动都会立刻反映到屏幕顶部那条真实的灵动岛上（用固定的样板内容渲染，不受当前有没有在放歌/跑任务影响）。改坏了直接关掉设置窗即可，不点「保存并应用」就不会写进配置。" />
+
+                                <!--  ============ 场景切换（v0.2.18 需求1：四套样板） ============  -->
+                                <WrapPanel Grid.Row="1" Grid.ColumnSpan="4" Orientation="Horizontal" Margin="0,8,0,0">
+                                    <TextBlock Text="预览场景" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <RadioButton x:Name="SceneMusicRadio" Content="仅音乐" GroupName="PreviewScene"
+                                                 IsChecked="True" Margin="0,0,12,0" VerticalAlignment="Center" />
+                                    <RadioButton x:Name="SceneTaskRadio" Content="仅任务" GroupName="PreviewScene"
+                                                 Margin="0,0,12,0" VerticalAlignment="Center" />
+                                    <RadioButton x:Name="SceneNoticeRadio" Content="仅通知" GroupName="PreviewScene"
+                                                 Margin="0,0,12,0" VerticalAlignment="Center" />
+                                    <RadioButton x:Name="SceneBothRadio" Content="音乐+任务" GroupName="PreviewScene"
+                                                 Margin="0,0,12,0" VerticalAlignment="Center" />
+                                    <TextBlock Style="{StaticResource HintText}" VerticalAlignment="Center"
+                                               Text="场景只是给调参用的样板内容，改任何参数立即同步到真实岛" />
                                 </WrapPanel>
 
-                                <!--  滑块 2：左右区域分配比例  -->
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="区域比例" Margin="0,10,10,0" />
-                                <WrapPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0">
-                                    <TextBlock Text="播放器" Style="{StaticResource HintText}" />
-                                    <Slider x:Name="IslandSplitSlider" Width="180" Height="24" Margin="8,0"
+                                <!--  ============ 布局参数（v0.2.18 需求1：全部接入实时预览） ============  -->
+                                <!--  滑块 1：岛总长度（v0.2.9 需求 6）  -->
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="长度" Margin="0,0,10,0" VerticalAlignment="Center"
+                                           ToolTip="长度 = 岛的上下边长（水平方向）" />
+                                <WrapPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Slider x:Name="IslandWidthSlider" Width="150" Height="24"
+                                            Minimum="60" Maximum="160" IsSnapToTickEnabled="True"
+                                            TickFrequency="5" VerticalAlignment="Center"
+                                            ToolTip="岛的长度 = 上下边长（水平方向）：100% = 508px 基准，60~160% 可调；内容再长也只在岛内滚动，不会把岛撑大" />
+                                    <TextBlock x:Name="IslandWidthText" Width="76" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="100% · 508px" />
+                                </WrapPanel>
+
+                                <!--  整体高度（v0.2.18 新增）  -->
+                                <TextBlock Grid.Row="2" Grid.Column="2" Text="高度" Margin="10,0,10,0" VerticalAlignment="Center"
+                                           ToolTip="高度 = 岛的左右边长（垂直方向），70% 是上限" />
+                                <WrapPanel Grid.Row="2" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Slider x:Name="IslandHeightSlider" Width="120" Height="24"
+                                            Minimum="40" Maximum="70" IsSnapToTickEnabled="True"
+                                            TickFrequency="2" VerticalAlignment="Center"
+                                            ToolTip="岛的高度 = 左右边长（垂直方向）：70% 是上限（约 104px），只能往矮调（40%~70%）" />
+                                    <TextBlock x:Name="IslandHeightText" Width="76" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="70% · 104px" />
+                                </WrapPanel>
+
+                                <!--  滑块 2：左右区域分配比例（v0.2.9 需求 6）  -->
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="区域比例" Margin="0,10,10,0" VerticalAlignment="Center" />
+                                <WrapPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                    <Slider x:Name="IslandSplitSlider" Width="130" Height="24" Margin="0,0,8,0"
                                             Minimum="25" Maximum="75" IsSnapToTickEnabled="True"
                                             TickFrequency="1" VerticalAlignment="Center"
                                             ToolTip="向左：播放器变窄、右侧变宽；向右：播放器变宽、右侧变窄" />
-                                    <TextBlock Text="任务/通知" Style="{StaticResource HintText}" />
-                                    <TextBlock x:Name="IslandSplitText" Width="76" Margin="10,0,0,0"
+                                    <TextBlock x:Name="IslandSplitText" Width="64"
                                                Foreground="{DynamicResource AppSubFg}" Text="50 : 50" />
                                 </WrapPanel>
 
+                                <!--  音乐模块尺寸（v0.2.18 新增）  -->
+                                <TextBlock Grid.Row="3" Grid.Column="2" Text="音乐模块" Margin="10,10,10,0" VerticalAlignment="Center" />
+                                <WrapPanel Grid.Row="3" Grid.Column="3" Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                    <Slider x:Name="MusicModuleSlider" Width="130" Height="24"
+                                            Minimum="70" Maximum="140" IsSnapToTickEnabled="True"
+                                            TickFrequency="5" VerticalAlignment="Center"
+                                            ToolTip="缩放音乐行：图标 / 播放三键 / 歌名区宽度" />
+                                    <TextBlock x:Name="MusicModuleText" Width="52" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="100%" />
+                                </WrapPanel>
+
+                                <!--  歌词区域宽度（v0.2.18 新增）  -->
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="歌词宽度" Margin="0,10,10,0" VerticalAlignment="Center" />
+                                <WrapPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                    <Slider x:Name="LyricsWidthSlider" Width="150" Height="24"
+                                            Minimum="50" Maximum="160" IsSnapToTickEnabled="True"
+                                            TickFrequency="5" VerticalAlignment="Center"
+                                            ToolTip="歌词区域宽度上限的缩放系数（自适应宽度的基础上再缩放）" />
+                                    <TextBlock x:Name="LyricsWidthText" Width="52" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="100%" />
+                                </WrapPanel>
+
+                                <!--  播放器与歌词间距（v0.2.18 新增）  -->
+                                <TextBlock Grid.Row="4" Grid.Column="2" Text="播放器-歌词" Margin="10,10,10,0" VerticalAlignment="Center" />
+                                <WrapPanel Grid.Row="4" Grid.Column="3" Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                    <Slider x:Name="MusicLyricsGapSlider" Width="130" Height="24"
+                                            Minimum="0" Maximum="24" IsSnapToTickEnabled="True"
+                                            TickFrequency="1" VerticalAlignment="Center"
+                                            ToolTip="播放器行与歌词区域之间的上下间距" />
+                                    <TextBlock x:Name="MusicLyricsGapText" Width="52" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="4 px" />
+                                </WrapPanel>
+
+                                <!--  歌词横向偏移（v0.2.18 新增）  -->
+                                <TextBlock Grid.Row="5" Grid.Column="0" Text="歌词横移" Margin="0,10,10,0" VerticalAlignment="Center" />
+                                <WrapPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                    <Slider x:Name="LyricsOffsetXSlider" Width="150" Height="24"
+                                            Minimum="-60" Maximum="120" IsSnapToTickEnabled="True"
+                                            TickFrequency="4" VerticalAlignment="Center"
+                                            ToolTip="歌词区域整体左右偏移（正数向右），微调用" />
+                                    <TextBlock x:Name="LyricsOffsetXText" Width="52" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="0 px" />
+                                </WrapPanel>
+
+                                <!--  WorkBuddy 模块尺寸（v0.2.18 新增）  -->
+                                <TextBlock Grid.Row="5" Grid.Column="2" Text="任务模块" Margin="10,10,10,0" VerticalAlignment="Center" />
+                                <WrapPanel Grid.Row="5" Grid.Column="3" Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                    <Slider x:Name="TaskModuleSlider" Width="130" Height="24"
+                                            Minimum="70" Maximum="140" IsSnapToTickEnabled="True"
+                                            TickFrequency="5" VerticalAlignment="Center"
+                                            ToolTip="缩放任务/通知模块：正文字号与宽度上限" />
+                                    <TextBlock x:Name="TaskModuleText" Width="52" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="100%" />
+                                </WrapPanel>
+
+                                <!--  模块内行间距（v0.2.18 新增）  -->
+                                <TextBlock Grid.Row="6" Grid.Column="0" Text="任务行距" Margin="0,10,10,0" VerticalAlignment="Center" />
+                                <WrapPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                    <Slider x:Name="TaskLineSpacingSlider" Width="150" Height="24"
+                                            Minimum="0" Maximum="20" IsSnapToTickEnabled="True"
+                                            TickFrequency="1" VerticalAlignment="Center"
+                                            ToolTip="任务模块内“来源标签行 / 正文行”的上下间距" />
+                                    <TextBlock x:Name="TaskLineSpacingText" Width="52" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="4 px" />
+                                </WrapPanel>
+
+                                <!--  模块上下偏移（v0.2.18 新增）  -->
+                                <TextBlock Grid.Row="6" Grid.Column="2" Text="任务上下" Margin="10,10,10,0" VerticalAlignment="Center" />
+                                <WrapPanel Grid.Row="6" Grid.Column="3" Orientation="Horizontal" Margin="0,10,0,0" VerticalAlignment="Center">
+                                    <Slider x:Name="TaskOffsetYSlider" Width="130" Height="24"
+                                            Minimum="-24" Maximum="24" IsSnapToTickEnabled="True"
+                                            TickFrequency="2" VerticalAlignment="Center"
+                                            ToolTip="任务模块在岛内的上下位置偏移（正数向下）" />
+                                    <TextBlock x:Name="TaskOffsetYText" Width="52" Margin="8,0,0,0"
+                                               Foreground="{DynamicResource AppSubFg}" Text="0 px" />
+                                </WrapPanel>
+
                                 <!--  歌词总开关 + 字号（与"音乐播放时保持展开"互相独立）  -->
-                                <WrapPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                                <WrapPanel Grid.Row="7" Grid.Column="0" Grid.ColumnSpan="4"
                                             Orientation="Horizontal" Margin="0,12,0,0">
                                     <CheckBox x:Name="LyricsEnabledCheck" Content="显示歌词" MinWidth="92" />
                                     <TextBlock Text="歌词字号" Margin="0,0,8,0" />
@@ -432,7 +546,7 @@
                                   歌词来源与时间微调（v0.2.12 需求 1）：
                                   本地 .lrc（播放器缓存 / 歌曲同目录）优先，本地没有才联网，且只认严格匹配。
                                 -->
-                                <WrapPanel Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                <WrapPanel Grid.Row="8" Grid.Column="0" Grid.ColumnSpan="4"
                                             Orientation="Horizontal" Margin="0,10,0,0">
                                     <CheckBox x:Name="LyricsNetworkCheck" MinWidth="0"
                                               Content="本地没词时联网兜底（只接受歌名+歌手都对上的结果）" />
@@ -446,9 +560,9 @@
                                 </WrapPanel>
 
                                 <!--  外观说明：主题固定为毛玻璃，跟随系统深浅，文字自动保证对比度  -->
-                                <TextBlock Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2"
-                                           Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap"
-                                           Text="外观固定为毛玻璃：半透明可见下层内容，深浅跟随 Windows 应用主题，文字颜色按背景实测亮度自动选对比度更高的一侧（不再提供手动配色与透明度调节）。两个滑块拖动时岛会立即变化，无需保存。" />
+                                <TextBlock Grid.Row="9" Grid.Column="0" Grid.ColumnSpan="4"
+                                           Style="{StaticResource HintText}" Margin="0,10,0,0" TextWrapping="Wrap"
+                                           Text="外观固定为毛玻璃（半透明可见下层内容，深浅跟随 Windows 应用主题，文字颜色按背景实测亮度自动选对比度更高的一侧）。上面所有参数都直接渲染到屏幕顶部那条真实的灵动岛上，改任何参数立即生效；点「保存并应用」才写入配置，不保存关掉本窗就恢复原样。" />
                             </Grid>
                         </GroupBox>
 

@@ -408,14 +408,44 @@ public partial class IslandWindow : Window
     /// <summary>注入的配置读取：音乐播放期间保持展开（不自动收纳）。</summary>
     public Func<bool>? KeepOpenWhilePlayingProvider { get; set; }
 
-    /// <summary>长按上滑强制收纳开关（v0.2.17 工单C，默认 true）。</summary>
-    public Func<bool>? LongPressCollapseEnabledProvider { get; set; }
+    /// <summary>短按上滑强制收纳开关（v0.2.18 需求2，默认 true）。</summary>
+    public Func<bool>? SwipeCollapseEnabledProvider { get; set; }
 
-    /// <summary>长按判定时长（毫秒，v0.2.17 工单C）。</summary>
-    public Func<int>? LongPressHoldMsProvider { get; set; }
+    /// <summary>上滑触发距离（物理像素，v0.2.18 需求2）。</summary>
+    public Func<int>? SwipeCollapsePxProvider { get; set; }
 
-    /// <summary>上滑触发距离（物理像素，v0.2.17 工单C）。</summary>
-    public Func<int>? LongPressSwipePxProvider { get; set; }
+    /// <summary>
+    /// 布局配置来源（v0.2.18 需求1）：设置页实时预览时指向"预览配置副本"，
+    /// 正式运行时由 IslandController 指向真实配置。为 null 时用内置默认值。
+    /// 只承载 v0.2.18 新增的布局参数（高度/模块尺寸/间距/偏移），
+    /// 旧参数（总长度/比例/字号/速度）仍走各自的 Provider。
+    /// </summary>
+    public Func<Models.AppConfig>? LayoutConfigProvider { get; set; }
+
+    /// <summary>
+    /// 实况预览模式（v0.2.18 需求1 改版）：设置页调参期间为 true，岛内显示虚拟样板数据。
+    /// 期间：不跑自动收纳、不响应收纳手势、外部真实状态（播放器/任务/通知/进程在线）
+    /// 一律不覆盖岛内内容——所见即所得地看参数，关掉设置页或保存后自动恢复真实状态。
+    /// </summary>
+    public bool PreviewMode { get; set; }
+
+    /// <summary>预览态且**不是**在铺样板（用于拦截外部真实状态写入）。</summary>
+    private bool PreviewLocked => PreviewMode && !_applyingPreview;
+
+    /// <summary>正在铺样板内容（此时允许写岛）。</summary>
+    private bool _applyingPreview;
+
+    /// <summary>
+    /// 离屏预览模式（仅自检用）：预览路径不真正显示窗口，只跑内容与度量状态机。
+    /// 正式运行永远为 false。
+    /// </summary>
+    public bool OffscreenPreview { get; set; }
+
+    /// <summary>任务正文当前文本（自检用）。</summary>
+    public string StatusTextSnapshot => StatusText.Text;
+
+    /// <summary>音乐行当前文本（自检用）。</summary>
+    public string MusicTextSnapshot => MusicText.Text;
 
     /// <summary>注入的配置读取：灵动岛总长度（百分比，v0.2.9 需求 6）。</summary>
     public Func<int>? IslandWidthPercentProvider { get; set; }
@@ -458,24 +488,219 @@ public partial class IslandWindow : Window
         return Math.Clamp(seconds, MinAutoCollapseSeconds, MaxAutoCollapseSeconds);
     }
 
-    /// <summary>长按上滑手势是否启用（默认开）。</summary>
-    private bool LongPressCollapseEnabled() => LongPressCollapseEnabledProvider?.Invoke() ?? true;
-
-    /// <summary>长按判定时长（毫秒）。</summary>
-    private int LongPressHoldMs() => Math.Clamp(
-        LongPressHoldMsProvider?.Invoke() ?? DefaultLongPressHoldMs,
-        Models.AppConfig.MinLongPressHoldMs, Models.AppConfig.MaxLongPressHoldMs);
+    /// <summary>短按上滑手势是否启用（默认开）。</summary>
+    private bool SwipeCollapseEnabled() => SwipeCollapseEnabledProvider?.Invoke() ?? true;
 
     /// <summary>上滑触发距离（物理像素）。</summary>
-    private int LongPressSwipePx() => Math.Clamp(
-        LongPressSwipePxProvider?.Invoke() ?? DefaultLongPressSwipePx,
-        Models.AppConfig.MinLongPressSwipePx, Models.AppConfig.MaxLongPressSwipePx);
-
-    /// <summary>长按判定时长默认值（毫秒）。</summary>
-    private const int DefaultLongPressHoldMs = 220;
+    private int SwipeCollapsePx() => Math.Clamp(
+        SwipeCollapsePxProvider?.Invoke() ?? DefaultSwipeCollapsePx,
+        Models.AppConfig.MinSwipeCollapsePx, Models.AppConfig.MaxSwipeCollapsePx);
 
     /// <summary>上滑触发距离默认值（物理像素）。</summary>
-    private const int DefaultLongPressSwipePx = 24;
+    private const int DefaultSwipeCollapsePx = 24;
+
+    // ---------------- v0.2.18 需求1：布局参数（设置页实时预览联动） ----------------
+
+    /// <summary>
+    /// 灵动岛内容区基准宽度（DIP，总长度 100% 时）：音乐行 + 歌词区的标准排布宽度。
+    /// 实际窗口宽 = 基准 × 总长度% × uiScale + Pill 外边距×2。
+    /// 设置页用它把百分比换算成"多少 px"给用户看，所以是 public。
+    /// </summary>
+    public const double BaseIslandWidth = 480;
+
+    /// <summary>Pill 外边距×2（设置页换算实际像素宽时也要用）。</summary>
+    public const double PillPadTotal = 28;
+
+    /// <summary>
+    /// 灵动岛内容区基准高度（DIP，高度系数 100% 时）：音乐行 + 两行歌词的标准高度。
+    /// 实际窗口高 = 基准 × 高度% × uiScale + Pill 外边距×2（高度上限 70%）。
+    /// </summary>
+    public const double BaseIslandHeight = 108;
+
+    /// <summary>
+    /// 固定尺寸模型（v0.2.18）：窗口大小严格由「总长度 / 整体高度」两个设置决定，
+    /// 与内容多少无关。内容超出只在岛内滚动（跑马灯）或被外层裁剪——
+    /// 这就是"岛不随内容撑大、不挡屏"的保证。
+    /// </summary>
+    private void ApplyIslandSize()
+    {
+        // 宽度上限 70%（≈364px）：再宽就横跨小半个屏幕挡住桌面内容
+        var widthPercent = Math.Clamp(
+            IslandWidthPercentProvider?.Invoke() ?? AppConfig.DefaultIslandWidthPercent,
+            AppConfig.MinIslandWidthPercent,
+            AppConfig.MaxIslandWidthPercent) / 100.0;
+        var heightPercent = HeightFactor; // 已按 40%~70% 收敛（高度上限 70）
+        var scale = Math.Max(0.5, _uiScale);
+
+        var targetWidth = (BaseIslandWidth * widthPercent * scale) + (PillPad * 2);
+        var targetHeight = (BaseIslandHeight * heightPercent * scale) + (PillPad * 2);
+
+        if (double.IsNaN(Width) || Math.Abs(Width - targetWidth) > 0.5)
+        {
+            Width = Math.Round(targetWidth);
+        }
+
+        if (double.IsNaN(Height) || Math.Abs(Height - targetHeight) > 0.5)
+        {
+            Height = Math.Round(targetHeight);
+        }
+    }
+
+    /// <summary>当前布局配置快照（每次调用现取，预览拖动滑块时立即换新）。</summary>
+    private Models.AppConfig? LayoutConfig => LayoutConfigProvider?.Invoke();
+
+    /// <summary>
+    /// 岛**高度**系数（高度 = 左右边长，垂直方向）：1.0 对应 108px 内容高。
+    /// 上限 70%（= 用户定的最矮上限），下限 40%。只缩放纵向留白与行高，不拉伸文字。
+    /// </summary>
+    private double HeightFactor
+        => Math.Clamp(
+            (LayoutConfig?.IslandHeightPercent ?? AppConfig.DefaultIslandHeightPercent) / 100.0,
+            AppConfig.MinIslandHeightPercent / 100.0,
+            AppConfig.MaxIslandHeightPercent / 100.0);
+
+    /// <summary>音乐模块尺寸缩放系数（1.0 = 默认）。</summary>
+    private double MusicScaleFactor
+        => Math.Clamp((LayoutConfig?.MusicModuleScale ?? 100) / 100.0, 0.7, 1.4);
+
+    /// <summary>歌词区域宽度缩放系数（1.0 = 默认）。</summary>
+    private double LyricsWidthFactor
+        => Math.Clamp((LayoutConfig?.LyricsWidthPercent ?? 100) / 100.0, 0.5, 1.6);
+
+    /// <summary>WorkBuddy 模块尺寸缩放系数（1.0 = 默认）。</summary>
+    private double TaskScaleFactor
+        => Math.Clamp((LayoutConfig?.TaskModuleScale ?? 100) / 100.0, 0.7, 1.4);
+
+    /// <summary>播放器行与歌词区域的间距（DIP）。</summary>
+    private double MusicLyricsGap
+        => Math.Clamp(LayoutConfig?.MusicLyricsGap ?? 4, 0, 24);
+
+    /// <summary>歌词区域横向偏移（DIP，正数向右）。</summary>
+    private double LyricsOffsetX
+        => Math.Clamp(LayoutConfig?.LyricsOffsetX ?? 0, -60, 120);
+
+    /// <summary>WorkBuddy 模块内行间距（DIP）。</summary>
+    private double TaskLineSpacing
+        => Math.Clamp(LayoutConfig?.TaskLineSpacing ?? 4, 0, 20);
+
+    /// <summary>WorkBuddy 模块上下位置偏移（DIP）。</summary>
+    private double TaskOffsetY
+        => Math.Clamp(LayoutConfig?.TaskOffsetY ?? 0, -24, 24);
+
+    /// <summary>按当前布局参数刷新纵向度量与模块尺寸（幂等，重复调用无副作用）。</summary>
+    private void ApplyLayoutMetrics()
+    {
+        // 0) 窗口尺寸（v0.2.18 固定尺寸模型）：总长度 × 整体高度严格决定大小，
+        //    内容再长也只在岛内滚动/裁剪，绝不被撑大。
+        ApplyIslandSize();
+
+        var h = HeightFactor;
+
+        // 1) 整体高度：内容区上下留白 + 最小高度 + 两栏最小高度 + 歌词占位高
+        SetMargin(ContentGrid, ContentGrid.Margin.Left, 9 * h, ContentGrid.Margin.Right, 9 * h);
+        SetMinHeight(ContentGrid, 36 * h);
+        SetMinHeight(LeftPane, 46 * h);
+        SetMinHeight(RightPane, 46 * h);
+        SetMinHeight(MusicGroup, 30 * h);
+        if (Math.Abs(LyricSpacer.Height - (17 * h)) > 0.5)
+        {
+            LyricSpacer.Height = 17 * h;
+        }
+
+        // 2) 音乐模块尺寸：图标 / 字形 / 三键
+        var m = MusicScaleFactor;
+        SetButtonSize(PrevButton, 32 * m);
+        SetButtonSize(PlayPauseButton, 32 * m);
+        SetButtonSize(NextButton, 32 * m);
+        SetBoxSize(MusicIconBox, 17 * m);
+        if (Math.Abs(MusicGlyph.FontSize - (13 * m)) > 0.25)
+        {
+            MusicGlyph.FontSize = 13 * m;
+        }
+
+        // 3) WorkBuddy 模块尺寸：正文字号 + 标签字号
+        var t = TaskScaleFactor;
+        SetFontSize(StatusText, 12.5 * t);
+        SetFontSize(NoticeText, 12.5 * t);
+        SetFontSize(PresenceWbText, 12.5 * t);
+        SetFontSize(StatusTag, 11 * t);
+        SetFontSize(NoticeTag, 11 * t);
+        SetFontSize(PresenceWbTag, 11 * t);
+
+        // 4) 模块内行间距（标签行与正文行之间）
+        var gap = TaskLineSpacing;
+        SetMargin(StatusText, 6, gap, 0, 0);
+        SetMargin(NoticeText, 6, gap, 0, 0);
+        SetMargin(PresenceWbText, 6, gap, 0, 0);
+
+        // 5) 模块上下位置偏移（纯视觉位移，不参与布局）
+        if (Math.Abs(RightPaneShift.Y - TaskOffsetY) > 0.5)
+        {
+            RightPaneShift.Y = TaskOffsetY;
+        }
+    }
+
+    private static void SetMinHeight(FrameworkElement element, double value)
+    {
+        if (Math.Abs(element.MinHeight - value) > 0.5)
+        {
+            element.MinHeight = value;
+        }
+    }
+
+    private static void SetMargin(FrameworkElement element, double left, double top, double right, double bottom)
+    {
+        var current = element.Margin;
+        if (Math.Abs(current.Left - left) > 0.5
+            || Math.Abs(current.Top - top) > 0.5
+            || Math.Abs(current.Right - right) > 0.5
+            || Math.Abs(current.Bottom - bottom) > 0.5)
+        {
+            element.Margin = new Thickness(left, top, right, bottom);
+        }
+    }
+
+    private static void SetButtonSize(Button button, double size)
+    {
+        if (Math.Abs(button.Width - size) > 0.5)
+        {
+            button.Width = size;
+        }
+
+        if (Math.Abs(button.Height - size) > 0.5)
+        {
+            button.Height = size;
+        }
+    }
+
+    private static void SetBoxSize(Border box, double size)
+    {
+        if (Math.Abs(box.Width - size) > 0.5)
+        {
+            box.Width = size;
+        }
+
+        if (Math.Abs(box.Height - size) > 0.5)
+        {
+            box.Height = size;
+        }
+    }
+
+    private static void SetFontSize(Control control, double size)
+    {
+        if (Math.Abs(control.FontSize - size) > 0.25)
+        {
+            control.FontSize = size;
+        }
+    }
+
+    private static void SetFontSize(TextBlock text, double size)
+    {
+        if (Math.Abs(text.FontSize - size) > 0.25)
+        {
+            text.FontSize = size;
+        }
+    }
 
     /// <summary>
     /// 按配置刷新歌词排版（v0.2.7 需求 1）：当前行比设定字号大 1.5，下一行小 1.5 且更暗，
@@ -499,6 +724,9 @@ public partial class IslandWindow : Window
     /// <summary>左栏（音乐 + 歌词）实际宽度，诊断/自检用。</summary>
     public double LeftPaneWidth => LeftPane.ActualWidth;
 
+    /// <summary>左栏实际高度（强调脊线应当吃满它），诊断/自检用。</summary>
+    public double LeftPaneHeight => LeftPane.ActualHeight;
+
     /// <summary>右栏（任务 + 通知）实际宽度，诊断/自检用。</summary>
     public double RightPaneWidth => RightPane.ActualWidth;
 
@@ -510,6 +738,175 @@ public partial class IslandWindow : Window
     {
         UpdateChrome();
         UpdateLayout();
+    }
+
+    // ---------------- v0.2.18 需求1（改版）：设置页直接在**真实岛**上做实况预览 ----------------
+
+    /// <summary>当前预览场景（null = 不在预览态）。</summary>
+    private PreviewScene? _previewScene;
+
+    /// <summary>预览用虚拟样板的音乐数据（与真实播放器无关）。</summary>
+    private static readonly MediaInfo PreviewMedia =
+        new("晴天", "周杰伦", "FOLIA", true, "", "Folia", 30, 200);
+
+    private const string PreviewLyricCurrent = "故事的小黄花从出生那年就飘着";
+    private const string PreviewLyricNext = "童年的荡秋千随记忆一直晃到现在";
+
+    private const string PreviewTask = "正在整理需求文档结构并拆分任务";
+
+    /// <summary>预览用虚拟样板通知。</summary>
+    private static NotifyMessage PreviewNotice => new()
+    {
+        Source = MessageSource.WeChat,
+        Sender = "张三",
+        Content = "在吗？刚才那个需求文档我改了一版，你看下",
+        Time = DateTime.Now,
+    };
+
+    /// <summary>
+    /// 进入布局实况预览（v0.2.18 改版）：**不建虚拟面板**，直接把样板内容铺到
+    /// 屏幕上这条真实的灵动岛上，拖动滑块就是最终效果，所见即所得。
+    ///
+    /// 与真实运行状态的关系：
+    ///   · 进入时用虚拟样板覆盖岛内内容，与"当前有没有在放歌 / 跑任务"无关；
+    ///   · 期间停掉自动收纳与手势，岛一直亮着供调参；
+    ///   · 退出（关设置页不保存 / 保存后）由控制器 <c>EndLayoutPreview</c> 恢复真实内容。
+    ///
+    /// 防闪：只在"确实没显示"时动一次窗口可见性，之后每次参数变化只重排不重建窗口。
+    /// </summary>
+    public void EnterLayoutPreview(AppConfig config, PreviewScene scene)
+    {
+        EnsureCreated();
+
+        PreviewMode = true;
+        _forceCollapsed = false;
+        _autoTimer.Stop();
+        _noticeTimer.Stop();
+
+        // 1) 先铺内容：后面 Show/Evaluate 才不会再因为"没内容"把岛收回去
+        if (_previewScene != scene || !HasVisibleContent)
+        {
+            ApplyPreviewScene(scene);
+        }
+
+        // 2) 再保证岛是展开可见的（没有可见性变化就不碰，避免闪一帧）
+        if (_stripMode)
+        {
+            ExpandFromStrip(ExpandReason.Config);
+        }
+        else if (_hidden || !IsVisible)
+        {
+            ShowIsland(ExpandReason.Config);
+        }
+
+        // 3) 最后按新配置重排（宽度/高度/模块尺寸/间距/偏移/字号/滚动速度）
+        ApplyPreviewLayout(config);
+        _autoTimer.Stop();
+    }
+
+    /// <summary>拖动滑块时的轻量刷新：只重排，不重建内容、不动窗口可见性。</summary>
+    public void ApplyPreviewLayout(AppConfig config)
+    {
+        if (!PreviewMode)
+        {
+            return;
+        }
+
+        var speed = Math.Clamp(config.MarqueeSpeed, 10, 120);
+        MusicText.Speed = speed;
+        StatusText.Speed = speed;
+        NoticeText.Speed = speed;
+        PresenceWbText.Speed = speed;
+
+        ApplyLyricsTypography();   // 字号 + UpdateChrome（→ 布局度量 + 宽度配平 + 重新居中）
+        ApplyIslandSize();         // 宽高严格按设置值（幂等）
+        ScheduleRecenter();
+        _autoTimer.Stop();
+    }
+
+    /// <summary>退出实况预览：清掉样板内容，交回控制器恢复真实状态。</summary>
+    public void ExitLayoutPreview()
+    {
+        if (!PreviewMode)
+        {
+            return;
+        }
+
+        PreviewMode = false;
+        _previewScene = null;
+
+        ClearMediaImmediate();
+        ShowLyrics(null, null);
+        ClearStatus();
+        HideNotice();
+
+        // 真实状态可能在这期间变过（进程在线/退出）——补一次，别让占位行停在旧值上
+        UpdatePresenceRows();
+        RefreshLayoutMetrics();
+    }
+
+    /// <summary>
+    /// 立刻清空音乐行（预览切场景 / 退出预览用）：
+    /// <see cref="SetMedia"/> 在"从播放变无"时会挂 2.2 秒换曲缓冲计时器——
+    /// 那是正式播放防抖要的，但预览切场景必须**立刻**消失，否则会残留 2 秒音乐行。
+    /// </summary>
+    private void ClearMediaImmediate()
+    {
+        _musicTimer.Stop();
+        SetMedia(null);
+        _musicTimer.Stop();
+        UpdateMusicGroup();
+    }
+
+    /// <summary>按场景把样板内容铺到岛上（先加后删，避免中途出现"空岛"被收走）。</summary>
+    private void ApplyPreviewScene(PreviewScene scene)
+    {
+        _previewScene = scene;
+
+        var wantMusic = scene is PreviewScene.Music or PreviewScene.Both;
+        var wantTask = scene is PreviewScene.Task or PreviewScene.Both;
+        var wantNotice = scene == PreviewScene.Notice;
+
+        _applyingPreview = true;
+        try
+        {
+            if (wantMusic)
+            {
+                SetMedia(PreviewMedia);
+                ShowLyrics(PreviewLyricCurrent, PreviewLyricNext);
+            }
+
+            if (wantTask)
+            {
+                ShowRunning(PreviewTask, "WorkBuddy");
+            }
+
+            if (wantNotice)
+            {
+                ShowNotice(PreviewNotice);
+            }
+
+            // 再删掉这个场景不要的内容（此时岛上仍有内容，不会触发收纳）
+            if (!wantMusic)
+            {
+                ClearMediaImmediate();
+                ShowLyrics(null, null);
+            }
+
+            if (!wantTask)
+            {
+                ClearStatus();
+            }
+
+            if (!wantNotice)
+            {
+                HideNotice();
+            }
+        }
+        finally
+        {
+            _applyingPreview = false;
+        }
     }
 
     /// <summary>
@@ -579,6 +976,11 @@ public partial class IslandWindow : Window
     /// </summary>
     public void ShowLyrics(string? current, string? next, string? translation = null)
     {
+        if (PreviewLocked)
+        {
+            return;
+        }
+
         var line1 = current ?? string.Empty;
         var line2 = next ?? string.Empty;
         var trans = translation ?? string.Empty;
@@ -653,6 +1055,11 @@ public partial class IslandWindow : Window
     /// <summary>显示“任务执行中”状态（单行实时动作文字）。</summary>
     public void ShowRunning(string text, string? tag = null)
     {
+        if (PreviewLocked)
+        {
+            return;
+        }
+
         EnsureCreated();
         SetStatus(text, done: false, tag);
     }
@@ -660,8 +1067,42 @@ public partial class IslandWindow : Window
     /// <summary>显示“任务完成”：对勾 + 完成文字，600ms 后 220ms 收缩。</summary>
     public void ShowDone(string text, string? tag = null)
     {
+        if (PreviewLocked)
+        {
+            return;
+        }
+
         EnsureCreated();
         SetStatus(text, done: true, tag);
+    }
+
+    /// <summary>
+    /// 清空任务行（v0.2.18 需求1：设置页预览样板切换场景用；
+    /// 正式运行没有"任务中途消失"的语义，不走这条路径）。
+    /// </summary>
+    public void ClearStatus()
+    {
+        if (PreviewLocked)
+        {
+            return;
+        }
+
+        _statusTimer.Stop();
+
+        if (!_statusVisible)
+        {
+            return;
+        }
+
+        _statusVisible = false;
+        _statusTransient = false;
+        StopBreathing();
+        StatusGroup.BeginAnimation(OpacityProperty, null);
+        StatusGroup.Opacity = 1;
+        StatusGroup.Visibility = Visibility.Collapsed;
+
+        UpdateChrome();
+        Evaluate(reason: ExpandReason.Refresh);
     }
 
     /// <summary>
@@ -688,6 +1129,11 @@ public partial class IslandWindow : Window
     /// <summary>外部事件（新任务/新状态）到达时把岛弹出来并重置收纳倒计时。</summary>
     public void PokeActivity()
     {
+        if (PreviewLocked)
+        {
+            return;
+        }
+
         Evaluate(reason: ExpandReason.Refresh);
         RestartAutoCollapse();
     }
@@ -706,6 +1152,11 @@ public partial class IslandWindow : Window
     /// </summary>
     public void ShowNotice(NotifyMessage message)
     {
+        if (PreviewLocked)
+        {
+            return;
+        }
+
         EnsureCreated();
 
         _stashedNotice = message;
@@ -765,7 +1216,12 @@ public partial class IslandWindow : Window
         }
 
         _noticeTimer.Stop();
-        _noticeTimer.Start();
+
+        // 预览样板（v0.2.18 需求1）：不启动 6 秒收起计时——样板要一直挂着供调试
+        if (!PreviewMode)
+        {
+            _noticeTimer.Start();
+        }
 
         UpdateChrome();
         Evaluate(reason: ExpandReason.Notice);
@@ -778,6 +1234,11 @@ public partial class IslandWindow : Window
     /// </summary>
     public void HideNotice()
     {
+        if (PreviewLocked)
+        {
+            return;
+        }
+
         _noticeTimer.Stop();
         _stashedNotice = null;
 
@@ -922,6 +1383,12 @@ public partial class IslandWindow : Window
         _presenceWorkbuddy = workBuddyRunning;
         _presenceMusicProcess = musicProcess;
 
+        // 实况预览期间不让"进程在线"改写岛内内容（退出预览时会补一次 UpdatePresenceRows）
+        if (PreviewLocked)
+        {
+            return;
+        }
+
         // v0.2.15 需求 5：播放器进程已经退出，就别再等那 2.2 秒的"换曲缓冲"。
         // 缓冲本来是为了"切歌瞬间 SMTC 短暂无会话"不闪一下；进程都没了不需要缓冲，
         // 留着只会让用户觉得"关掉播放器半天才回待机"。
@@ -1009,15 +1476,17 @@ public partial class IslandWindow : Window
     /// 音乐与任务是否**同时**在跑（v0.2.9 需求 3 的展示策略开关）：
     /// 两项都在 → 新通知走四角弹窗；否则进岛内。
     /// </summary>
-    public bool IsBusyWithBoth => !NoticeGoesToIsland(_musicVisible, _statusVisible);
+    /// <summary>岛内已有活跃内容（在放歌或在跑任务）——此时消息通知一律走四角（v0.2.18 需求5）。</summary>
+    public bool IsBusyWithContent => _musicVisible || _statusVisible;
 
     /// <summary>
-    /// 展示策略的纯函数版（v0.2.9 需求 3）：
-    ///   音乐 + WorkBuddy 任务**同时在跑** → 岛内两行已经满了，新通知走四角弹窗；
-    ///   都空 / 只有一项在跑        → 岛内还有空间，新通知直接在岛里展示。
+    /// 展示策略的纯函数版（v0.2.9 需求 3；v0.2.18 需求5 收紧）：
+    ///   · **只要音乐在放或任务在跑**（任一在跑）→ 消息通知（微信/QQ/ntfy）一律走四角卡片，
+    ///     不在灵动岛内与任务/音乐混杂展示；
+    ///   · 岛内空闲（既没放歌也没任务）→ 新通知进岛，直接展开展示（需求6①）。
     /// 抽成静态纯函数是为了让自检能直接验证策略分支，不用先把窗口跑起来。
     /// </summary>
-    public static bool NoticeGoesToIsland(bool hasMusic, bool hasTask) => !(hasMusic && hasTask);
+    public static bool NoticeGoesToIsland(bool hasMusic, bool hasTask) => !(hasMusic || hasTask);
 
     /// <summary>
     /// 启动即常驻（v0.2.9 需求 2）：立刻亮出顶部窄条，不等任何内容。
@@ -1083,6 +1552,18 @@ public partial class IslandWindow : Window
     /// 只有「单击收纳条 / 收到新通知 / 开始播放歌曲 / WorkBuddy 启动任务」四类。
     /// </summary>
     private static bool IsExpandAllowedAfterForce(ExpandReason reason)
+        => reason is ExpandReason.StripClick
+            or ExpandReason.Notice
+            or ExpandReason.MusicStart
+            or ExpandReason.TaskStart
+            or ExpandReason.Startup;
+
+    /// <summary>
+    /// 是否"用户明确要求看到内容"的展开（v0.2.18 需求6）：这类展开不被
+    /// <see cref="ExpandFromStrip"/> 的 400ms 防抖冷却吞掉——通知/播放/任务/单击
+    /// 出现时岛必须立即展开，否则用户看到的就是"只有提示音、岛不动"。
+    /// </summary>
+    private static bool IsUserIntentExpand(ExpandReason reason)
         => reason is ExpandReason.StripClick
             or ExpandReason.Notice
             or ExpandReason.MusicStart
@@ -1163,6 +1644,11 @@ public partial class IslandWindow : Window
     /// <summary>音乐状态更新（null=无播放会话）。</summary>
     public void SetMedia(MediaInfo? media)
     {
+        if (PreviewLocked)
+        {
+            return;
+        }
+
         var wasPlaying = _musicPlaying;
         _media = media;
         _musicPlaying = media is { IsPlaying: true };
@@ -1420,6 +1906,10 @@ public partial class IslandWindow : Window
     /// <summary>分隔线只在音乐与任务两组同时可见时出现；歌词随音乐组一起出现。</summary>
     private void UpdateChrome()
     {
+        // v0.2.18 需求1：先把布局参数落到元素上（高度留白/模块尺寸/间距/偏移），
+        // 再走可见性与宽度配平——否则滑块改完要等下一次状态变化才生效。
+        ApplyLayoutMetrics();
+
         // 真实任务/通知出现 → 进程在线占位行让位（v0.2.11 需求 2）
         UpdatePresenceRows();
 
@@ -1535,47 +2025,77 @@ public partial class IslandWindow : Window
     private void SyncStripMode() => _strip?.SetStandbyMode(IsIdleStandby);
 
     /// <summary>
-    /// 左右两栏宽度配平 + 自适应岛宽（v0.2.8 需求 5 的核心）。
+    /// 左右两栏宽度配平（v0.2.8 需求 5 的核心；v0.2.18 改为**固定尺寸预算模型**）。
     ///
-    /// 旧版是把歌词写死 270、任务写死 262/360：歌词短的时候右侧留一大片黑，
-    /// 岛却按「270 + 分隔线 + 262」的固定宽度居中，观感就是**明显靠左、右边空**。
-    ///
-    /// 现在一切按**文本实测宽度**推：
-    ///   · 歌名区：clamp(实测, 104, 有任务 200 / 无任务 280)
-    ///   · 歌词区：clamp(三行里最宽的一行, 150, 有任务 330 / 无任务 560)
-    ///   · 任务区：clamp(实测, 160, 有音乐 330 / 无音乐 460)
-    /// 内容短 → 岛自然收窄（居中后两侧留白对称）；歌词长 → 岛适度拉长（上限 560）。
-    /// 只有任务没有音乐时不再预留左侧空位（左栏直接 Collapsed），所以任务区独占整条。
+    /// 旧版是"内容撑大岛"：歌词/任务各自有宽度上限，岛宽跟着文本实测宽度走——
+    /// 长歌词能把岛拉到 560+，用户看到的就是"音乐岛太长太宽挡住小半屏"。
+    /// v0.2.18 起：**窗口大小由「总长度 × 整体高度」设置严格决定**（见
+    /// <see cref="ApplyIslandSize"/>），这里只负责在固定预算内做分配：
+    ///   · 预算 = 窗口内容区宽度（扣 Pill 外边距与内容留白，按 uiScale 折算）；
+    ///   · 两侧都有内容时按「区域比例」切分，只有一侧时整条预算都给它；
+    ///   · 每栏先扣固定装饰（脊线/图标/三键/状态点），剩余给文本列；
+    ///   · 文本超出列宽 → 跑马灯在岛内滚动，**绝不撑大窗口**；
+    ///   · 极端窄预算下播放器列保底（装饰 + 歌名下限），右栏吃剩余。
     /// </summary>
     private void BalanceWidths()
     {
-        // v0.2.9 需求 6 + v0.2.10 需求 1：
-        //   widthFactor：整体宽度上限的乘数（60%~160%）
-        //   left/rightFactor：按左右分配比例放大或收缩两侧的上限 —— **只在左右两侧都有内容时生效**。
-        // 需求 1 明确：岛内只有一项内容时"整体自动居中"，不能被比例滑块把可用宽度砍掉一半
-        // （比例 25 时把通知区上限压到 50%，长消息会被莫名其妙截断，观感还是"偏一边"）。
-        var widthFactor = Math.Clamp((IslandWidthPercentProvider?.Invoke() ?? 100) / 100.0, 0.6, 1.6);
+        var musicScale = MusicScaleFactor;
+        var taskScale = TaskScaleFactor;
         var hasLeft = _musicVisible;
         var hasRight = _statusVisible || _noticeVisible;
         var bothSides = hasLeft && hasRight;
-        var (leftFactor, rightFactor) = SplitFactors(IslandSplitRatioProvider?.Invoke() ?? 50, bothSides);
+
+        // ---- v0.2.18：固定尺寸预算 ----
+        var budget = IslandContentBudget();
+        var dividerWidth = bothSides ? DividerTotalWidth : 0;
+        var (leftFraction, rightFraction) = SplitFactors(IslandSplitRatioProvider?.Invoke() ?? 50, bothSides);
+
+        // 右栏固定装饰：状态点 13 + 与文字列的间距 6；文字列至少留 60
+        var rightFloor = 19 + 60d;
+        // 左栏固定装饰：脊线(3+10) + 图标(17+7) + 三键(98+7)，随音乐模块尺寸缩放
+        var musicChrome = 13 + ((17 + 7) + (98 + 7)) * musicScale;
+        // 文本列下限：极窄岛时宁可多滚字，也不能让「装饰 + 文本」撑破岛体
+        var leftFloor = musicChrome + 40;
+
+        double leftBudget;
+        double rightBudget;
+        if (!hasLeft)
+        {
+            // 无音乐：整条预算给右栏（左栏整体收起，不预留空位）
+            leftBudget = 0;
+            rightBudget = budget;
+        }
+        else if (!hasRight)
+        {
+            // 只有音乐：整条预算给左栏
+            leftBudget = budget;
+            rightBudget = 0;
+        }
+        else
+        {
+            // 双栏：按占比切分；两个下限加起来超过预算时按比例一起缩，
+            // **保证一定放得进岛体**（v0.2.18：岛宽收到 70% 上限后这一条很关键，
+            //  旧写法会保留 182+160 的下限直接顶出岛体，右栏被裁掉半截）。
+            var avail = Math.Max(80, budget - dividerWidth);
+            var lf = leftFloor;
+            var rf = rightFloor;
+
+            if (lf + rf > avail)
+            {
+                var k = avail / (lf + rf);
+                lf *= k;
+                rf *= k;
+            }
+
+            var preferred = avail * leftFraction;
+            leftBudget = Math.Clamp(preferred, lf, Math.Max(lf, avail - rf));
+            rightBudget = Math.Max(0, avail - leftBudget);
+        }
 
         // 1) 任务正文 + 通知正文（共享同一列宽，视觉上左边界才齐）
-        //    宽度一律**向上取整**：FormattedText 的自然宽带小数（172.2），若四舍五入成 172
-        //    就比自然宽还窄 0.2px，会被跑马灯判成"超宽"从而把开头几个字滚掉（v0.2.8 实测坑）。
-        var statusCap = (_musicVisible ? MaxStatusWidthWithMusic : MaxStatusWidthSolo)
-                        * widthFactor * rightFactor;
-        var statusNatural = Math.Max(
-            StatusText.NaturalWidth,
-            Math.Max(NoticeText.NaturalWidth, PresenceWbText.NaturalWidth));
-
-        // 单内容时不要 160 的下限：短消息被撑到 160 会在右侧留下一片空白，
-        // 岛本身是居中的，那片空白就把可见文字"推"到左边去（需求 1 的观感来源之一）。
-        var statusFloor = bothSides ? MinStatusWidth : 96;
-
-        var statusWidth = Math.Ceiling(Math.Clamp(
-            statusNatural <= 0 ? statusFloor : statusNatural,
-            statusFloor, Math.Max(statusFloor, statusCap)));
+        //    v0.2.18 固定尺寸模型：文本列**直接吃满右栏预算**（宽度不再跟随文本实测），
+        //    文字超长就走跑马灯滚动，绝不再把岛撑宽。
+        var statusWidth = Math.Ceiling(Math.Max(30, rightBudget - 19));
 
         if (double.IsNaN(StatusText.Width) || Math.Abs(StatusText.Width - statusWidth) > 0.5)
         {
@@ -1604,10 +2124,13 @@ public partial class IslandWindow : Window
             {
                 LeftPane.Visibility = Visibility.Visible;
 
+                var standbyTitle = Math.Min(
+                    MusicTitleMinWidth * musicScale,
+                    Math.Max(40, leftBudget - musicChrome));
                 if (double.IsNaN(MusicText.Width)
-                    || Math.Abs(MusicText.Width - MusicTitleMinWidth) > 0.5)
+                    || Math.Abs(MusicText.Width - standbyTitle) > 0.5)
                 {
-                    MusicText.Width = MusicTitleMinWidth;
+                    MusicText.Width = standbyTitle;
                 }
 
                 return;
@@ -1620,20 +2143,16 @@ public partial class IslandWindow : Window
 
         LeftPane.Visibility = Visibility.Visible;
 
-        // 2) 歌名区
-        var titleCap = (_statusVisible ? MaxTitleWidthWithTask : MaxTitleWidthSolo)
-                       * widthFactor * leftFactor;
-        var titleNatural = MusicText.NaturalWidth;
-        var titleWidth = Math.Ceiling(Math.Clamp(
-            titleNatural <= 0 ? MinTitleWidth : titleNatural,
-            MinTitleWidth, titleCap));
+        // 2) 歌名区：预算扣掉固定装饰后**全给歌名**（固定尺寸模型：不再跟随文本实测宽，
+        //    歌名再长也在这一列里滚动，绝不把岛撑宽）
+        var titleWidth = Math.Ceiling(Math.Max(20, leftBudget - musicChrome));
 
         if (double.IsNaN(MusicText.Width) || Math.Abs(MusicText.Width - titleWidth) > 0.5)
         {
             MusicText.Width = titleWidth;
         }
 
-        // 3) 歌词区：取三行里最宽的一行（译文/下一句通常更短，不参与决定）
+        // 3) 歌词区：同样吃满左栏剩余预算（超出滚动）
         if (LyricsPanel.Visibility != Visibility.Visible)
         {
             return;
@@ -1641,15 +2160,13 @@ public partial class IslandWindow : Window
 
         AlignLyricIndent();
 
-        var lyricCap = (_statusVisible ? MaxLyricWidthWithTask : MaxLyricWidthSolo)
-                       * widthFactor * leftFactor;
-        var lyricNatural = Math.Max(
-            LyricLine1.NaturalWidth,
-            Math.Max(LyricTrans.NaturalWidth, LyricLine2.NaturalWidth));
-
-        var lyricWidth = Math.Ceiling(Math.Clamp(
-            lyricNatural <= 0 ? MinLyricWidth : lyricNatural,
-            MinLyricWidth, lyricCap));
+        // 歌词左缩进 = 脊线(3+10) + 图标(17+7)，与 AlignLyricIndent 的目标一致；
+        // 用确定性公式而不是读 Margin（首次布局时 Margin 还是 XAML 默认值，会算宽）。
+        var lyricIndent = 13 + (24 * musicScale) + Math.Max(0, LyricsOffsetX);
+        var lyricAvail = Math.Max(40, leftBudget - lyricIndent);
+        // 歌词宽度系数只能"收窄"，超过 100% 时受岛宽预算封顶（绝不为歌词撑大岛）
+        var lyricWidth = Math.Ceiling(Math.Max(40, Math.Min(
+            lyricAvail, lyricAvail * Math.Min(1.0, LyricsWidthFactor))));
 
         if (double.IsNaN(LyricLine1.Width) || Math.Abs(LyricLine1.Width - lyricWidth) > 0.5)
         {
@@ -1657,6 +2174,21 @@ public partial class IslandWindow : Window
             LyricTrans.Width = lyricWidth;
             LyricLine2.Width = lyricWidth;
         }
+    }
+
+    /// <summary>分隔线总宽（1px 线 + 左右各 12 外边距）。</summary>
+    private const double DividerTotalWidth = 25;
+
+    /// <summary>
+    /// 岛内容区的可用宽度（DIP，未乘 uiScale 的"布局单位"）：
+    /// 窗口宽 - Pill 外边距×2 - Pill 描边×2 - 内容网格左右留白×2，再按 uiScale 折算
+    /// （Pill 的 LayoutTransform 会把布局约束除以缩放系数）。
+    /// </summary>
+    private double IslandContentBudget()
+    {
+        var width = double.IsNaN(Width) ? BaseIslandWidth + (PillPad * 2) : Width;
+        var usable = (width - (PillPad * 2) - 2 - 24) / Math.Max(0.5, _uiScale);
+        return Math.Max(120, usable);
     }
 
     /// <summary>
@@ -1675,10 +2207,10 @@ public partial class IslandWindow : Window
             return (1.0, 1.0);
         }
 
+        // v0.2.18 固定尺寸模型：返回**占可用宽度的比例**（0.25~0.75，两侧和为 1），
+        // 由 BalanceWidths 再叠加"播放器列保底下限"；单内容时 (1,1) = 整条预算。
         var split = Math.Clamp(splitPercent / 100.0, 0.25, 0.75);
-
-        // 50 → 1.0 / 1.0；75 → 1.5 / 0.5；25 → 0.5 / 1.5
-        return (Math.Clamp(split / 0.5, 0.55, 1.7), Math.Clamp((1 - split) / 0.5, 0.55, 1.7));
+        return (split, 1 - split);
     }
 
     /// <summary>
@@ -1687,6 +2219,17 @@ public partial class IslandWindow : Window
     /// 为什么运行时算：歌名左边的装饰是「App 图标 17+7」或「♪ 字形 + 间距」，两者宽度不同；
     /// 写死一个数值在换用 ♪ 兜底时会差 10px，看起来就是"歌词缩进错了"。
     /// 带 0.5px 容差，不会因为反复布局而抖动。
+    /// </summary>
+    /// <summary>
+    /// 歌词块左缩进 = 歌名正文相对内容列的偏移（v0.2.8：让"当前歌词"和"歌名"共用一条左边界）。
+    ///
+    /// 为什么运行时算：歌名左边的装饰是「App 图标 17+7」或「♪ 字形 + 间距」，两者宽度不同；
+    /// 写死一个数值在换用 ♪ 兜底时会差 10px，看起来就是"歌词缩进错了"。
+    /// 带 0.5px 容差，不会因为反复布局而抖动。
+    ///
+    /// v0.2.18 需求1：这里同时落地两个可调参数——
+    ///   · <see cref="MusicLyricsGap"/>：播放器行与歌词区域的上下间距（Margin.Top）；
+    ///   · <see cref="LyricsOffsetX"/>：歌词区域横向偏移（正数向右，按需微调追求美观）。
     /// </summary>
     private void AlignLyricIndent()
     {
@@ -1699,11 +2242,19 @@ public partial class IslandWindow : Window
         {
             var paneLeft = MusicGroup.TranslatePoint(new Point(0, 0), LeftPane).X;
             var titleLeft = MusicText.TranslatePoint(new Point(0, 0), LeftPane).X;
-            var indent = Math.Max(0, Math.Round(titleLeft - paneLeft));
-
-            if (indent > 0 && Math.Abs(LyricsPanel.Margin.Left - indent) > 0.5)
+            var baseIndent = Math.Round(titleLeft - paneLeft);
+            if (baseIndent < 0)
             {
-                LyricsPanel.Margin = new Thickness(indent, LyricsPanel.Margin.Top, 0, LyricsPanel.Margin.Bottom);
+                return; // 布局尚未就绪，下一帧再对齐
+            }
+
+            var indent = Math.Max(0, baseIndent) + LyricsOffsetX;
+            var top = MusicLyricsGap;
+
+            if (Math.Abs(LyricsPanel.Margin.Left - indent) > 0.5
+                || Math.Abs(LyricsPanel.Margin.Top - top) > 0.5)
+            {
+                LyricsPanel.Margin = new Thickness(indent, top, 0, LyricsPanel.Margin.Bottom);
             }
         }
         catch
@@ -1865,7 +2416,16 @@ public partial class IslandWindow : Window
     /// <summary>展开：180ms ease-out（淡入 + 自上而下落位）。已显示则只做内容更新。</summary>
     private void ShowIsland(ExpandReason reason = ExpandReason.Refresh)
     {
-        // v0.2.15 需求 2：**最后一道闸**。
+        // 离屏自检模式：只跑内容/度量状态机，不真的把窗口 Show 到屏幕上
+        if (OffscreenPreview)
+        {
+            _hidden = false;
+            _stripMode = false;
+            UpdateChrome();
+            return;
+        }
+
+        // v0.2.15 需求2：**最后一道闸**。
         // 任何调用方（配置变更、预览、进程状态、全屏恢复…）想把岛 Show 出来，
         // 都必须先过这里：没有可见内容就老老实实留窄条。
         // 这一层是"白色椭圆"的终极防线——就算上层逻辑又漏掉某个标志位，
@@ -1897,10 +2457,11 @@ public partial class IslandWindow : Window
             LogService.Shared.Info("Island", "强制收纳解除", $"reason={reason}");
         }
 
-        // 吸附细条形态下来了新内容：先展开成完整岛
+        // 吸附细条形态下来了新内容：先展开成完整岛（带上展开原因，
+        // 让 ExpandFromStrip 区分"用户要求看"与"被动刷新"——v0.2.18 需求6）
         if (_stripMode)
         {
-            ExpandFromStrip();
+            ExpandFromStrip(reason);
             return;
         }
 
@@ -2216,6 +2777,12 @@ public partial class IslandWindow : Window
     {
         _autoTimer.Stop();
 
+        // v0.2.18 需求1：实况预览期间岛必须一直亮着，不跑收纳倒计时
+        if (PreviewMode)
+        {
+            return;
+        }
+
         // v0.2.17 工单C 规则 3：强制收纳后不受自动收纳倒计时控制
         if (_forceCollapsed)
         {
@@ -2411,10 +2978,10 @@ public partial class IslandWindow : Window
             return;
         }
 
-        // v0.2.17 工单C：长按 + 上滑 → 强制收纳。
+        // v0.2.18 需求2：短按 + 上滑 → 强制收纳（不再要求长按）。
         // 岛是点穿窗口收不到鼠标消息，这里轮询 GetAsyncKeyState + 光标位置。
         // 拖拽中（自由模式挪岛）不抢——拖动优先。
-        if (!LongPressCollapseEnabled() || _dragging || _sliding)
+        if (!SwipeCollapseEnabled() || _dragging || _sliding)
         {
             return;
         }
@@ -2428,8 +2995,7 @@ public partial class IslandWindow : Window
             NativeMethods.IsLeftButtonDown(),
             point.Y,
             Environment.TickCount64,
-            LongPressHoldMs(),
-            LongPressSwipePx());
+            SwipeCollapsePx());
 
         if (state == SwipeGestureState.Triggered)
         {
@@ -2454,8 +3020,8 @@ public partial class IslandWindow : Window
     }
 
     /// <summary>
-    /// 长按上滑 → 强制收纳（v0.2.17 工单C 规则 2）：
-    /// 直接收成贴边窄收纳条，不等倒计时；之后只有四类条件能重新展开（规则 3）。
+    /// 短按上滑 → 强制收纳（v0.2.18 需求2）：
+    /// 直接收成贴边窄收纳条，不等倒计时；之后只有四类条件能重新展开（v0.2.17 工单C 规则 3）。
     /// </summary>
     private void ForceCollapseByGesture()
     {
@@ -2470,7 +3036,7 @@ public partial class IslandWindow : Window
 
         LogService.Shared.Info(
             "Island",
-            "长按上滑：强制收纳",
+            "短按上滑：强制收纳",
             "之后只有单击窄条/新通知/开始播放/启动任务才会再展开");
 
         CollapseToStrip(instant: true);
@@ -2618,7 +3184,10 @@ public partial class IslandWindow : Window
 
         // 刚收起来就被"展开"（细条恰好落在指针下、或吸附动画尾帧的用户输入）会变成抖动，
         // 400ms 内直接忽略。
-        if (Environment.TickCount64 - _stripShownAtMs < 400)
+        // v0.2.18 需求6：但"内容驱动"的展开（新通知 / 开始播放 / 启动任务 / 单击细条）例外——
+        // 用户明确要求这些事件出现时岛要立刻展开，被冷却吞掉就成了"只有提示音、岛不展开"。
+        // （Refresh/Presence 这类被动刷新仍然受冷却保护，防止自动收纳后立刻被拉回。）
+        if (Environment.TickCount64 - _stripShownAtMs < 400 && !IsUserIntentExpand(reason))
         {
             return;
         }

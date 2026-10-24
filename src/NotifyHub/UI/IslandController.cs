@@ -68,15 +68,22 @@ public sealed class IslandController : IDisposable
 
     private long _manualUntilMs; // 手动 --island 推送后的 15 秒内，自动监视不覆盖
 
-    /// <summary>
-    /// 设置页"岛总长度 / 左右比例"滑块的实时预览配置（v0.2.9 需求 6）。
-    /// 拖动过程中只改这个内存副本，不动 <see cref="ConfigService.Current"/>——
-    /// 用户取消/直接关窗时不会把半成品写进配置文件。
-    /// </summary>
-    private AppConfig? _preview;
-
     private IslandWindow? _island;
     private bool _started;
+
+    /// <summary>
+    /// 设置页实况预览用的临时配置（v0.2.18 改版）：非 null 时岛的各个 Provider
+    /// 都读它而不是真配置——拖动滑块立即生效，点保存才落盘。
+    /// </summary>
+    private AppConfig? _previewConfig;
+
+    /// <summary>最近一次推给岛的任务文字/标签（退出预览后用来恢复真实内容）。</summary>
+    private string? _lastStatusText;
+
+    private string? _lastStatusTag;
+
+    /// <summary>岛读配置的唯一入口：预览态读临时副本，其余读真配置。</summary>
+    private AppConfig Live => _previewConfig ?? _config.Current;
 
     public IslandController(LogService log, ConfigService config, Dispatcher dispatcher, SoundService sound)
     {
@@ -242,6 +249,10 @@ public sealed class IslandController : IDisposable
                 }
                 else
                 {
+                    // 退出布局预览后用它把真实任务状态补回岛上
+                    _lastStatusText = single;
+                    _lastStatusTag = tag;
+
                     Island().ShowRunning(single, tag);
                 }
             }
@@ -271,11 +282,92 @@ public sealed class IslandController : IDisposable
         }));
     }
 
+    // ---------------- v0.2.18 需求1（改版）：设置页在真实岛上实况预览 ----------------
+
     /// <summary>
-    /// 新消息到达（v0.2.9 需求 3 的展示策略入口）。
+    /// 进入布局实况预览：设置页每次拖动滑块/改选项都会调它。
+    ///
+    /// 做法：
+    ///   1. 把「预览配置副本」挂到 <see cref="_previewConfig"/>，岛的 Provider 立刻读到新值；
+    ///   2. 让真实的岛铺上虚拟样板内容并按新参数重排——屏幕顶部就是最终效果，所见即所得；
+    ///   3. **不落盘**：用户不点保存，关掉设置页就退出预览、恢复原配置与原内容。
+    ///
+    /// 防闪：全程不销毁/重建窗口，也不反复 Show/Hide；参数变化只重排一次。
+    /// </summary>
+    public void BeginLayoutPreview(AppConfig config, PreviewScene scene)
+    {
+        if (!_dispatcher.CheckAccess())
+        {
+            _dispatcher.BeginInvoke(new Action(() => BeginLayoutPreview(config, scene)));
+            return;
+        }
+
+        try
+        {
+            _previewConfig = config;
+            Island().EnterLayoutPreview(config, scene);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Island", "布局预览失败", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 退出布局实况预览（关设置页 / 点保存后）：清预览配置、清样板内容，
+    /// 再把真实状态（当前播放、最后一次任务文字、进程在线占位）重新推回岛上。
+    /// </summary>
+    public void EndLayoutPreview()
+    {
+        if (!_dispatcher.CheckAccess())
+        {
+            _dispatcher.BeginInvoke(new Action(EndLayoutPreview));
+            return;
+        }
+
+        if (_previewConfig is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _previewConfig = null;
+
+            var island = _island;
+            if (island is null)
+            {
+                return;
+            }
+
+            island.ExitLayoutPreview();
+
+            // 真实内容回填：媒体 + 最后一次任务状态（没有就让它自然为空）
+            island.SetMedia(_currentMedia);
+            island.RefreshMedia();
+
+            if (!string.IsNullOrWhiteSpace(_lastStatusText))
+            {
+                island.ShowRunning(_lastStatusText, _lastStatusTag);
+            }
+
+            _log.Routine("Island", "退出布局预览", "已恢复真实运行状态");
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("Island", "退出布局预览失败", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 新消息到达（展示策略入口；v0.2.18 需求5 收紧）。
     ///
     /// 返回 true = 已在岛内展示（调用方不要再弹四角卡片）；
-    /// 返回 false = 交给四角弹窗（音乐与任务同时存在，岛内已经没有干净的位置）。
+    /// 返回 false = 交给四角弹窗。两种情况走四角：
+    ///   · 岛还没建（启动最初几秒）；
+    ///   · **岛内有活跃内容**（音乐在放 / WorkBuddy 任务在跑）——v0.2.18 需求5：
+    ///     微信/QQ/ntfy 消息通知一律走四角卡片独立弹出，不在灵动岛内与任务/音乐
+    ///     混杂展示；只有岛内空闲时新通知才进岛（并由需求6①负责展开）。
     /// </summary>
     public bool TryShowNoticeOnIsland(NotifyMessage message)
     {
@@ -295,14 +387,15 @@ public sealed class IslandController : IDisposable
                 return box.Value;
             }
 
-            // 音乐 + 任务同时跑 → 岛内已有两行内容，通知走四角（需求 3 明确要求）
+            // v0.2.18 需求5：有音乐/任务在跑 → 消息一律走四角，不进灵动岛
             if (!IslandWindow.NoticeGoesToIsland(island.HasMusicContent, island.HasTaskContent))
             {
                 _log.Write(
                     LogLevel.Debug,
                     "Island",
-                    "通知走四角弹窗（音乐+任务同时在跑）",
-                    $"{message.SourceText} {message.Sender}");
+                    "消息走四角卡片（岛内有音乐/任务，不混杂展示）",
+                    $"{message.SourceText} · {message.Sender} " +
+                    $"music={island.HasMusicContent} task={island.HasTaskContent}");
                 return false;
             }
 
@@ -405,6 +498,9 @@ public sealed class IslandController : IDisposable
                     }
                     else
                     {
+                        _lastStatusText = single;
+                        _lastStatusTag = "WorkBuddy";
+
                         Island().ShowRunning(single, "WorkBuddy");
                     }
                 }
@@ -459,22 +555,24 @@ public sealed class IslandController : IDisposable
         _island = island;
 
         island.ModeProvider = () => _config.Current.IslandMode;
-        island.MusicEnabledProvider = () => _config.Current.MusicEnabled;
-        island.MarqueeSpeedProvider = () => _config.Current.MarqueeSpeed;
-        island.LyricsEnabledProvider = () => _config.Current.LyricsEnabled;
-        island.LyricsFontSizeProvider = () => _config.Current.LyricsFontSize;
+        island.MusicEnabledProvider = () => Live.MusicEnabled;
+        island.MarqueeSpeedProvider = () => Live.MarqueeSpeed;
+        island.LyricsEnabledProvider = () => Live.LyricsEnabled;
+        island.LyricsFontSizeProvider = () => Live.LyricsFontSize;
         island.AutoCollapseEnabledProvider = () => _config.Current.AutoCollapseEnabled;
         island.AutoCollapseSecondsProvider = () => _config.Current.AutoCollapseSeconds;
         island.KeepOpenWhilePlayingProvider = () => _config.Current.KeepOpenWhilePlaying;
 
-        // v0.2.17 工单C：长按上滑强制收纳（开关 + 两个判定参数）
-        island.LongPressCollapseEnabledProvider = () => _config.Current.LongPressCollapseEnabled;
-        island.LongPressHoldMsProvider = () => _config.Current.LongPressHoldMs;
-        island.LongPressSwipePxProvider = () => _config.Current.LongPressSwipePx;
+        // v0.2.18 需求2：短按上滑强制收纳（开关 + 触发距离；不再有长按时长）
+        island.SwipeCollapseEnabledProvider = () => _config.Current.SwipeCollapseEnabled;
+        island.SwipeCollapsePxProvider = () => _config.Current.SwipeCollapsePx;
 
-        // v0.2.9 需求 6：两个滑块（拖的时候读预览副本，松手保存后读真配置）
-        island.IslandWidthPercentProvider = () => (_preview ?? _config.Current).IslandWidthPercent;
-        island.IslandSplitRatioProvider = () => (_preview ?? _config.Current).IslandSplitRatio;
+        // v0.2.18 需求1（改版）：设置页直接在真实岛上预览，Provider 一律读 Live（预览副本优先）
+        island.IslandWidthPercentProvider = () => Live.IslandWidthPercent;
+        island.IslandSplitRatioProvider = () => Live.IslandSplitRatio;
+
+        // v0.2.18 需求1：新增布局参数（高度/模块尺寸/间距/偏移）统一走布局配置源
+        island.LayoutConfigProvider = () => Live;
 
         // 字号依赖 provider，必须在注入之后刷一次（构造函数里读不到配置）
         island.ApplyLyricsTypography();
@@ -914,36 +1012,6 @@ public sealed class IslandController : IDisposable
         }
     }
 
-    /// <summary>
-    /// 设置页滑块的实时预览（v0.2.9 需求 6）：用内存副本立刻重排岛，不落盘。
-    /// 岛当前在细条里也没关系——会先把岛弹出来，用户能直接看到宽度变化。
-    /// </summary>
-    public void PreviewLayout(AppConfig preview)
-    {
-        _dispatcher.BeginInvoke(new Action(() =>
-        {
-            try
-            {
-                _preview = preview;
-
-                var island = _island;
-                if (island is null)
-                {
-                    return;
-                }
-
-                // 先让岛有内容可看（没内容时宽度是"细条"的宽度，看不出滑块效果）
-                island.PokeActivity();
-                island.ApplyLyricsTypography();
-                island.RefreshMedia();
-            }
-            catch (Exception ex)
-            {
-                _log.Warn("Island", "预览岛布局失败", ex.Message);
-            }
-        }));
-    }
-
     /// <summary>当前灵动岛窗口矩形（DIP）；岛没建或不可见返回 null。Bug 快照记录用。</summary>
     public Rect? IslandBounds
     {
@@ -959,16 +1027,18 @@ public sealed class IslandController : IDisposable
         }
     }
 
-    /// <summary>配置真正保存后清掉预览态，后续读真配置（v0.2.9 需求 6）。</summary>
-    public void ClearPreview() => _preview = null;
-
     private void OnConfigChanged(object? sender, AppConfig config)
     {
         _dispatcher.BeginInvoke(new Action(() =>
         {
             try
             {
-                _preview = null; // 保存后以真配置为准
+                // v0.2.18：保存过了 → 退出实况预览，样板内容换成真实内容，
+                // 接着按新配置走正常应用流程
+                if (_previewConfig is not null)
+                {
+                    EndLayoutPreview();
+                }
 
                 Island().ApplyModeChange();
 

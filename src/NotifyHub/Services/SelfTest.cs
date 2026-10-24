@@ -1003,7 +1003,10 @@ public static class SelfTest
 
             try
             {
-                // ---------- ① 音乐 + 歌词 + 任务：两栏配平、分隔线出现 ----------
+                // ---------- ① 音乐 + 歌词 + 任务：固定岛宽、两栏按预算分配、分隔线出现 ----------
+                // v0.2.18 固定尺寸模型：岛长（上下边长）= BaseIslandWidth(480) × 长度(默认 100%) + 外边距(28)
+                const double expectedFixedWidth = 480 + 28;
+
                 withTask.ApplyTheme(ThemePalette.Create(new AppConfig()));
                 withTask.ApplyLyricsTypography();
                 withTask.SetMedia(new MediaInfo("侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 30, 200));
@@ -1021,12 +1024,23 @@ public static class SelfTest
                     return false;
                 }
 
-                // 两栏都"有实质内容"且量级接近（30% 以内）。
-                // 阈值取 220/190 而不是 240/200：左侧装饰既可能是 App 图标（17+7），
-                // 也可能是 ♪ 兜底字形（更窄 9px），拿一个卡在边界的绝对值断言会让
-                // "图标提取不到"被误报成配平失败（v0.2.9 实测踩过）。
-                var balanced = left > 220 && right > 190 && Math.Abs(left - right) <= Math.Max(left, right) * 0.30;
+                // 岛宽严格等于设置值（内容再长也不撑大）：窗口 Width 恒为 480+28，
+                // 内容 desired 宽度不超过窗口（超出部分在岛内滚动/裁剪）
+                var fixedWidthOk = Math.Abs(withTask.Width - expectedFixedWidth) < 1
+                                   && totalBoth <= expectedFixedWidth + 1;
+
+                // 两栏都有实质内容，且两栏 + 分隔线不超出内容区（不会溢出岛体）
+                var contentFits = (left + right + 25) <= (expectedFixedWidth - 28) + 1;
+                var balanced = left > 200 && right > 140 && contentFits;
                 var dividerOk = divider.Visibility == Visibility.Visible;
+
+                // v0.2.18 修：强调脊线（音乐卡左边那条）高度要跟岛高走，
+                // 不能只在播放器中间一小截（岛高时上方大片空白 / 岛矮时看不到）
+                var spine = withTask.FindName("AccentSpine") as System.Windows.Controls.Border;
+                var spineH = spine?.ActualHeight ?? 0;
+                var paneH = withTask.LeftPaneHeight;
+                // 高度上限 70% → 岛高 104，内容区 58，脊线应≈52（跟着岛高走，不是只在中间一小截）
+                var spineOk = spineH > 45 && paneH > 45 && spineH >= paneH - 8;
 
                 // 歌词与歌名同一左边界（同一内容列，误差 ≤2px）
                 var lyricLeft = lyric.TranslatePoint(new Point(0, 0), withTask).X;
@@ -1039,11 +1053,12 @@ public static class SelfTest
                 var iconShown = (withTask.FindName("MusicIconBox") as System.Windows.Controls.Border)?.Visibility
                                 == Visibility.Visible;
 
-                report.Append($"有任务: 整条={totalBoth:F1} 左={left:F1} 右={right:F1} " +
+                report.Append($"有任务: 整条={totalBoth:F1}(定宽={fixedWidthOk}) 左={left:F1} 右={right:F1} " +
                               $"歌词左={lyricLeft:F1} 歌名左={titleLeft:F1} 字号={lyric.FontSize:F1} " +
-                              $"分隔线={divider.Visibility} 歌词宽={lyric.ActualWidth:F1} 图标={iconShown}");
+                              $"分隔线={divider.Visibility} 歌词宽={lyric.ActualWidth:F1} 图标={iconShown} " +
+                              $"脊线高={spineH:F1}/左栏高={paneH:F1}");
 
-                // ---------- ② 无任务时左栏不预留空位、整条更窄 ----------
+                // ---------- ② 仅音乐：岛宽仍是同一个固定值（不再被内容"收窄"） ----------
                 solo.ApplyTheme(ThemePalette.Create(new AppConfig()));
                 solo.ApplyLyricsTypography();
                 solo.SetMedia(new MediaInfo("侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 30, 200));
@@ -1051,10 +1066,11 @@ public static class SelfTest
                 var totalSolo = Layout(solo);
                 var statusHidden = (solo.FindName("StatusGroup") as System.Windows.Controls.StackPanel)?.Visibility
                                    == Visibility.Collapsed;
+                var soloWidthOk = Math.Abs(solo.Width - expectedFixedWidth) < 1;
 
-                report.Append($"{Environment.NewLine}仅音乐: 整条={totalSolo:F1} 任务组隐藏={statusHidden}");
+                report.Append($"{Environment.NewLine}仅音乐: 整条={totalSolo:F1} 定宽={soloWidthOk} 任务组隐藏={statusHidden}");
 
-                // ---------- ③ 长歌词可以把岛拉长（不被 270 卡死），但有上限 ----------
+                // ---------- ③ 超长歌词：岛宽**不变**，歌词列在预算内滚动（跑马灯） ----------
                 soloLong.ApplyTheme(ThemePalette.Create(new AppConfig()));
                 soloLong.ApplyLyricsTypography();
                 soloLong.SetMedia(new MediaInfo("侧脸", "魏语诺, 五毛", "FOLIA", true, "", "Folia", 30, 200));
@@ -1063,20 +1079,21 @@ public static class SelfTest
                     "我曾经失落失望失掉所有方向直到看见平凡才是唯一的答案");
                 var totalLong = Layout(soloLong);
                 var lyricLong = soloLong.FindName("LyricLine1") as MarqueeText;
-                var longWidened = totalLong > totalSolo + 60;
-                var longCapped = totalLong <= 900;
+                var longNotWidened = Math.Abs(soloLong.Width - expectedFixedWidth) < 1
+                                     && totalLong <= expectedFixedWidth + 1;
+                var longScrolls = lyricLong is not null && lyricLong.IsScrolling;
 
-                report.Append($"{Environment.NewLine}长歌词: 整条={totalLong:F1} 歌词宽={lyricLong?.ActualWidth:F1} " +
-                              $"加宽={longWidened} 未超上限={longCapped}");
+                report.Append($"{Environment.NewLine}超长歌词: 整条={totalLong:F1} 未撑大={longNotWidened} " +
+                              $"岛内滚动={longScrolls} 歌词宽={lyricLong?.ActualWidth:F1}");
 
-                // ---------- ④ 只有任务：左栏收起，任务区独占（不预留歌词空位） ----------
+                // ---------- ④ 只有任务：左栏收起，岛宽仍是同一个固定值 ----------
                 taskOnly.ApplyTheme(ThemePalette.Create(new AppConfig()));
                 taskOnly.ApplyLyricsTypography();
                 taskOnly.ShowRunning("WorkBuddy 正在梳理需求文档结构并拆分任务", "WorkBuddy");
                 var totalTaskOnly = Layout(taskOnly);
                 var leftCollapsed = (taskOnly.FindName("LeftPane") as System.Windows.Controls.Grid)?.Visibility
                                     == Visibility.Collapsed;
-                var taskOnlyOk = leftCollapsed && totalTaskOnly < totalBoth - 80;
+                var taskOnlyOk = leftCollapsed && Math.Abs(taskOnly.Width - expectedFixedWidth) < 1;
 
                 report.Append($"{Environment.NewLine}仅任务: 整条={totalTaskOnly:F1} 左栏收起={leftCollapsed}");
 
@@ -1124,8 +1141,9 @@ public static class SelfTest
                     // 忽略
                 }
 
-                return balanced && dividerOk && aligned && fontOk && statusHidden
-                       && longWidened && longCapped && taskOnlyOk && transShown && transHidden && centeredOk;
+                return fixedWidthOk && balanced && dividerOk && aligned && fontOk && statusHidden
+                       && soloWidthOk && longNotWidened && longScrolls && taskOnlyOk
+                       && spineOk && transShown && transHidden && centeredOk;
             }
             finally
             {
@@ -1708,23 +1726,25 @@ public static class SelfTest
             });
         });
 
-        Check("v0.2.10 需求1：单内容不套比例（居中）/ 双内容按比例分配", () =>
+        Check("v0.2.18：固定尺寸下的预算占比（单内容全给一侧 / 双内容按比例且和为 1）", () =>
         {
-            // 只有一侧内容：左右系数都必须是 1.0，可用宽度全给它（否则内容会被裁一半、看着偏一边）
+            // 只有一侧内容：左右占比都是 1.0，可用宽度全给它（否则内容会被裁一半、看着偏一边）
             var single = IslandWindow.SplitFactors(75, bothSides: false);
             var single2 = IslandWindow.SplitFactors(25, bothSides: false);
             var singleOk = Math.Abs(single.Left - 1.0) < 1e-6 && Math.Abs(single.Right - 1.0) < 1e-6
                            && Math.Abs(single2.Left - 1.0) < 1e-6 && Math.Abs(single2.Right - 1.0) < 1e-6;
 
-            // 两侧都有：按比例偏置，且左右互为镜像
+            // 两侧都有：按比例分成"占比"（0.25~0.75），两侧和为 1，且左右镜像
             var half = IslandWindow.SplitFactors(50, bothSides: true);
             var left75 = IslandWindow.SplitFactors(75, bothSides: true);
             var left25 = IslandWindow.SplitFactors(25, bothSides: true);
 
-            var ratioOk = Math.Abs(half.Left - 1.0) < 1e-6 && Math.Abs(half.Right - 1.0) < 1e-6
-                          && left75.Left > left75.Right + 0.5
-                          && left25.Right > left25.Left + 0.5
-                          && Math.Abs(left75.Left - left25.Right) < 1e-6;
+            var ratioOk = Math.Abs(half.Left - 0.5) < 1e-6 && Math.Abs(half.Right - 0.5) < 1e-6
+                          && Math.Abs(left75.Left - 0.75) < 1e-6 && Math.Abs(left75.Right - 0.25) < 1e-6
+                          && Math.Abs(left25.Left - 0.25) < 1e-6 && Math.Abs(left25.Right - 0.75) < 1e-6
+                          && Math.Abs(left75.Left - left25.Right) < 1e-6
+                          && Math.Abs(left75.Left + left75.Right - 1.0) < 1e-6
+                          && Math.Abs(left25.Left + left25.Right - 1.0) < 1e-6;
 
             return singleOk && ratioOk;
         });
@@ -1928,38 +1948,107 @@ public static class SelfTest
                    && glyphs;
         });
 
-        Check("v0.2.9 需求3：展示策略（音乐+任务同时在跑→四角；其余→岛内）", () =>
+        Check("v0.2.18 需求5：有音乐/任务时消息一律走四角，空闲才进岛", () =>
         {
+            // 岛内空闲（既没放歌也没任务）→ 新通知进岛（需求6① 负责展开）
+            // 有音乐 / 有任务 / 两者都有 → 微信/QQ/ntfy 一律四角卡片，不混杂展示
             return IslandWindow.NoticeGoesToIsland(false, false)
-                   && IslandWindow.NoticeGoesToIsland(true, false)
-                   && IslandWindow.NoticeGoesToIsland(false, true)
+                   && !IslandWindow.NoticeGoesToIsland(true, false)
+                   && !IslandWindow.NoticeGoesToIsland(false, true)
                    && !IslandWindow.NoticeGoesToIsland(true, true);
         });
 
         Check("v0.2.17 工单B 规则8：四角弹窗固定 10 秒收纳（不受全局收纳时长配置影响）", () =>
             NotificationManager.CornerNoticeDurationMs == 10_000);
 
-        Check("v0.2.17 工单C：长按上滑手势识别（按住够久+上滑 / 快速大距离上甩 / 松手重置）", () =>
+        Check("v0.2.18 需求1（改版）：实况预览铺样板到真实岛 / 预览期间外部状态不覆盖 / 退出即清空", () =>
         {
-            // 时序 1：按下不动 → 跟踪；按住差 1ms 不触发；按住 221ms + 上滑 30px → 触发；触发后不重复报
+            try
+            {
+                return RunSta(() =>
+                {
+                    var island = new IslandWindow
+                    {
+                        ModeProvider = () => "Fixed",
+                        MusicEnabledProvider = () => true,
+                        MarqueeSpeedProvider = () => 45,
+                        LyricsEnabledProvider = () => true,
+                        LyricsFontSizeProvider = () => 13,
+                        AutoCollapseEnabledProvider = () => true,
+                        AutoCollapseSecondsProvider = () => 3,
+                        SavedPositionProvider = () => null,
+                        OffscreenPreview = true,
+                    };
+
+                    try
+                    {
+                        var config = new AppConfig();
+
+                        // ① 进预览：双内容场景 → 音乐行 + 任务行都在，预览态生效，收纳计时被停掉
+                        island.EnterLayoutPreview(config, PreviewScene.Both);
+
+                        var both = island.PreviewMode
+                                   && island.HasMusicContent
+                                   && island.HasTaskContent
+                                   && !island.IsAutoTimerRunning;
+
+                        // ② 预览期间真实状态推不进来（否则一有任务/播放就把样板冲掉，看起来就是"闪一下变回原样"）
+                        var demoTask = island.StatusTextSnapshot;
+                        island.ShowRunning("真实任务：正在编译 NotifyHub", "WorkBuddy");
+                        island.SetMedia(new MediaInfo("真歌", "真歌手", "QQMusic", true, "", "QQMusic", 10, 100));
+                        island.ShowLyrics("真实歌词", "真实下一句");
+                        var locked = island.StatusTextSnapshot == demoTask
+                                     && island.MusicTextSnapshot.Contains("晴天", StringComparison.Ordinal);
+
+                        // ③ 切到"仅任务"场景 → 音乐行收起，任务仍在
+                        island.EnterLayoutPreview(config, PreviewScene.Task);
+                        var taskOnly = !island.HasMusicContent && island.HasTaskContent;
+
+                        // ④ 退出预览 → 预览态关闭、样板内容清空
+                        island.ExitLayoutPreview();
+                        var exited = !island.PreviewMode && !island.HasVisibleContent;
+
+                        return both && locked && taskOnly && exited;
+                    }
+                    finally
+                    {
+                        island.Close();
+                    }
+                });
+            }
+            catch
+            {
+                return false;
+            }
+        });
+
+        Check("v0.2.18 需求2：短按上滑手势识别（不等长按 / 上滑即触发 / 松手重置）", () =>
+        {
+            // 时序 1：按下不动 → 跟踪；上滑 23px 差 1px 不触发；上滑 24px → 触发；触发后不重复报
             var t1 = new SwipeUpCollapseTracker();
-            var s1a = t1.Sample(true, 500, 1000, 220, 24);
-            var s1b = t1.Sample(true, 500, 1100, 220, 24);
-            var s1c = t1.Sample(true, 500, 1219, 220, 24);
-            var s1d = t1.Sample(true, 470, 1221, 220, 24);
-            var s1e = t1.Sample(true, 400, 1300, 220, 24);
+            var s1a = t1.Sample(true, 500, 1000, 24);
+            var s1b = t1.Sample(true, 500, 1050, 24);
+            var s1c = t1.Sample(true, 477, 1080, 24);
+            var s1d = t1.Sample(true, 476, 1090, 24);
+            var s1e = t1.Sample(true, 400, 1200, 24);
 
-            // 时序 2：按住不够久（150ms）只滑 20px → 不触发；松手回 Idle；再按下重新从起点计
+            // 时序 2：只滑 20px（未过阈值）不触发；松手回 Idle；再按下重新从起点计
             var t2 = new SwipeUpCollapseTracker();
-            var s2a = t2.Sample(true, 500, 2000, 220, 24);
-            var s2b = t2.Sample(true, 480, 2150, 220, 24);
-            var s2c = t2.Sample(false, 480, 2160, 220, 24);
-            var s2d = t2.Sample(true, 480, 2200, 220, 24);
+            var s2a = t2.Sample(true, 500, 2000, 24);
+            var s2b = t2.Sample(true, 480, 2010, 24);
+            var s2c = t2.Sample(false, 480, 2020, 24);
+            var s2d = t2.Sample(true, 480, 2030, 24);
 
-            // 时序 3：快速大距离上甩（60px ≥ 56px）不看按住时长
+            // 时序 3：短按（30ms）大距离上甩 60px → 立即触发（v0.2.18 起不看按住时长）
             var t3 = new SwipeUpCollapseTracker();
-            var s3a = t3.Sample(true, 500, 3000, 220, 24);
-            var s3b = t3.Sample(true, 440, 3040, 220, 24);
+            var s3a = t3.Sample(true, 500, 3000, 24);
+            var s3b = t3.Sample(true, 440, 3030, 24);
+
+            // 时序 4：单纯点击（按住但不动）不触发
+            var t4 = new SwipeUpCollapseTracker();
+            var s4a = t4.Sample(true, 500, 4000, 24);
+            var s4b = t4.Sample(true, 500, 4500, 24);
+            var s4c = t4.Sample(true, 498, 4600, 24);
 
             return s1a == SwipeGestureState.Tracking
                    && s1b == SwipeGestureState.Tracking
@@ -1971,7 +2060,58 @@ public static class SelfTest
                    && s2c == SwipeGestureState.Idle
                    && s2d == SwipeGestureState.Tracking
                    && s3a == SwipeGestureState.Tracking
-                   && s3b == SwipeGestureState.Triggered;
+                   && s3b == SwipeGestureState.Triggered
+                   && s4a == SwipeGestureState.Tracking
+                   && s4b == SwipeGestureState.Tracking
+                   && s4c == SwipeGestureState.Tracking;
+        });
+
+        Check("v0.2.18 需求3：细条彗星动画无缝循环（首帧=尾帧=空轨道，运动连续）", () =>
+        {
+            // 轨道几何（与 StripIndicator.OnRender 一致）
+            const double left = 0;
+            const double width = 120;
+            var segWidth = Math.Min(width, Math.Max(12, width * 0.26));
+            var extent = StripIndicator.CometExtent(segWidth);
+
+            // ① 首帧（t=0）：头部在轨道左侧外 —— 整条光带（头+拖尾+光晕）完全不可见
+            var x0 = StripIndicator.CometHeadX(0, left, width, segWidth);
+            var startInvisible = (x0 + segWidth + 1) <= left && (x0 - (segWidth * 1.35)) <= left;
+
+            // ② 尾帧（t=1）：与首帧**完全重合**（相位归零即回到起点），同样只剩空轨道
+            //    ⇒ "动画首帧和尾帧画面完全一致"，且不存在瞬移跳变
+            var xEnd = StripIndicator.CometHeadX(1, left, width, segWidth);
+            var endInvisible = Math.Abs(xEnd - x0) < 1e-6
+                               && (xEnd + segWidth + 1) <= left;
+
+            // ③ 周期覆盖整条光带跨度：出得去才回得来（不会出现"右端还剩半截、左端已冒头"）
+            var period = width + extent;
+            var periodCoversExtent = period >= extent + segWidth;
+
+            // ④ 一周之内单调向右：没有中途回跳（t 取 [0,1)，不含归零点）
+            var monotonic = true;
+            var previous = StripIndicator.CometHeadX(0, left, width, segWidth);
+            for (var i = 1; i < 100; i++)
+            {
+                var x = StripIndicator.CometHeadX(i / 100.0, left, width, segWidth);
+                if (x <= previous)
+                {
+                    monotonic = false;
+                    break;
+                }
+
+                previous = x;
+            }
+
+            // ⑤ 中段确实横穿轨道（不是"贴边蹭一下"）
+            var mid = StripIndicator.CometHeadX(0.5, left, width, segWidth);
+            var crosses = mid > left && mid < left + width;
+
+            report.AppendLine(
+                $"      诊断: 首帧不可见={startInvisible} 尾帧重合={endInvisible} " +
+                $"周期够长={periodCoversExtent} 单调={monotonic} 横穿={crosses}");
+
+            return startInvisible && endInvisible && periodCoversExtent && monotonic && crosses;
         });
 
         Check("v0.2.9 需求3：岛内通知整行可点（点击能到达 WPF，不被穿透）", () =>
@@ -2047,16 +2187,110 @@ public static class SelfTest
 
                 var stashedOnly = !island.IsNoticeShown && island.HasVisibleContent;
 
-                report.AppendLine(
-                    $"      诊断: 行可点={rowClickable} 单应用只暂存={stashedOnly}");
+                // v0.2.18 需求6①：待机收纳后收到通知 → 岛**立即**展开
+                // （不被 ExpandFromStrip 的 400ms 防抖冷却吞掉——那正是
+                //  "只有提示音、待机条只变色、岛不展开"的根因）。
+                // 先清干净回到待机：音乐停（有 2.2s 换曲 grace，要泵完才收纳）
+                // + 通知已读 → 收成细条；紧接着来一条新通知，断言立刻从细条展开。
+                island.HideNotice();
+                island.SetMedia(null);
 
-                return rowClickable && stashedOnly;
+                var graceDeadline = DateTime.UtcNow.AddSeconds(4);
+                while (DateTime.UtcNow < graceDeadline && !island.IsStripMode)
+                {
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                        () => { }, System.Windows.Threading.DispatcherPriority.Background);
+                    System.Threading.Thread.Sleep(40);
+                }
+
+                var collapsedAfterIdle = island.IsStripMode && !island.HasVisibleContent;
+
+                island.ShowNotice(new NotifyMessage
+                {
+                    Source = MessageSource.Ntfy,
+                    Sender = "CI 构建",
+                    Content = "notifyhub #128 构建成功",
+                    Time = DateTime.Now,
+                });
+
+                var expandedAtOnce = !island.IsStripMode && island.IsNoticeShown;
+
+                report.AppendLine(
+                    $"      诊断: 行可点={rowClickable} 单应用只暂存={stashedOnly} " +
+                    $"待机已收纳={collapsedAfterIdle} 通知即展开={expandedAtOnce}");
+
+                return rowClickable && stashedOnly && collapsedAfterIdle && expandedAtOnce;
             }
             finally
             {
                 island.Close();
             }
         }
+
+        Check("v0.2.18 需求4：通知卡片左上角叉号可关闭（滑动删除已移除）", () =>
+        {
+            return RunSta(() =>
+            {
+                var message = new NotifyMessage
+                {
+                    Source = MessageSource.WeChat,
+                    Sender = "张三",
+                    Content = "叉号关闭测试",
+                    Time = DateTime.Now,
+                };
+
+                var card = new NotificationWindow(message, AppConfig.MinDurationMs, 45, new AppConfig(), 1.0);
+
+                try
+                {
+                    // 离屏显示：绝不在用户桌面上弹一张真卡片
+                    card.ShowAt(-4000, -4000, animate: false);
+
+                    if (card.FindName("CloseButton") is not System.Windows.Controls.Button close)
+                    {
+                        report.AppendLine("      诊断: 找不到 CloseButton");
+                        return false;
+                    }
+
+                    // 叉号必须在卡片左上角（与卡片原点相距不远）
+                    var closeOrigin = close.PointToScreen(new System.Windows.Point(0, 0));
+                    var cardOrigin = card.PointToScreen(new System.Windows.Point(0, 0));
+                    var nearTopLeft = Math.Abs(closeOrigin.X - cardOrigin.X) < 60
+                                      && Math.Abs(closeOrigin.Y - cardOrigin.Y) < 60;
+
+                    // 点叉号 → 走 OnCloseButtonClick → Dismiss → 关闭
+                    close.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+
+                    // RunSta 没有消息循环：手动泵到卡片真的关掉
+                    var deadline = DateTime.UtcNow.AddSeconds(3);
+                    while (DateTime.UtcNow < deadline && !card.IsClosed)
+                    {
+                        System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                            () => { }, System.Windows.Threading.DispatcherPriority.Background);
+                        System.Threading.Thread.Sleep(30);
+                    }
+
+                    report.AppendLine(
+                        $"      诊断: 叉号在左上角={nearTopLeft} 点击后关闭={card.IsClosed}");
+
+                    return nearTopLeft && card.IsClosed;
+                }
+                finally
+                {
+                    try
+                    {
+                        if (!card.IsClosed)
+                        {
+                            card.Close();
+                        }
+                    }
+                    catch
+                    {
+                        // 忽略
+                    }
+                }
+            });
+        });
 
         Check("v0.2.9 需求5：歌词时间轴误差 ≤300ms（模拟 SMTC 每秒上报 + 600ms 上报延迟）", () =>
         {
@@ -2107,10 +2341,14 @@ public static class SelfTest
             return steadyError <= 0.30 && maxError <= 0.35;
         });
 
-        Check("v0.2.9 需求6：岛长度/左右分配滑块（默认值 / 越界收敛 / 旧配置 0 回落）", () =>
+        Check("v0.2.18：长度（上下边长）100 基准 60~160 / 高度（左右边长）上限 70 / 左右分配滑块", () =>
         {
             var defaults = new AppConfig();
-            var okDefaults = defaults.IslandWidthPercent == 100 && defaults.IslandSplitRatio == 50;
+            var okDefaults = defaults.IslandWidthPercent == 100 && defaults.IslandSplitRatio == 50
+                             // 长度是上下边长（水平），可以到 160；高度是左右边长（垂直），70 是上限
+                             && AppConfig.MaxIslandWidthPercent == 160
+                             && AppConfig.MinIslandWidthPercent == 60
+                             && AppConfig.MaxIslandHeightPercent == 70;
 
             var high = new AppConfig { IslandWidthPercent = 999, IslandSplitRatio = 999 };
             high.Normalize();
@@ -2171,25 +2409,91 @@ public static class SelfTest
                              && !defaults.KeepOpenWhilePlaying
                              && defaults.LyricsEnabled
                              && defaults.LyricsFontSize == 13
-                             // v0.2.17 工单A/C 新配置默认值
+                             // v0.2.17 工单A 新配置默认值
                              && defaults.WeChatAllowChatMultimedia
-                             && defaults.LongPressCollapseEnabled
-                             && defaults.LongPressHoldMs == 220
-                             && defaults.LongPressSwipePx == 24;
+                             // v0.2.18 需求1/2 新配置默认值
+                             && defaults.SwipeCollapseEnabled
+                             && defaults.SwipeCollapsePx == 24
+                             && defaults.IslandHeightPercent == 70
+                             && AppConfig.MaxIslandHeightPercent == 70
+                             && AppConfig.MinIslandHeightPercent < 70
+                             && defaults.MusicModuleScale == 100
+                             && defaults.LyricsWidthPercent == 100
+                             && defaults.MusicLyricsGap == 4
+                             && defaults.LyricsOffsetX == 0
+                             && defaults.TaskModuleScale == 100
+                             && defaults.TaskLineSpacing == 4
+                             && defaults.TaskOffsetY == 0;
 
-            var high = new AppConfig { AutoCollapseSeconds = 999, LyricsFontSize = 99, LongPressHoldMs = 9999, LongPressSwipePx = 999 };
+            var high = new AppConfig
+            {
+                AutoCollapseSeconds = 999,
+                LyricsFontSize = 99,
+                IslandHeightPercent = 999,
+                MusicModuleScale = 999,
+                TaskModuleScale = 999,
+                LyricsWidthPercent = 999,
+                MusicLyricsGap = 999,
+                LyricsOffsetX = 999,
+                TaskLineSpacing = 999,
+                TaskOffsetY = 999,
+                SwipeCollapsePx = 999,
+            };
             high.Normalize();
             var highOk = high.AutoCollapseSeconds == AppConfig.MaxAutoCollapseSeconds
-                         && high.LyricsFontSize == AppConfig.MaxLyricsFontSize;
+                         && high.LyricsFontSize == AppConfig.MaxLyricsFontSize
+                         && high.IslandHeightPercent == AppConfig.MaxIslandHeightPercent
+                         && high.MusicModuleScale == AppConfig.MaxModuleScale
+                         && high.TaskModuleScale == AppConfig.MaxModuleScale
+                         && high.LyricsWidthPercent == AppConfig.MaxLyricsWidthPercent
+                         && high.MusicLyricsGap == AppConfig.MaxMusicLyricsGap
+                         && high.LyricsOffsetX == AppConfig.MaxLyricsOffsetX
+                         && high.TaskLineSpacing == AppConfig.MaxTaskLineSpacing
+                         && high.TaskOffsetY == AppConfig.MaxTaskOffsetY
+                         && high.SwipeCollapsePx == AppConfig.MaxSwipeCollapsePx;
 
-            var low = new AppConfig { AutoCollapseSeconds = 0, LyricsFontSize = 1, LongPressHoldMs = 1, LongPressSwipePx = 1 };
+            var low = new AppConfig
+            {
+                AutoCollapseSeconds = 0,
+                LyricsFontSize = 1,
+                IslandHeightPercent = 1,
+                MusicModuleScale = 1,
+                TaskModuleScale = 1,
+                LyricsWidthPercent = 1,
+                MusicLyricsGap = -5,
+                LyricsOffsetX = -999,
+                TaskLineSpacing = -5,
+                TaskOffsetY = -999,
+                SwipeCollapsePx = 1,
+            };
             low.Normalize();
             var lowOk = low.AutoCollapseSeconds == AppConfig.MinAutoCollapseSeconds
                         && low.LyricsFontSize == AppConfig.MinLyricsFontSize
-                        && low.LongPressHoldMs == AppConfig.MinLongPressHoldMs
-                        && low.LongPressSwipePx == AppConfig.MinLongPressSwipePx;
+                        && low.IslandHeightPercent == AppConfig.MinIslandHeightPercent
+                        && low.MusicModuleScale == AppConfig.MinModuleScale
+                        && low.TaskModuleScale == AppConfig.MinModuleScale
+                        && low.LyricsWidthPercent == AppConfig.MinLyricsWidthPercent
+                        && low.MusicLyricsGap == AppConfig.MinMusicLyricsGap
+                        && low.LyricsOffsetX == AppConfig.MinLyricsOffsetX
+                        && low.TaskLineSpacing == AppConfig.MinTaskLineSpacing
+                        && low.TaskOffsetY == AppConfig.MinTaskOffsetY
+                        && low.SwipeCollapsePx == AppConfig.MinSwipeCollapsePx;
 
-            return defaultsOk && highOk && lowOk;
+            // 旧配置缺字段（反序列化成 0）时按默认值处理，不能被收敛成下限
+            var legacy = new AppConfig
+            {
+                IslandHeightPercent = 0,
+                MusicModuleScale = 0,
+                TaskModuleScale = 0,
+                LyricsWidthPercent = 0,
+            };
+            legacy.Normalize();
+            var legacyOk = legacy.IslandHeightPercent == 70
+                           && legacy.MusicModuleScale == 100
+                           && legacy.TaskModuleScale == 100
+                           && legacy.LyricsWidthPercent == 100;
+
+            return defaultsOk && highOk && lowOk && legacyOk;
         });
 
         Check("v0.2.5：夸克浏览器定位（真实安装路径 + 注册表兜底）", () =>

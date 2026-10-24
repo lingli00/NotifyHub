@@ -236,6 +236,24 @@ public sealed class StripIndicator : FrameworkElement
         trackPen.Freeze();
         dc.DrawRoundedRectangle(null, trackPen, trackRect, radius, radius);
 
+        // v0.2.18：光带一律**裁剪在轨道内**。无缝循环下头部/拖尾会探出轨道边缘
+        // （进入从左侧、退出向右侧），不裁剪就会画到细条端头之外——
+        // 用户报的"待机条动画溢出条的两端、观感不连贯"。
+        // 用 try/finally 保证多条 return 分支下 Pop 也成对执行。
+        dc.PushClip(new RectangleGeometry(trackRect, radius, radius));
+        try
+        {
+            DrawTrackContent(dc, w, h);
+        }
+        finally
+        {
+            dc.Pop();
+        }
+    }
+
+    /// <summary>轨道内的光带绘制（裁剪由 <see cref="OnRender"/> 统一负责）。</summary>
+    private void DrawTrackContent(DrawingContext dc, double w, double h)
+    {
         // 光块的内边距：留出 2px 让光块在轨道里"悬浮"
         var inset = 2.5;
         var trackLeft = inset;
@@ -316,16 +334,30 @@ public sealed class StripIndicator : FrameworkElement
         DrawSegment(dc, left + (travel * t), y, segWidth, height, color, 0.95);
     }
 
-    /// <summary>单向巡游 + 拖尾，用于"任务在推进"。</summary>
+    /// <summary>
+    /// 单向巡游 + 拖尾，用于"任务在推进"。
+    ///
+    /// v0.2.18 需求3（无缝循环）：旧实现用 <c>(phase * speed) % 1.0</c> 直接映射到
+    /// [0, 轨道宽-光块宽]，相位归零时光块从右端**瞬移**回左端——音乐+任务双形态时
+    /// 两条轨道一起跳，用户看到的就是"末尾切回初始帧落差大、卡顿割裂"。
+    ///
+    /// 现在改成跑马灯式的无极循环：光块头部从"完全在轨道左侧外"走到"完全在轨道右侧外"，
+    /// 一个周期刚好够它整体进出一次：
+    ///   · 首帧（t=0）与尾帧（t=1）画面完全一致——都只剩空轨道（光块整体在屏外）；
+    ///   · 运动全程连续：头部从左侧边缘滑入、横穿、从右侧边缘滑出，没有任何跳变；
+    ///   · 周期 = 轨道宽 + 光带总跨度，保证"出得去"才"回得来"，不会出现
+    ///     "右端还剩半截、左端已经冒头"的撕裂帧。
+    /// </summary>
     private void DrawComet(DrawingContext dc, double left, double width,
         double y, double height, Color color, double speed)
     {
         var segWidth = Math.Min(width, Math.Max(12, width * 0.26));
-        var travel = Math.Max(0, width - segWidth);
 
-        // 0→1 循环；speed = 每秒跑几圈
-        var t = (_phase * speed) % 1.0;
-        var x = left + (travel * t);
+        // 光带总跨度（头 + 拖尾 + 头部光晕），与下面的绘制保持一致
+        var extent = CometExtent(segWidth);
+
+        // 一个周期内头部从轨道左侧外走到右侧外（t: 0→1）
+        var x = CometHeadX((_phase * speed) % 1.0, left, width, segWidth);
 
         // 拖尾：往回叠 3 段，逐渐变淡变窄，形成"彗星"
         for (var i = 3; i >= 1; i--)
@@ -344,6 +376,24 @@ public sealed class StripIndicator : FrameworkElement
 
         // 头部光晕
         DrawSegment(dc, x - 1, y - 0.5, segWidth + 2, height + 1, color, 0.18);
+    }
+
+    /// <summary>光带总跨度（头 + 拖尾 + 光晕，DIP）：循环周期必须覆盖它才能无缝。</summary>
+    internal const double CometTailFactor = 1.35;
+
+    /// <summary>光带总跨度（DIP）。</summary>
+    internal static double CometExtent(double segWidth) => (segWidth * CometTailFactor) + segWidth + 1;
+
+    /// <summary>
+    /// 周期相位 <paramref name="t"/>（0→1）对应的光块头部 X 坐标（纯函数，自检用）。
+    /// t=0 时头部恰好在轨道左侧外（整条光带不可见），t→1 时走到右侧外（同样不可见），
+    /// 因此首帧与尾帧画面一致；中间过程连续滑入/滑出，无跳变。
+    /// </summary>
+    internal static double CometHeadX(double t, double left, double width, double segWidth)
+    {
+        var start = left - (segWidth + 1);              // 头部起点：光晕右缘刚好贴上轨道左缘
+        var travel = width + CometExtent(segWidth);     // 一个周期走完"进→穿→出"
+        return start + (travel * (t - Math.Floor(t)));
     }
 
     private static void DrawSegment(DrawingContext dc, double x, double y,

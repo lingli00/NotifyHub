@@ -23,8 +23,7 @@
     -->
     <Border x:Name="Card" Margin="14" CornerRadius="20"
             BorderBrush="#26FFFFFF" BorderThickness="1"
-            Cursor="Hand" MouseLeftButtonUp="OnCardLeftUp" MouseRightButtonUp="OnCardRightClick"
-            MouseLeftButtonDown="OnCardMouseDown" MouseMove="OnCardMouseMove">
+            Cursor="Hand" MouseLeftButtonUp="OnCardLeftUp" MouseRightButtonUp="OnCardRightClick">
         <Border.RenderTransform>
             <!--  v0.2.10 需求 3：悬停整卡轻微放大（2%），不加遮罩、不变色  -->
             <TransformGroup>
@@ -53,7 +52,36 @@
                 </Border.Background>
             </Border>
 
-            <Grid Margin="16,13,16,12">
+            <!--  v0.2.18 需求4：左上角关闭叉号（取代旧版滑动删除）。
+                  放在内容行行首，命中区域 20×20，悬停时圆形底微亮。  -->
+            <Button x:Name="CloseButton" HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Margin="14,11,0,0" Width="20" Height="20" Cursor="Hand"
+                    Focusable="False" ToolTip="关闭这条通知"
+                    Foreground="#C7C7CC" Click="OnCloseButtonClick">
+                <Button.Style>
+                    <Style TargetType="Button">
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="Bd" CornerRadius="10" Background="Transparent"
+                                            Width="20" Height="20">
+                                        <TextBlock Text="✕" FontSize="11" FontWeight="SemiBold"
+                                                   Foreground="{TemplateBinding Foreground}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Button.Style>
+            </Button>
+
+            <Grid Margin="42,13,16,12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />

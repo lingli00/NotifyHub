@@ -36,6 +36,24 @@ public partial class SettingsWindow : Window
     private readonly NotificationManager _notifications;
     private readonly DispatcherTimer _statusTimer = new() { Interval = TimeSpan.FromSeconds(2) };
 
+    /// <summary>
+    /// 实况预览回调（v0.2.18 需求1 改版，由 App 注入 → IslandController.BeginLayoutPreview）。
+    /// 拖动滑块时把「预览配置副本 + 当前场景」交给屏幕上**真实的灵动岛**，
+    /// 直接看到最终效果，不落盘；不保存就关掉设置页，岛自动回到原配置。
+    /// </summary>
+    public Action<AppConfig, PreviewScene>? LivePreview { get; set; }
+
+    /// <summary>退出实况预览（关窗 / 保存后），由 App 注入 → IslandController.EndLayoutPreview。</summary>
+    public Action? EndLivePreview { get; set; }
+
+    /// <summary>预览刷新合并标记：一次拖动会派发几十次 ValueChanged，只排一次重排。</summary>
+    private bool _previewRefreshPending;
+
+    /// <summary>上次推给岛的预览配置（相同就不重复推，减少无谓重排）。</summary>
+    private AppConfig? _lastPreviewConfig;
+
+    private PreviewScene _lastPreviewScene = (PreviewScene)(-1);
+
     /// <summary>ntfy 订阅编辑中的列表（保存时写回配置）。</summary>
     private readonly List<NtfySubscription> _ntfyEditing = new();
 
@@ -73,6 +91,28 @@ public partial class SettingsWindow : Window
         IslandWidthSlider.ValueChanged += OnIslandWidthChanged;
         IslandSplitSlider.ValueChanged += OnIslandSplitChanged;
 
+        // v0.2.18 需求1：新增布局参数滑块（同样延后挂载）
+        IslandHeightSlider.ValueChanged += OnIslandHeightChanged;
+        MusicModuleSlider.ValueChanged += OnMusicModuleChanged;
+        LyricsWidthSlider.ValueChanged += OnLyricsWidthChanged;
+        MusicLyricsGapSlider.ValueChanged += OnMusicLyricsGapChanged;
+        LyricsOffsetXSlider.ValueChanged += OnLyricsOffsetXChanged;
+        TaskModuleSlider.ValueChanged += OnTaskModuleChanged;
+        TaskLineSpacingSlider.ValueChanged += OnTaskLineSpacingChanged;
+        TaskOffsetYSlider.ValueChanged += OnTaskOffsetYChanged;
+        LyricsEnabledCheck.Checked += (_, _) => RefreshPreview();
+        LyricsEnabledCheck.Unchecked += (_, _) => RefreshPreview();
+
+        // v0.2.18 需求1：滚动速度也接进预览（滑块在"监听与显示"分组）
+        MarqueeSpeedSlider.ValueChanged += (_, _) => RefreshPreview();
+
+        // v0.2.18 需求1：预览场景单选（延后挂载——XAML 加载期会先设 IsChecked，
+        // 那时后面声明的单选按钮还是 null，事件处理器会踩 NRE）
+        SceneMusicRadio.Checked += OnPreviewSceneChanged;
+        SceneTaskRadio.Checked += OnPreviewSceneChanged;
+        SceneNoticeRadio.Checked += OnPreviewSceneChanged;
+        SceneBothRadio.Checked += OnPreviewSceneChanged;
+
         LoadFromConfig();
         RefreshEvents();
         RefreshLogs();
@@ -93,7 +133,14 @@ public partial class SettingsWindow : Window
             _log.RecentChanged -= OnRecentChanged;
             _log.ConsoleChanged -= OnConsoleChanged;
             _statusTimer.Stop();
+
+            // v0.2.18：关窗 = 退出实况预览（没点保存就恢复原配置 + 真实内容）
+            EndLivePreview?.Invoke();
         };
+
+        // v0.2.18 需求1：窗口上屏后直接在真实岛上铺一版样板，边看边调
+        Loaded += (_, _) => Dispatcher.BeginInvoke(
+            new Action(() => RefreshPreview(force: true)), DispatcherPriority.Background);
     }
 
     // ---------------- v0.2.9 需求 6：毛玻璃外观 ----------------
@@ -259,12 +306,47 @@ public partial class SettingsWindow : Window
         var widthPercent = Math.Clamp(
             config.IslandWidthPercent, AppConfig.MinIslandWidthPercent, AppConfig.MaxIslandWidthPercent);
         IslandWidthSlider.Value = widthPercent;
-        IslandWidthText.Text = $"{widthPercent}%";
+        IslandWidthText.Text = WidthLabel(widthPercent);
 
         var splitRatio = Math.Clamp(
             config.IslandSplitRatio, AppConfig.MinIslandSplitRatio, AppConfig.MaxIslandSplitRatio);
         IslandSplitSlider.Value = splitRatio;
         IslandSplitText.Text = $"{splitRatio} : {100 - splitRatio}";
+
+        // v0.2.18 需求1：新增布局参数（旧配置缺字段时 Normalize 已兜底为默认值）
+        var heightPercent = Math.Clamp(
+            config.IslandHeightPercent, AppConfig.MinIslandHeightPercent, AppConfig.MaxIslandHeightPercent);
+        IslandHeightSlider.Value = heightPercent;
+        IslandHeightText.Text = HeightLabel(heightPercent);
+
+        var musicScale = Math.Clamp(config.MusicModuleScale, AppConfig.MinModuleScale, AppConfig.MaxModuleScale);
+        MusicModuleSlider.Value = musicScale;
+        MusicModuleText.Text = $"{musicScale}%";
+
+        var lyricsWidth = Math.Clamp(
+            config.LyricsWidthPercent, AppConfig.MinLyricsWidthPercent, AppConfig.MaxLyricsWidthPercent);
+        LyricsWidthSlider.Value = lyricsWidth;
+        LyricsWidthText.Text = $"{lyricsWidth}%";
+
+        var musicLyricsGap = Math.Clamp(config.MusicLyricsGap, AppConfig.MinMusicLyricsGap, AppConfig.MaxMusicLyricsGap);
+        MusicLyricsGapSlider.Value = musicLyricsGap;
+        MusicLyricsGapText.Text = $"{musicLyricsGap} px";
+
+        var lyricsOffsetX = Math.Clamp(config.LyricsOffsetX, AppConfig.MinLyricsOffsetX, AppConfig.MaxLyricsOffsetX);
+        LyricsOffsetXSlider.Value = lyricsOffsetX;
+        LyricsOffsetXText.Text = $"{lyricsOffsetX} px";
+
+        var taskScale = Math.Clamp(config.TaskModuleScale, AppConfig.MinModuleScale, AppConfig.MaxModuleScale);
+        TaskModuleSlider.Value = taskScale;
+        TaskModuleText.Text = $"{taskScale}%";
+
+        var taskLineSpacing = Math.Clamp(config.TaskLineSpacing, AppConfig.MinTaskLineSpacing, AppConfig.MaxTaskLineSpacing);
+        TaskLineSpacingSlider.Value = taskLineSpacing;
+        TaskLineSpacingText.Text = $"{taskLineSpacing} px";
+
+        var taskOffsetY = Math.Clamp(config.TaskOffsetY, AppConfig.MinTaskOffsetY, AppConfig.MaxTaskOffsetY);
+        TaskOffsetYSlider.Value = taskOffsetY;
+        TaskOffsetYText.Text = $"{taskOffsetY} px";
 
         // v0.2.7 需求 1：歌词字号
         var lyricSize = Math.Clamp(config.LyricsFontSize, AppConfig.MinLyricsFontSize, AppConfig.MaxLyricsFontSize);
@@ -284,7 +366,7 @@ public partial class SettingsWindow : Window
         AutoCollapseSlider.Value = collapseSeconds;
         AutoCollapseText.Text = $"{collapseSeconds} 秒";
         KeepOpenWhilePlayingCheck.IsChecked = config.KeepOpenWhilePlaying;
-        LongPressCollapseCheck.IsChecked = config.LongPressCollapseEnabled;
+        SwipeCollapseCheck.IsChecked = config.SwipeCollapseEnabled;
         UpdateAutoCollapseEnabledState();
 
         MarqueeSpeedSlider.Value = Math.Clamp(config.MarqueeSpeed, 10, 120);
@@ -642,25 +724,221 @@ public partial class SettingsWindow : Window
             LyricsFontSizeText.Text = $"{(int)Math.Round(e.NewValue)}";
         }
 
-        PushLivePreview();
+        RefreshPreview();
     }
 
-    // ---------------- v0.2.9 需求 6：两个布局滑块的实时预览 ----------------
+    // ---------------- v0.2.18 需求1（改版）：在真实灵动岛上实况预览 ----------------
 
-    /// <summary>
-    /// 实时预览回调（由 App 注入 → IslandController.PreviewLayout）。
-    /// 拖动过程中只把"预览配置"交给岛，不写文件；点保存才真正落盘。
-    /// </summary>
-    public Action<AppConfig>? LivePreview { get; set; }
-
-    private void OnIslandWidthChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    /// <summary>当前选中的预览场景。</summary>
+    private PreviewScene CurrentPreviewScene()
     {
-        if (IslandWidthText is not null)
+        if (SceneTaskRadio?.IsChecked == true)
         {
-            IslandWidthText.Text = $"{(int)Math.Round(e.NewValue)}%";
+            return PreviewScene.Task;
         }
 
-        PushLivePreview();
+        if (SceneNoticeRadio?.IsChecked == true)
+        {
+            return PreviewScene.Notice;
+        }
+
+        if (SceneBothRadio?.IsChecked == true)
+        {
+            return PreviewScene.Both;
+        }
+
+        return PreviewScene.Music;
+    }
+
+    private void OnPreviewSceneChanged(object sender, RoutedEventArgs e) => RefreshPreview(force: true);
+
+    /// <summary>
+    /// 把设置页各控件的当前值合成一份"预览配置"（不落盘）：
+    /// 真实岛的各个 Provider 在预览期间都读它，因此拖动任意滑块/勾选项都会立刻
+    /// 反映到屏幕顶部那条岛上（所见即所得）。
+    /// </summary>
+    private AppConfig BuildPreviewConfig()
+    {
+        var preview = _config.Current.Clone();
+        preview.IslandWidthPercent = (int)Math.Round(IslandWidthSlider.Value);
+        preview.IslandSplitRatio = (int)Math.Round(IslandSplitSlider.Value);
+        preview.IslandHeightPercent = (int)Math.Round(IslandHeightSlider.Value);
+        preview.MusicModuleScale = (int)Math.Round(MusicModuleSlider.Value);
+        preview.LyricsWidthPercent = (int)Math.Round(LyricsWidthSlider.Value);
+        preview.MusicLyricsGap = (int)Math.Round(MusicLyricsGapSlider.Value);
+        preview.LyricsOffsetX = (int)Math.Round(LyricsOffsetXSlider.Value);
+        preview.TaskModuleScale = (int)Math.Round(TaskModuleSlider.Value);
+        preview.TaskLineSpacing = (int)Math.Round(TaskLineSpacingSlider.Value);
+        preview.TaskOffsetY = (int)Math.Round(TaskOffsetYSlider.Value);
+        preview.MarqueeSpeed = (int)Math.Round(MarqueeSpeedSlider.Value);
+        preview.LyricsEnabled = LyricsEnabledCheck.IsChecked == true;
+        preview.LyricsFontSize = (int)Math.Round(LyricsFontSizeSlider.Value);
+        preview.MusicEnabled = MusicEnabledCheck.IsChecked == true;
+        preview.Normalize();
+        return preview;
+    }
+
+    /// <summary>
+    /// 控件变化 → 立刻让真实岛按新参数重排（不写配置文件）。
+    ///
+    /// 合并式：一次拖动会派发几十次 ValueChanged，这里只排一次（Render 优先级），
+    /// 同一帧内的多次变化合并成一次重排——这就是"每调一下岛就闪一下"的修法。
+    /// </summary>
+    private void RefreshPreview(bool force = false)
+    {
+        if (_previewRefreshPending && !force)
+        {
+            return;
+        }
+
+        _previewRefreshPending = true;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            _previewRefreshPending = false;
+
+            if (LivePreview is null)
+            {
+                return;
+            }
+
+            var config = BuildPreviewConfig();
+            var scene = CurrentPreviewScene();
+
+            if (!force
+                && scene == _lastPreviewScene
+                && _lastPreviewConfig is not null
+                && SamePreview(_lastPreviewConfig, config))
+            {
+                return;
+            }
+
+            _lastPreviewConfig = config;
+            _lastPreviewScene = scene;
+
+            try
+            {
+                LivePreview(config, scene);
+            }
+            catch
+            {
+                // 预览失败不影响保存流程
+            }
+        }), DispatcherPriority.Render);
+    }
+
+    /// <summary>预览配置是否完全相同（只有布局参数，字段少，逐项比即可）。</summary>
+    private static bool SamePreview(AppConfig a, AppConfig b)
+        => a.IslandWidthPercent == b.IslandWidthPercent
+           && a.IslandHeightPercent == b.IslandHeightPercent
+           && a.IslandSplitRatio == b.IslandSplitRatio
+           && a.MusicModuleScale == b.MusicModuleScale
+           && a.LyricsWidthPercent == b.LyricsWidthPercent
+           && a.MusicLyricsGap == b.MusicLyricsGap
+           && a.LyricsOffsetX == b.LyricsOffsetX
+           && a.TaskModuleScale == b.TaskModuleScale
+           && a.TaskLineSpacing == b.TaskLineSpacing
+           && a.TaskOffsetY == b.TaskOffsetY
+           && a.MarqueeSpeed == b.MarqueeSpeed
+           && a.LyricsEnabled == b.LyricsEnabled
+           && a.LyricsFontSize == b.LyricsFontSize
+           && a.MusicEnabled == b.MusicEnabled;
+
+    /// <summary>长度的可读标签：「100% · 508px」，让用户一眼知道实际多长（上下边长）。</summary>
+    private static string WidthLabel(int percent)
+        => $"{percent}% · {Math.Round((IslandWindow.BaseIslandWidth * percent / 100.0) + IslandWindow.PillPadTotal):0}px";
+
+    /// <summary>高度的可读标签：「70% · 104px」，高度 = 左右边长（垂直方向）。</summary>
+    private static string HeightLabel(int percent)
+        => $"{percent}% · {Math.Round((IslandWindow.BaseIslandHeight * percent / 100.0) + IslandWindow.PillPadTotal):0}px";
+
+    private void OnIslandWidthChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {        if (IslandWidthText is not null)
+        {
+            IslandWidthText.Text = WidthLabel((int)Math.Round(e.NewValue));
+        }
+
+        RefreshPreview();
+    }
+
+    private void OnIslandHeightChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (IslandHeightText is not null)
+        {
+            IslandHeightText.Text = HeightLabel((int)Math.Round(e.NewValue));
+        }
+
+        RefreshPreview();
+    }
+
+    private void OnMusicModuleChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (MusicModuleText is not null)
+        {
+            MusicModuleText.Text = $"{(int)Math.Round(e.NewValue)}%";
+        }
+
+        RefreshPreview();
+    }
+
+    private void OnLyricsWidthChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LyricsWidthText is not null)
+        {
+            LyricsWidthText.Text = $"{(int)Math.Round(e.NewValue)}%";
+        }
+
+        RefreshPreview();
+    }
+
+    private void OnMusicLyricsGapChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (MusicLyricsGapText is not null)
+        {
+            MusicLyricsGapText.Text = $"{(int)Math.Round(e.NewValue)} px";
+        }
+
+        RefreshPreview();
+    }
+
+    private void OnLyricsOffsetXChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (LyricsOffsetXText is not null)
+        {
+            LyricsOffsetXText.Text = $"{(int)Math.Round(e.NewValue)} px";
+        }
+
+        RefreshPreview();
+    }
+
+    private void OnTaskModuleChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (TaskModuleText is not null)
+        {
+            TaskModuleText.Text = $"{(int)Math.Round(e.NewValue)}%";
+        }
+
+        RefreshPreview();
+    }
+
+    private void OnTaskLineSpacingChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (TaskLineSpacingText is not null)
+        {
+            TaskLineSpacingText.Text = $"{(int)Math.Round(e.NewValue)} px";
+        }
+
+        RefreshPreview();
+    }
+
+    private void OnTaskOffsetYChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (TaskOffsetYText is not null)
+        {
+            TaskOffsetYText.Text = $"{(int)Math.Round(e.NewValue)} px";
+        }
+
+        RefreshPreview();
     }
 
     private void OnIslandSplitChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -671,40 +949,7 @@ public partial class SettingsWindow : Window
             IslandSplitText.Text = $"{value} : {100 - value}";
         }
 
-        PushLivePreview();
-    }
-
-    /// <summary>把当前界面上的布局相关取值组成预览配置，交给岛立即重排。</summary>
-    private void PushLivePreview()
-    {
-        try
-        {
-            if (IslandWidthSlider is null || IslandSplitSlider is null)
-            {
-                return;
-            }
-
-            var preview = _config.Current.Clone();
-            preview.IslandWidthPercent = (int)Math.Round(IslandWidthSlider.Value);
-            preview.IslandSplitRatio = (int)Math.Round(IslandSplitSlider.Value);
-
-            // 滑块旁边的歌词字号也一起预览，免得用户以为"字号改了没反应"
-            if (LyricsFontSizeSlider is not null)
-            {
-                preview.LyricsFontSize = (int)Math.Round(LyricsFontSizeSlider.Value);
-            }
-
-            if (LyricsEnabledCheck is not null)
-            {
-                preview.LyricsEnabled = LyricsEnabledCheck.IsChecked == true;
-            }
-
-            LivePreview?.Invoke(preview);
-        }
-        catch
-        {
-            // 预览失败不影响保存流程
-        }
+        RefreshPreview();
     }
 
     /// <summary>总开关关闭时，把时长滑块与音乐例外一起置灰（避免"调了不生效"的困惑）。</summary>
@@ -839,13 +1084,29 @@ public partial class SettingsWindow : Window
         next.MarqueeSpeed = (int)Math.Round(Math.Clamp(MarqueeSpeedSlider.Value, 10, 120));
 
         // v0.2.9 需求 6：外观固定毛玻璃（跟随系统 + 自动对比度），不再保存主题/配色；
-        // 新增两个布局滑块（总长度 / 左右比例）。
+        // 布局参数：总长度 / 左右比例 / 整体高度 / 模块尺寸 / 间距 / 偏移（v0.2.18 需求1）。
         next.ThemeMode = "GlassAuto";
         next.TextTone = "Auto";
         next.IslandWidthPercent = (int)Math.Round(Math.Clamp(
             IslandWidthSlider.Value, AppConfig.MinIslandWidthPercent, AppConfig.MaxIslandWidthPercent));
         next.IslandSplitRatio = (int)Math.Round(Math.Clamp(
             IslandSplitSlider.Value, AppConfig.MinIslandSplitRatio, AppConfig.MaxIslandSplitRatio));
+        next.IslandHeightPercent = (int)Math.Round(Math.Clamp(
+            IslandHeightSlider.Value, AppConfig.MinIslandHeightPercent, AppConfig.MaxIslandHeightPercent));
+        next.MusicModuleScale = (int)Math.Round(Math.Clamp(
+            MusicModuleSlider.Value, AppConfig.MinModuleScale, AppConfig.MaxModuleScale));
+        next.LyricsWidthPercent = (int)Math.Round(Math.Clamp(
+            LyricsWidthSlider.Value, AppConfig.MinLyricsWidthPercent, AppConfig.MaxLyricsWidthPercent));
+        next.MusicLyricsGap = (int)Math.Round(Math.Clamp(
+            MusicLyricsGapSlider.Value, AppConfig.MinMusicLyricsGap, AppConfig.MaxMusicLyricsGap));
+        next.LyricsOffsetX = (int)Math.Round(Math.Clamp(
+            LyricsOffsetXSlider.Value, AppConfig.MinLyricsOffsetX, AppConfig.MaxLyricsOffsetX));
+        next.TaskModuleScale = (int)Math.Round(Math.Clamp(
+            TaskModuleSlider.Value, AppConfig.MinModuleScale, AppConfig.MaxModuleScale));
+        next.TaskLineSpacing = (int)Math.Round(Math.Clamp(
+            TaskLineSpacingSlider.Value, AppConfig.MinTaskLineSpacing, AppConfig.MaxTaskLineSpacing));
+        next.TaskOffsetY = (int)Math.Round(Math.Clamp(
+            TaskOffsetYSlider.Value, AppConfig.MinTaskOffsetY, AppConfig.MaxTaskOffsetY));
 
         next.LyricsEnabled = LyricsEnabledCheck.IsChecked == true;
         next.LyricsFontSize = (int)Math.Round(Math.Clamp(
@@ -860,8 +1121,8 @@ public partial class SettingsWindow : Window
             AutoCollapseSlider.Value, AppConfig.MinAutoCollapseSeconds, AppConfig.MaxAutoCollapseSeconds));
         next.KeepOpenWhilePlaying = KeepOpenWhilePlayingCheck.IsChecked == true;
 
-        // v0.2.17 工单C：长按上滑强制收纳开关
-        next.LongPressCollapseEnabled = LongPressCollapseCheck.IsChecked == true;
+        // v0.2.18 需求2：短按上滑强制收纳开关
+        next.SwipeCollapseEnabled = SwipeCollapseCheck.IsChecked == true;
 
         // 浏览器四选项（v0.2.4 需求 7）：前三项自动定位，Other 用用户提供的路径
         var browserChoice = AppConfig.NormalizeBrowserChoice(ComboTag(BrowserChoiceCombo, "System"));

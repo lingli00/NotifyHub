@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:NotifyHub.UI"
         Title="NotifyHub 灵动岛"
-        SizeToContent="WidthAndHeight" MaxWidth="900"
+        SizeToContent="Manual"
+        Width="508" Height="136"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ShowActivated="False" ShowInTaskbar="False" Topmost="True"
         ResizeMode="NoResize" Focusable="False"
@@ -116,7 +117,9 @@
         </Border.RenderTransform>
         <Border.RenderTransformOrigin>0.5,0.5</Border.RenderTransformOrigin>
 
-        <Grid>
+        <!--  v0.2.18：岛改成固定尺寸模型——窗口大小由「总长度/整体高度」设置严格决定，
+              内容再长也只在岛内裁剪/滚动，绝不被撑大。外层 Grid 负责裁剪溢出内容。  -->
+        <Grid ClipToBounds="True">
             <!--  毛玻璃顶部高光：一条极淡的白色渐变，让半透明面板有"玻璃"的层次  -->
             <Border x:Name="HighlightLayer" CornerRadius="22" IsHitTestVisible="False">
                 <Border.Background>
@@ -127,8 +130,14 @@
                 </Border.Background>
             </Border>
 
-            <!--  上下 10 / 8 的内边距：内容不再贴边，视觉更松   -->
-            <Grid Margin="12,9,12,9" MinHeight="36">
+            <!--  上下 10 / 8 的内边距：内容不再贴边，视觉更松。
+                  v0.2.18：整体居中（固定尺寸下短内容不会贴左），纵向留白与行高
+                  按「整体高度」缩放（ApplyLayoutMetrics）；溢出由外层裁剪。
+                  v0.2.18 修：纵向改为 Stretch —— 强调脊线/分隔线要吃满岛高，
+                  否则岛拉高后条子只有中间一小截、上方留一大片空白；
+                  岛压矮时条子又被挤没。  -->
+            <Grid x:Name="ContentGrid" Margin="12,9,12,9" MinHeight="36"
+                  HorizontalAlignment="Center" VerticalAlignment="Stretch">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -136,16 +145,16 @@
                 </Grid.ColumnDefinitions>
 
                 <!--  ============ 左栏：强调脊线 + 音乐行 + 歌词  ============  -->
-                <Grid x:Name="LeftPane" Grid.Column="0" MinHeight="46" VerticalAlignment="Center">
+                <Grid x:Name="LeftPane" Grid.Column="0" MinHeight="46" VerticalAlignment="Stretch">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <!--  贯穿脊线：播放中为强调色；只有任务时整条左栏隐藏  -->
+                    <!--  贯穿脊线：高度跟着岛高走（Stretch），短岛也看得见、长岛不留空白  -->
                     <Border x:Name="AccentSpine" Grid.Column="0" Width="3" CornerRadius="1.5"
                             Background="{DynamicResource IslandAccent}" Opacity="0.8"
-                            VerticalAlignment="Stretch" Margin="0,2,0,2" />
+                            VerticalAlignment="Stretch" Margin="0,3,0,3" />
 
                     <StackPanel Grid.Column="1" Orientation="Vertical" Margin="10,0,0,0"
                                 VerticalAlignment="Center">
@@ -222,13 +231,19 @@
                 </Grid>
 
                 <!--  ============ 中间竖分隔线  ============  -->
-                <Border x:Name="Divider" Grid.Column="1" Width="1" Height="24"
+                <!--  v0.2.18：高度跟岛高一起伸缩（MinHeight 24 保底），不再固定 24px 居中一条短线  -->
+                <Border x:Name="Divider" Grid.Column="1" Width="1" MinHeight="24"
                         Background="{DynamicResource IslandDivider}"
-                        Margin="12,0,12,0" VerticalAlignment="Center" Visibility="Collapsed" />
+                        Margin="12,10,12,10" VerticalAlignment="Stretch" Visibility="Collapsed" />
 
                 <!--  ============ 右栏：WorkBuddy 任务 + 通知（v0.2.9 需求 3）  ============  -->
                 <StackPanel x:Name="RightPane" Grid.Column="2" Orientation="Vertical"
-                            VerticalAlignment="Center" MinHeight="46" Margin="0,1,0,1">
+                            VerticalAlignment="Center" MinHeight="46" Margin="0,1,0,1"
+                            RenderTransformOrigin="0.5,0.5">
+                    <StackPanel.RenderTransform>
+                        <!--  v0.2.18 需求1：模块在岛内的上下位置偏移（不参与布局，纯视觉位移）  -->
+                        <TranslateTransform x:Name="RightPaneShift" Y="0" />
+                    </StackPanel.RenderTransform>
 
                     <!--
                       WorkBuddy 在线行（v0.2.12 需求 3：待机态走"左右分裂"布局）。

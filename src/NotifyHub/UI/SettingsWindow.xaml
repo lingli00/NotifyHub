@@ -347,7 +347,7 @@
                                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                                         <Slider x:Name="MarqueeSpeedSlider" Width="150" Minimum="10" Maximum="120"
                                                 SmallChange="5" LargeChange="10" ValueChanged="OnMarqueeSpeedChanged" />
-                                        <TextBlock x:Name="MarqueeSpeedText" Margin="8,0,0,0" Width="70" Foreground="{DynamicResource AppSubFg}" Text="45" />
+                                        <TextBlock x:Name="MarqueeSpeedText" Margin="8,0,0,0" MinWidth="70" Foreground="{DynamicResource AppSubFg}" Text="45" />
                                     </StackPanel>
                                 </Grid>
 
@@ -359,7 +359,7 @@
                                     <TextBlock Text="超时" Margin="0,0,8,0" />
                                     <Slider x:Name="AutoCollapseSlider" Width="120" Minimum="1" Maximum="60"
                                             IsSnapToTickEnabled="True" TickFrequency="1" />
-                                    <TextBlock x:Name="AutoCollapseText" Width="52" Margin="8,0,0,0"
+                                    <TextBlock x:Name="AutoCollapseText" MinWidth="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="3 秒" />
                                     <CheckBox x:Name="KeepOpenWhilePlayingCheck" Content="音乐播放时保持展开"
                                               ToolTip="默认关：播放中也按上面的时长自动收纳（v0.2.17 统一时序）；勾选后播放期间一直显示歌词" />
@@ -402,11 +402,14 @@
                                            Style="{StaticResource HintText}"
                                            Text="下面任何一项改动都会立刻反映到屏幕顶部那条真实的灵动岛上（用固定的样板内容渲染，不受当前有没有在放歌/跑任务影响）。改坏了直接关掉设置窗即可，不点「保存并应用」就不会写进配置。" />
 
-                                <!--  ============ 场景切换（v0.2.18 需求1：四套样板） ============  -->
+                                <!--  ============ 预览内容来源（v0.2.19 需求2：真实优先，样板兜底）  ============  -->
                                 <WrapPanel Grid.Row="1" Grid.ColumnSpan="4" Orientation="Horizontal" Margin="0,8,0,0">
-                                    <TextBlock Text="预览场景" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <TextBlock Text="预览内容" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                    <RadioButton x:Name="SceneAutoRadio" Content="真实状态（推荐）" GroupName="PreviewScene"
+                                                 IsChecked="True" Margin="0,0,12,0" VerticalAlignment="Center"
+                                                 ToolTip="在放歌/在跑任务时，直接用当前真实的岛来调参；没有真实内容时才用样板兜底" />
                                     <RadioButton x:Name="SceneMusicRadio" Content="仅音乐" GroupName="PreviewScene"
-                                                 IsChecked="True" Margin="0,0,12,0" VerticalAlignment="Center" />
+                                                 Margin="0,0,12,0" VerticalAlignment="Center" />
                                     <RadioButton x:Name="SceneTaskRadio" Content="仅任务" GroupName="PreviewScene"
                                                  Margin="0,0,12,0" VerticalAlignment="Center" />
                                     <RadioButton x:Name="SceneNoticeRadio" Content="仅通知" GroupName="PreviewScene"
@@ -414,7 +417,7 @@
                                     <RadioButton x:Name="SceneBothRadio" Content="音乐+任务" GroupName="PreviewScene"
                                                  Margin="0,0,12,0" VerticalAlignment="Center" />
                                     <TextBlock Style="{StaticResource HintText}" VerticalAlignment="Center"
-                                               Text="场景只是给调参用的样板内容，改任何参数立即同步到真实岛" />
+                                               Text="默认用真实运行状态；没有真实内容时才用样板兜底，改任何参数立即同步到真实岛" />
                                 </WrapPanel>
 
                                 <!--  ============ 布局参数（v0.2.18 需求1：全部接入实时预览） ============  -->
@@ -422,11 +425,11 @@
                                 <TextBlock Grid.Row="2" Grid.Column="0" Text="长度" Margin="0,0,10,0" VerticalAlignment="Center"
                                            ToolTip="长度 = 岛的上下边长（水平方向）" />
                                 <WrapPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Slider x:Name="IslandWidthSlider" Width="150" Height="24"
-                                            Minimum="60" Maximum="160" IsSnapToTickEnabled="True"
+                                    <Slider x:Name="IslandWidthSlider" Width="140" Height="24"
+                                            Minimum="100" Maximum="160" IsSnapToTickEnabled="True"
                                             TickFrequency="5" VerticalAlignment="Center"
-                                            ToolTip="岛的长度 = 上下边长（水平方向）：100% = 508px 基准，60~160% 可调；内容再长也只在岛内滚动，不会把岛撑大" />
-                                    <TextBlock x:Name="IslandWidthText" Width="76" Margin="8,0,0,0"
+                                            ToolTip="岛的长度 = 上下边长（水平方向）：100% = 508px 基准，100~160% 可调；内容再长也只在岛内滚动，不会把岛撑大" />
+                                    <TextBlock x:Name="IslandWidthText" MinWidth="76" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="100% · 508px" />
                                 </WrapPanel>
 
@@ -434,11 +437,11 @@
                                 <TextBlock Grid.Row="2" Grid.Column="2" Text="高度" Margin="10,0,10,0" VerticalAlignment="Center"
                                            ToolTip="高度 = 岛的左右边长（垂直方向），70% 是上限" />
                                 <WrapPanel Grid.Row="2" Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Slider x:Name="IslandHeightSlider" Width="120" Height="24"
-                                            Minimum="40" Maximum="70" IsSnapToTickEnabled="True"
+                                    <Slider x:Name="IslandHeightSlider" Width="110" Height="24"
+                                            Minimum="50" Maximum="80" IsSnapToTickEnabled="True"
                                             TickFrequency="2" VerticalAlignment="Center"
-                                            ToolTip="岛的高度 = 左右边长（垂直方向）：70% 是上限（约 104px），只能往矮调（40%~70%）" />
-                                    <TextBlock x:Name="IslandHeightText" Width="76" Margin="8,0,0,0"
+                                            ToolTip="岛的高度 = 左右边长（垂直方向）：70% ≈ 104px 为基准，50~80% 可调" />
+                                    <TextBlock x:Name="IslandHeightText" MinWidth="76" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="70% · 104px" />
                                 </WrapPanel>
 
@@ -449,7 +452,7 @@
                                             Minimum="25" Maximum="75" IsSnapToTickEnabled="True"
                                             TickFrequency="1" VerticalAlignment="Center"
                                             ToolTip="向左：播放器变窄、右侧变宽；向右：播放器变宽、右侧变窄" />
-                                    <TextBlock x:Name="IslandSplitText" Width="64"
+                                    <TextBlock x:Name="IslandSplitText" MinWidth="64"
                                                Foreground="{DynamicResource AppSubFg}" Text="50 : 50" />
                                 </WrapPanel>
 
@@ -460,7 +463,7 @@
                                             Minimum="70" Maximum="140" IsSnapToTickEnabled="True"
                                             TickFrequency="5" VerticalAlignment="Center"
                                             ToolTip="缩放音乐行：图标 / 播放三键 / 歌名区宽度" />
-                                    <TextBlock x:Name="MusicModuleText" Width="52" Margin="8,0,0,0"
+                                    <TextBlock x:Name="MusicModuleText" MinWidth="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="100%" />
                                 </WrapPanel>
 
@@ -471,7 +474,7 @@
                                             Minimum="50" Maximum="160" IsSnapToTickEnabled="True"
                                             TickFrequency="5" VerticalAlignment="Center"
                                             ToolTip="歌词区域宽度上限的缩放系数（自适应宽度的基础上再缩放）" />
-                                    <TextBlock x:Name="LyricsWidthText" Width="52" Margin="8,0,0,0"
+                                    <TextBlock x:Name="LyricsWidthText" MinWidth="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="100%" />
                                 </WrapPanel>
 
@@ -482,7 +485,7 @@
                                             Minimum="0" Maximum="24" IsSnapToTickEnabled="True"
                                             TickFrequency="1" VerticalAlignment="Center"
                                             ToolTip="播放器行与歌词区域之间的上下间距" />
-                                    <TextBlock x:Name="MusicLyricsGapText" Width="52" Margin="8,0,0,0"
+                                    <TextBlock x:Name="MusicLyricsGapText" MinWidth="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="4 px" />
                                 </WrapPanel>
 
@@ -493,7 +496,7 @@
                                             Minimum="-60" Maximum="120" IsSnapToTickEnabled="True"
                                             TickFrequency="4" VerticalAlignment="Center"
                                             ToolTip="歌词区域整体左右偏移（正数向右），微调用" />
-                                    <TextBlock x:Name="LyricsOffsetXText" Width="52" Margin="8,0,0,0"
+                                    <TextBlock x:Name="LyricsOffsetXText" MinWidth="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="0 px" />
                                 </WrapPanel>
 
@@ -504,7 +507,7 @@
                                             Minimum="70" Maximum="140" IsSnapToTickEnabled="True"
                                             TickFrequency="5" VerticalAlignment="Center"
                                             ToolTip="缩放任务/通知模块：正文字号与宽度上限" />
-                                    <TextBlock x:Name="TaskModuleText" Width="52" Margin="8,0,0,0"
+                                    <TextBlock x:Name="TaskModuleText" MinWidth="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="100%" />
                                 </WrapPanel>
 
@@ -515,7 +518,7 @@
                                             Minimum="0" Maximum="20" IsSnapToTickEnabled="True"
                                             TickFrequency="1" VerticalAlignment="Center"
                                             ToolTip="任务模块内“来源标签行 / 正文行”的上下间距" />
-                                    <TextBlock x:Name="TaskLineSpacingText" Width="52" Margin="8,0,0,0"
+                                    <TextBlock x:Name="TaskLineSpacingText" MinWidth="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="4 px" />
                                 </WrapPanel>
 
@@ -526,7 +529,7 @@
                                             Minimum="-24" Maximum="24" IsSnapToTickEnabled="True"
                                             TickFrequency="2" VerticalAlignment="Center"
                                             ToolTip="任务模块在岛内的上下位置偏移（正数向下）" />
-                                    <TextBlock x:Name="TaskOffsetYText" Width="52" Margin="8,0,0,0"
+                                    <TextBlock x:Name="TaskOffsetYText" MinWidth="52" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="0 px" />
                                 </WrapPanel>
 
@@ -537,7 +540,7 @@
                                     <TextBlock Text="歌词字号" Margin="0,0,8,0" />
                                     <Slider x:Name="LyricsFontSizeSlider" Width="120" Minimum="10" Maximum="22"
                                             IsSnapToTickEnabled="True" TickFrequency="1" />
-                                    <TextBlock x:Name="LyricsFontSizeText" Width="48" Margin="8,0,0,0"
+                                    <TextBlock x:Name="LyricsFontSizeText" MinWidth="48" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="13" />
                                     <TextBlock Style="{StaticResource HintText}" Text="关掉后即使保持展开也不显示歌词（与上面的保持展开互相独立）" />
                                 </WrapPanel>
@@ -555,7 +558,7 @@
                                             Minimum="-2000" Maximum="2000"
                                             IsSnapToTickEnabled="True" TickFrequency="50"
                                             ToolTip="整体提前/延后歌词，正数=提前显示" />
-                                    <TextBlock x:Name="LyricOffsetText" Width="64" Margin="8,0,0,0"
+                                    <TextBlock x:Name="LyricOffsetText" MinWidth="64" Margin="8,0,0,0"
                                                Foreground="{DynamicResource AppSubFg}" Text="0 ms" />
                                 </WrapPanel>
 
@@ -636,7 +639,7 @@
                                     </ComboBox>
                                     <TextBlock Text="音量" Margin="12,0,6,0" />
                                     <Slider x:Name="MessageVolumeSlider" Value="80" ValueChanged="OnMessageVolumeChanged" />
-                                    <TextBlock x:Name="MessageVolumeText" Margin="8,0,0,0" Width="34" Foreground="{DynamicResource AppSubFg}" Text="80%" />
+                                    <TextBlock x:Name="MessageVolumeText" Margin="8,0,0,0" MinWidth="34" Foreground="{DynamicResource AppSubFg}" Text="80%" />
                                     <Button x:Name="MessageTestButton" Content="试听" MinWidth="52" Padding="10,3"
                                             Margin="10,0,0,0" FontSize="11.5" Click="OnMessageSoundTestClick" />
                                 </StackPanel>
@@ -652,7 +655,7 @@
                                     </ComboBox>
                                     <TextBlock Text="音量" Margin="12,0,6,0" />
                                     <Slider x:Name="TaskVolumeSlider" Value="80" ValueChanged="OnTaskVolumeChanged" />
-                                    <TextBlock x:Name="TaskVolumeText" Margin="8,0,0,0" Width="34" Foreground="{DynamicResource AppSubFg}" Text="80%" />
+                                    <TextBlock x:Name="TaskVolumeText" Margin="8,0,0,0" MinWidth="34" Foreground="{DynamicResource AppSubFg}" Text="80%" />
                                     <Button x:Name="TaskTestButton" Content="试听" MinWidth="52" Padding="10,3"
                                             Margin="10,0,0,0" FontSize="11.5" Click="OnTaskSoundTestClick" />
                                 </StackPanel>

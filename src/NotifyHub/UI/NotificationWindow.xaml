@@ -52,36 +52,41 @@
                 </Border.Background>
             </Border>
 
-            <!--  v0.2.18 需求4：左上角关闭叉号（取代旧版滑动删除）。
-                  放在内容行行首，命中区域 20×20，悬停时圆形底微亮。  -->
-            <Button x:Name="CloseButton" HorizontalAlignment="Left" VerticalAlignment="Top"
-                    Margin="14,11,0,0" Width="20" Height="20" Cursor="Hand"
-                    Focusable="False" ToolTip="关闭这条通知"
-                    Foreground="#C7C7CC" Click="OnCloseButtonClick">
-                <Button.Style>
-                    <Style TargetType="Button">
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="Button">
-                                    <Border x:Name="Bd" CornerRadius="10" Background="Transparent"
-                                            Width="20" Height="20">
-                                        <TextBlock Text="✕" FontSize="11" FontWeight="SemiBold"
-                                                   Foreground="{TemplateBinding Foreground}"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF" />
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-                </Button.Style>
+            <!--  v0.2.19 需求1：macOS 风格关闭圆钮——贴住卡片**右上角**向外凸出约 90° 弧；
+                  默认完全隐藏（不占视觉区域、也不吃点击），卡片悬停时才淡入，
+                  圆内是红色叉号。内容排版仍从左侧起算，不被它挤压。  -->
+            <Button x:Name="CloseButton"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Margin="0,-8,-8,0" Width="22" Height="22"
+                    Cursor="Hand" Focusable="False" Opacity="0" IsHitTestVisible="False"
+                    ToolTip="关闭这条通知"
+                    RenderTransformOrigin="0.5,0.5"
+                    MouseEnter="OnCloseButtonMouseEnter" MouseLeave="OnCloseButtonMouseLeave"
+                    Click="OnCloseButtonClick">
+                <Button.RenderTransform>
+                    <ScaleTransform x:Name="CloseScale" ScaleX="1" ScaleY="1" />
+                </Button.RenderTransform>
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Grid Width="22" Height="22" Background="Transparent">
+                            <!--  完整圆形底：浅灰近白（macOS 亮色圆钮），带一圈极淡描边  -->
+                            <Ellipse x:Name="Disc" Fill="#F2F2F5" Stroke="#33000000" StrokeThickness="0.8" />
+                            <!--  红叉：两根圆头短线，比字体 ✕ 更接近系统观感  -->
+                            <Path x:Name="Cross" Data="M6.6,6.6 L15.4,15.4 M15.4,6.6 L6.6,15.4"
+                                  Stroke="#FF453A" StrokeThickness="1.9"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Disc" Property="Fill" Value="#FFFFFF" />
+                                <Setter TargetName="Cross" Property="Stroke" Value="#FF3B30" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
             </Button>
 
-            <Grid Margin="42,13,16,12">
+            <Grid Margin="16,13,16,12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />

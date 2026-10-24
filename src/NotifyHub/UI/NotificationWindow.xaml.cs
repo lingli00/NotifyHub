@@ -59,6 +59,12 @@ public partial class NotificationWindow : Window
     private bool _closing;
     private double _entryOffset = EntrySlide;
 
+    /// <summary>卡片是否被悬停（关闭圆钮的显隐条件之一）。</summary>
+    private bool _cardHovered;
+
+    /// <summary>关闭圆钮当前是否显示（避免重复起动画）。</summary>
+    private bool _closeShown;
+
     public NotificationWindow(NotifyMessage message, int durationMs, double marqueeSpeed = MarqueeText.DefaultSpeed,
         AppConfig? config = null, double uiScale = 1.0)
     {
@@ -368,6 +374,9 @@ public partial class NotificationWindow : Window
         // v0.2.10 需求 3：悬停只做"整卡轻微放大"，不再叠加任何黑色遮罩/变色。
         AnimateHoverScale(1.02, spring: true);
 
+        _cardHovered = true;
+        UpdateCloseVisibility();
+
         if (!_timer.IsEnabled)
         {
             return;
@@ -382,12 +391,65 @@ public partial class NotificationWindow : Window
     {
         AnimateHoverScale(1.0, spring: false);
 
+        _cardHovered = false;
+        UpdateCloseVisibility();
+
         if (_closing)
         {
             return;
         }
 
         StartCountdown(_remainingMs);
+    }
+
+    // ---------------- v0.2.19 需求1：macOS 风格关闭圆钮（悬停才出现） ----------------
+
+    private void OnCloseButtonMouseEnter(object sender, MouseEventArgs e) => UpdateCloseVisibility();
+
+    private void OnCloseButtonMouseLeave(object sender, MouseEventArgs e) => UpdateCloseVisibility();
+
+    /// <summary>
+    /// 关闭圆钮显隐：卡片或圆钮自身被悬停时出现，其余时候完全隐掉
+    /// （隐藏时同时关掉命中测试，避免透明圆抢走"点卡片打开消息"的点击）。
+    /// </summary>
+    private void UpdateCloseVisibility()
+    {
+        if (CloseButton is null)
+        {
+            return;
+        }
+
+        var show = !_closing && (_cardHovered || CloseButton.IsMouseOver);
+        if (show == _closeShown)
+        {
+            return;
+        }
+
+        _closeShown = show;
+        CloseButton.IsHitTestVisible = show;
+
+        var fade = new DoubleAnimation(show ? 1 : 0, TimeSpan.FromMilliseconds(show ? 120 : 90))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        CloseButton.BeginAnimation(OpacityProperty, fade);
+
+        // 出现时从 0.86 弹到 1.0，消失时平稳收（与整卡悬停的手感一致）
+        var from = show ? 0.86 : 1.0;
+        var to = show ? 1.0 : 0.94;
+        var ease = show
+            ? (IEasingFunction)new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.35 }
+            : new CubicEase { EasingMode = EasingMode.EaseOut };
+
+        if (CloseScale is not null)
+        {
+            CloseScale.BeginAnimation(
+                ScaleTransform.ScaleXProperty,
+                new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(show ? 160 : 90)) { EasingFunction = ease });
+            CloseScale.BeginAnimation(
+                ScaleTransform.ScaleYProperty,
+                new DoubleAnimation(from, to, TimeSpan.FromMilliseconds(show ? 160 : 90)) { EasingFunction = ease });
+        }
     }
 
     /// <summary>整卡悬停缩放：进入用回弹（柔和弹性）、离开平稳收，幅度 2%。</summary>

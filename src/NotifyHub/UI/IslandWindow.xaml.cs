@@ -332,6 +332,9 @@ public partial class IslandWindow : Window
         Pill.MouseEnter += OnPillMouseEnter;
         Pill.MouseLeave += OnPillMouseLeave;
 
+        // v0.2.19 需求6：双击只在"歌名/歌词"与"WorkBuddy 进度文字"两块区域跳转
+        Pill.MouseLeftButtonDown += OnPillMouseDown;
+
         // 窗口是 SizeToContent：文字变长/变短会改变宽度。
         // 固定模式必须跟着重量位置，否则岛会越来越偏（不再居中）；
         // 自由模式保持视觉中心不动，避免宽度变化时整条"往右窜"。
@@ -429,8 +432,14 @@ public partial class IslandWindow : Window
     /// </summary>
     public bool PreviewMode { get; set; }
 
+    /// <summary>
+    /// 预览期是否直接沿用**真实内容**（v0.2.19 需求2 的"真实优先"）：
+    /// 为 true 时不拦外部状态写入（歌词/任务照常刷新），只拦自动收纳。
+    /// </summary>
+    public bool PreviewUsesRealContent { get; private set; }
+
     /// <summary>预览态且**不是**在铺样板（用于拦截外部真实状态写入）。</summary>
-    private bool PreviewLocked => PreviewMode && !_applyingPreview;
+    private bool PreviewLocked => PreviewMode && !_applyingPreview && !PreviewUsesRealContent;
 
     /// <summary>正在铺样板内容（此时允许写岛）。</summary>
     private bool _applyingPreview;
@@ -819,10 +828,25 @@ public partial class IslandWindow : Window
         _autoTimer.Stop();
         _noticeTimer.Stop();
 
-        // 1) 先铺内容：后面 Show/Evaluate 才不会再因为"没内容"把岛收回去
-        if (_previewScene != scene || !HasVisibleContent)
+        // 1) 决定内容来源（v0.2.19 需求2）：真实优先，没数据才用样板兜底
+        var realAvailable = HasVisibleContent;
+        var effective = scene == PreviewScene.Auto
+            ? (realAvailable ? PreviewScene.Auto : PreviewScene.Music)
+            : scene;
+
+        PreviewUsesRealContent = effective == PreviewScene.Auto;
+
+        // 真实内容原样保留：不铺样板、不覆盖岛（用户看到的就是当前真实效果）
+        if (_previewScene != effective)
         {
-            ApplyPreviewScene(scene);
+            if (effective == PreviewScene.Auto)
+            {
+                _previewScene = PreviewScene.Auto;
+            }
+            else
+            {
+                ApplyPreviewScene(effective);
+            }
         }
 
         // 2) 再保证岛是展开可见的（没有可见性变化就不碰，避免闪一帧）
@@ -860,25 +884,34 @@ public partial class IslandWindow : Window
         _autoTimer.Stop();
     }
 
-    /// <summary>退出实况预览：清掉样板内容，交回控制器恢复真实状态。</summary>
-    public void ExitLayoutPreview()
+    /// <summary>
+    /// 退出实况预览。
+    /// 返回 true = 之前铺的是**样板内容**（控制器需要把真实内容回填）；
+    /// 返回 false = 预览期间一直用的是真实内容（什么都不用恢复，避免闪一下）。
+    /// </summary>
+    public bool ExitLayoutPreview()
     {
         if (!PreviewMode)
         {
-            return;
+            return false;
         }
 
+        var replacedContent = !PreviewUsesRealContent;
+
         PreviewMode = false;
+        PreviewUsesRealContent = false;
         _previewScene = null;
 
-        ClearMediaImmediate();
-        ShowLyrics(null, null);
-        ClearStatus();
-        HideNotice();
+        if (replacedContent)
+        {
+            ClearMediaImmediate();
+            ShowLyrics(null, null);
+            ClearStatus();
+            HideNotice();
+        }
 
-        // 真实状态可能在这期间变过（进程在线/退出）——补一次，别让占位行停在旧值上
-        UpdatePresenceRows();
         RefreshLayoutMetrics();
+        return replacedContent;
     }
 
     /// <summary>
@@ -1455,27 +1488,11 @@ public partial class IslandWindow : Window
     /// </summary>
     private void UpdatePresenceRows()
     {
-        var hasReal = _statusVisible || _noticeVisible;
-
-        // v0.2.17 工单B 规则 5：多应用后台共存时**只展示活跃项**。
-        //   · 音乐正在播放 → WorkBuddy 在线行让位（例1：只展示音乐播放器）；
-        //   · 进程只是"挂着"（没任务/没播放）→ 平时不占岛，
-        //     只有两个窗口期允许显示：启动展示窗（规则1"仅展开一次"的展示内容）
-        //     与用户刚双击唤起后的 15s 保持期（给用户点播放键的机会）。
-        var holdActive = IsLaunchHoldActive;
-        var showWb = !hasReal
-                     && _presenceWorkbuddy
-                     && !_statusVisible
-                     && (holdActive || (_startupWindow && !_musicVisible));
-
-        PresenceWbRow.Visibility = showWb ? Visibility.Visible : Visibility.Collapsed;
-
-        if (showWb)
-        {
-            PresenceWbText.Text = "已打开 · 等待任务";
-        }
-
-        _presenceVisible = showWb;
+        // v0.2.19 需求7：**进程在 ≠ 有内容**。
+        // WorkBuddy/播放器只是被打开、没有正在跑的任务/正在播放的歌时，完全不在岛上占位
+        // （旧版会在启动窗与唤起保持期显示"已打开 · 等待任务"那行，正是"预占分区"的来源）。
+        PresenceWbRow.Visibility = Visibility.Collapsed;
+        _presenceVisible = false;
     }
 
     public bool IsNoticeShown => _noticeVisible;
@@ -1853,10 +1870,9 @@ public partial class IslandWindow : Window
         // 用户一眼知道是哪个播放器、并且能直接点播放。
         // v0.2.17 工单B 规则 5：但它**只出现在启动展示窗与唤起保持期**——
         // 平时"后台挂着没在放歌"的播放器不占岛（例2：只展示在跑任务的一方）。
-        _standbyMusicShown = enabled
-                             && !_musicVisible
-                             && _presenceMusic
-                             && (_startupWindow || IsLaunchHoldActive);
+        // v0.2.19 需求7：只有"正在播放"才展示音乐模块。
+        // 播放器开着但没在放 → 不预占左栏（旧版在这里给待机左栏留位，切换时会看到"逐步占位"）。
+        _standbyMusicShown = false;
 
         MusicGroup.Visibility = _musicVisible || _standbyMusicShown ? Visibility.Visible : Visibility.Collapsed;
 
@@ -2937,6 +2953,59 @@ public partial class IslandWindow : Window
         CollapseToStrip();
     }
 
+    /// <summary>
+    /// 双击分区（v0.2.19 需求6）：**只有两处**双击有跳转——
+    ///   · 音乐模块的歌名 / 歌词区 → 切到音乐播放器；
+    ///   · WorkBuddy 进度文字区     → 切到 WorkBuddy 窗口；
+    /// 岛内其余区域（空白、分隔线、通知行、按钮）一律不跳转。
+    /// </summary>
+    private void OnPillMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount < 2)
+        {
+            return;
+        }
+
+        var zone = HitTestOpenZone(e.OriginalSource as DependencyObject);
+        if (zone is null)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        OnStripZoneDoubleClicked(null, zone.Value);
+    }
+
+    /// <summary>判断双击点落在哪个可跳转区域；null = 不处理。</summary>
+    private StripZone? HitTestOpenZone(DependencyObject? source)
+    {
+        for (var node = source; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            // 播放三键等按钮/可点元素自己处理点击，不当作双击跳转
+            if (node is System.Windows.Controls.Primitives.ButtonBase)
+            {
+                return null;
+            }
+
+            if (ReferenceEquals(node, StatusGroup))
+            {
+                return StripZone.Right;
+            }
+
+            if (ReferenceEquals(node, MusicGroup) || ReferenceEquals(node, LyricsPanel))
+            {
+                return StripZone.Left;
+            }
+
+            if (ReferenceEquals(node, Pill))
+            {
+                break;
+            }
+        }
+
+        return null;
+    }
+
     private void OnPillMouseEnter(object sender, MouseEventArgs e)
     {
         // 鼠标进入：暂停收纳倒计时（正在看歌词 / 准备点按钮）。
@@ -3009,14 +3078,19 @@ public partial class IslandWindow : Window
             }
         }
 
-        if (!inside)
+        // v0.2.19 需求8：按住左键往上拖、**松手**即收纳（不需要长按）。
+        // 岛是点穿窗口收不到鼠标消息，这里轮询按键 + 光标位置；
+        // 一旦按下就持续采样（哪怕光标已拖出岛外），否则"滑到底松手"会被漏掉。
+        var pressing = NativeMethods.IsLeftButtonDown();
+        var canTrack = inside || pressing;
+
+        if (!canTrack)
         {
+            _swipe.Reset();
             return;
         }
 
-        // v0.2.18 需求2：短按 + 上滑 → 强制收纳（不再要求长按）。
-        // 岛是点穿窗口收不到鼠标消息，这里轮询 GetAsyncKeyState + 光标位置。
-        // 拖拽中（自由模式挪岛）不抢——拖动优先。
+        // 拖拽中（自由模式挪岛）不抢——拖动优先
         if (!SwipeCollapseEnabled() || _dragging || _sliding)
         {
             return;
@@ -3028,7 +3102,7 @@ public partial class IslandWindow : Window
         }
 
         var state = _swipe.Sample(
-            NativeMethods.IsLeftButtonDown(),
+            pressing,
             point.Y,
             Environment.TickCount64,
             SwipeCollapsePx());
@@ -3067,13 +3141,14 @@ public partial class IslandWindow : Window
         }
 
         _forceCollapsed = true;
+        var maxUp = _swipe.MaxUpPx;
         _swipe.Reset();
         _autoTimer.Stop();
 
         LogService.Shared.Info(
             "Island",
-            "短按上滑：强制收纳",
-            "之后只有单击窄条/新通知/开始播放/启动任务才会再展开");
+            "上滑松手：强制收纳",
+            $"最大上滑={maxUp}px；之后只有单击窄条/新通知/开始播放/启动任务才会再展开");
 
         CollapseToStrip(instant: true);
     }

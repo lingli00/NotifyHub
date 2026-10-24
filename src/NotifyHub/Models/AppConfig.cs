@@ -264,8 +264,8 @@ public sealed class AppConfig
     public int TaskOffsetY { get; set; }
 
     /// <summary>岛总长度允许范围（百分比）：70% 是上限（≈364px），只能更窄。</summary>
-    /// <summary>岛**长度**（上下边长）允许范围（百分比）：60~160。</summary>
-    public const int MinIslandWidthPercent = 60;
+    /// <summary>岛**长度**（上下边长）允许范围（百分比）：100~160（v0.2.19 收紧下限）。</summary>
+    public const int MinIslandWidthPercent = 100;
 
     public const int MaxIslandWidthPercent = 160;
 
@@ -277,12 +277,12 @@ public sealed class AppConfig
 
     public const int MaxIslandSplitRatio = 75;
 
-    /// <summary>岛**高度**（左右边长）允许范围（百分比）：**70 是上限**，还能往下压到 40。</summary>
-    public const int MinIslandHeightPercent = 40;
+    /// <summary>岛**高度**（左右边长）允许范围（百分比）：v0.2.19 起 50~80，默认 70。</summary>
+    public const int MinIslandHeightPercent = 50;
 
-    public const int MaxIslandHeightPercent = 70;
+    public const int MaxIslandHeightPercent = 80;
 
-    /// <summary>岛高度默认值（百分比，= 上限）。</summary>
+    /// <summary>岛高度默认值（百分比）。</summary>
     public const int DefaultIslandHeightPercent = 70;
 
     /// <summary>模块尺寸缩放允许范围（百分比）。</summary>

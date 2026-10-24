@@ -1,82 +1,85 @@
 namespace NotifyHub.UI;
 
-/// <summary>「短按 + 上滑」手势的采样结果。</summary>
+/// <summary>「按住上滑后松手」手势的采样结果。</summary>
 public enum SwipeGestureState
 {
-    /// <summary>没有按下或在等待第一帧。</summary>
+    /// <summary>没有按下、或按下但没有有效位移。</summary>
     Idle,
 
-    /// <summary>已按下，正在跟踪。</summary>
+    /// <summary>已按下，正在跟踪上滑距离。</summary>
     Tracking,
 
-    /// <summary>本帧触发强制收纳。</summary>
+    /// <summary>本次**松手**判定为收纳手势（只报一次）。</summary>
     Triggered,
 }
 
 /// <summary>
-/// 「短按 + 上滑」手势识别（v0.2.18 需求2；v0.2.17 时为"长按 + 上滑"）。
+/// 「按住左键上滑 → 松手收纳」手势识别（v0.2.19 需求8）。
 ///
-/// 纯状态机、不依赖 WPF：调用方每帧喂入 (是否按下, 光标Y, 单调时钟Ms)，
-/// 它只回答"这一帧算不算触发"。抽成独立类是为了让自检能直接构造时序断言
-/// （按下不动 / 按下上滑 / 松手重置），不需要把窗口跑起来。
+/// 与旧版的区别：**触发时机在松开鼠标那一刻**，而不是滑到阈值就立刻收——
+/// 手感更像"拖上去、松手即收"，也不会在拖动途中被半路打断。
 ///
-/// 判定规则（v0.2.18 起去掉长按时长要求）：
-///   · 按下瞬间记录起点 Y；
-///   · 向上滑过 <paramref name="swipePx"/>（物理像素）即触发——**不要求按住多久**；
-///   · 单纯点击（没有位移）不会触发；
-///   · 松手 / 未按下 → 回到 Idle，等下一次按下；
-///   · 触发后保持 Triggered 直到 <see cref="Reset"/>（防止一帧内重复触发）。
+/// 纯状态机、不依赖 WPF：调用方每帧喂 (是否按下, 光标Y, 单调时钟Ms, 阈值)，
+/// 它只回答"这一帧算不算触发"。抽成独立类是为了让自检能构造时序断言。
+///
+/// 规则：
+///   · 按下记录起点 Y，持续记录最大上滑距离；
+///   · 松手时若最大上滑 ≥ swipePx → Triggered（一次），随即复位；
+///   · 松手时位移不足 → 视为普通点击，Idle；
+///   · 不需要按住多久（没有长按判定）。
 /// </summary>
 public sealed class SwipeUpCollapseTracker
 {
     private bool _pressed;
     private int _startY;
+    private int _maxUp;
     private bool _triggered;
 
     /// <summary>当前是否正在跟踪（已按下且未触发）。</summary>
     public bool IsTracking => _pressed && !_triggered;
 
-    /// <summary>是否已触发（等待 Reset）。</summary>
-    public bool IsTriggered => _triggered;
+    /// <summary>本次按住期间的最大上滑距离（物理像素，诊断用）。</summary>
+    public int MaxUpPx => _maxUp;
 
-    /// <summary>清空跟踪状态（光标离开岛 / 强制收纳后调用）。</summary>
+    /// <summary>清空跟踪状态（光标离开 / 强制收纳后调用）。</summary>
     public void Reset()
     {
         _pressed = false;
+        _maxUp = 0;
         _triggered = false;
     }
 
     /// <summary>
     /// 喂入一帧采样。<paramref name="nowMs"/> 必须是单调时钟（Environment.TickCount64），
-    /// 保留只为调用方统一传参（短按上滑不消费时长）。
+    /// 保留只为调用方统一传参（本手势不消费时长）。
     /// </summary>
     public SwipeGestureState Sample(bool pressing, int y, long nowMs, int swipePx)
     {
-        if (_triggered)
-        {
-            return SwipeGestureState.Triggered;
-        }
-
         if (!pressing)
         {
+            if (!_pressed)
+            {
+                return SwipeGestureState.Idle;
+            }
+
+            // 松手：按下期间上滑够远才算收纳（触发一次后复位，不会连报）
             _pressed = false;
-            return SwipeGestureState.Idle;
+            _triggered = _maxUp >= swipePx;
+            _maxUp = 0;
+
+            return _triggered ? SwipeGestureState.Triggered : SwipeGestureState.Idle;
         }
 
         if (!_pressed)
         {
             _pressed = true;
             _startY = y;
+            _maxUp = 0;
+            _triggered = false;
             return SwipeGestureState.Tracking;
         }
 
-        // 向上为正；越过阈值即触发（v0.2.18：不再要求按住时长）
-        if (_startY - y >= swipePx)
-        {
-            _triggered = true;
-            return SwipeGestureState.Triggered;
-        }
-
+        _maxUp = Math.Max(_maxUp, _startY - y);
         return SwipeGestureState.Tracking;
     }
 }

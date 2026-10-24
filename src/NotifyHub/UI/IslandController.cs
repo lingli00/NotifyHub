@@ -354,15 +354,16 @@ public sealed class IslandController : IDisposable
                 return;
             }
 
-            island.ExitLayoutPreview();
-
-            // 真实内容回填：媒体 + 最后一次任务状态（没有就让它自然为空）
-            island.SetMedia(_currentMedia);
-            island.RefreshMedia();
-
-            if (!string.IsNullOrWhiteSpace(_lastStatusText))
+            // 只有"预览期间铺过样板"才需要回填；真实优先模式什么都不用恢复（避免闪一下）
+            if (island.ExitLayoutPreview())
             {
-                island.ShowRunning(_lastStatusText, _lastStatusTag);
+                island.SetMedia(_currentMedia);
+                island.RefreshMedia();
+
+                if (!string.IsNullOrWhiteSpace(_lastStatusText))
+                {
+                    island.ShowRunning(_lastStatusText, _lastStatusTag);
+                }
             }
 
             _previewLogSignature = null;

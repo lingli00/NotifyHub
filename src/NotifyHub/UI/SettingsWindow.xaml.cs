@@ -108,6 +108,7 @@ public partial class SettingsWindow : Window
 
         // v0.2.18 需求1：预览场景单选（延后挂载——XAML 加载期会先设 IsChecked，
         // 那时后面声明的单选按钮还是 null，事件处理器会踩 NRE）
+        SceneAutoRadio.Checked += OnPreviewSceneChanged;
         SceneMusicRadio.Checked += OnPreviewSceneChanged;
         SceneTaskRadio.Checked += OnPreviewSceneChanged;
         SceneNoticeRadio.Checked += OnPreviewSceneChanged;
@@ -138,9 +139,20 @@ public partial class SettingsWindow : Window
             EndLivePreview?.Invoke();
         };
 
-        // v0.2.18 需求1：窗口上屏后直接在真实岛上铺一版样板，边看边调
-        Loaded += (_, _) => Dispatcher.BeginInvoke(
-            new Action(() => RefreshPreview(force: true)), DispatcherPriority.Background);
+        // v0.2.19 需求2：打开就停在顶部、不自动跳到"灵动岛外观"；预览优先真实状态
+        Loaded += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                MainScroll.ScrollToHome();
+            }
+            catch
+            {
+                // 滚动复位失败不影响使用
+            }
+
+            RefreshPreview(force: true);
+        }), DispatcherPriority.Background);
     }
 
     // ---------------- v0.2.9 需求 6：毛玻璃外观 ----------------
@@ -732,6 +744,12 @@ public partial class SettingsWindow : Window
     /// <summary>当前选中的预览场景。</summary>
     private PreviewScene CurrentPreviewScene()
     {
+        // 默认「真实状态」：机器上有真实播放/任务就直接拿真实岛来调参（v0.2.19 需求2）
+        if (SceneAutoRadio?.IsChecked != false)
+        {
+            return PreviewScene.Auto;
+        }
+
         if (SceneTaskRadio?.IsChecked == true)
         {
             return PreviewScene.Task;

@@ -227,9 +227,11 @@ public sealed class WorkBuddyWatcher : IDisposable
             return ("", false); // 会话停了：不再显示，让岛上现有状态自然收起
         }
 
-        // 用户要求：展示 AI 的「反馈文字」，而不是正在执行的代码。
-        // 只要有过 AI 文字回复，就以它为准；动作描述只在没有任何回复时兜底。
-        var text = _lastReply.Length > 0 ? _lastReply : _lastAction;
+        // v0.2.19 需求5：只推结论类文字。没有结论时不展示"调用了什么工具/改了哪些文件"，
+        // 只在确实有动作时给一句中性的"正在执行任务…"。
+        var text = _lastReply.Length > 0
+            ? _lastReply
+            : (_lastAction.Length > 0 ? "正在执行任务…" : string.Empty);
         if (text.Length == 0)
         {
             return ("", false);
@@ -339,9 +341,11 @@ public sealed class WorkBuddyWatcher : IDisposable
                         return;
                     }
 
-                    if (ts >= _lastReplyTs)
+                    // v0.2.19 需求5：只保留结论类文字；纯工具/文件/命令的描述不覆盖已有结论
+                    var conclusion = WorkBuddyTextFilter.ToConclusion(text);
+                    if (conclusion.Length > 0 && ts >= _lastReplyTs)
                     {
-                        _lastReply = Brief(text);
+                        _lastReply = conclusion;
                         _lastReplyTs = ts;
                     }
 
@@ -464,19 +468,9 @@ public sealed class WorkBuddyWatcher : IDisposable
     /// <summary>AI 回复摘要：第一个非空行，去掉 markdown 前缀符号。</summary>
     private static string Brief(string text)
     {
-        foreach (var raw in text.Split('\n'))
-        {
-            var t = raw.Trim();
-            if (t.Length == 0)
-            {
-                continue;
-            }
-
-            t = t.TrimStart('#', '*', '-', '>', ' ').Trim();
-            return t.Length == 0 ? "任务完成" : Cut(t, 60);
-        }
-
-        return "任务完成";
+        // v0.2.19 需求5：交给过滤器，只取结论行（过程信息一律不进通知）
+        var conclusion = WorkBuddyTextFilter.ToConclusion(text);
+        return conclusion.Length == 0 ? "任务完成" : conclusion;
     }
 
     private static string Cut(string text, int max)

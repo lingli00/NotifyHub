@@ -52,39 +52,46 @@
                 </Border.Background>
             </Border>
 
-            <!--  v0.2.19 需求1：macOS 风格关闭圆钮——贴住卡片**右上角**向外凸出约 90° 弧；
-                  默认完全隐藏（不占视觉区域、也不吃点击），卡片悬停时才淡入，
-                  圆内是红色叉号。内容排版仍从左侧起算，不被它挤压。  -->
-            <Button x:Name="CloseButton"
-                    HorizontalAlignment="Right" VerticalAlignment="Top"
-                    Margin="0,-8,-8,0" Width="22" Height="22"
-                    Cursor="Hand" Focusable="False" Opacity="0" IsHitTestVisible="False"
-                    ToolTip="关闭这条通知"
-                    RenderTransformOrigin="0.5,0.5"
-                    MouseEnter="OnCloseButtonMouseEnter" MouseLeave="OnCloseButtonMouseLeave"
-                    Click="OnCloseButtonClick">
-                <Button.RenderTransform>
-                    <ScaleTransform x:Name="CloseScale" ScaleX="1" ScaleY="1" />
-                </Button.RenderTransform>
-                <Button.Template>
-                    <ControlTemplate TargetType="Button">
-                        <Grid Width="22" Height="22" Background="Transparent">
-                            <!--  完整圆形底：浅灰近白（macOS 亮色圆钮），带一圈极淡描边  -->
-                            <Ellipse x:Name="Disc" Fill="#F2F2F5" Stroke="#33000000" StrokeThickness="0.8" />
-                            <!--  红叉：两根圆头短线，比字体 ✕ 更接近系统观感  -->
-                            <Path x:Name="Cross" Data="M6.6,6.6 L15.4,15.4 M15.4,6.6 L6.6,15.4"
-                                  Stroke="#FF453A" StrokeThickness="1.9"
-                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Disc" Property="Fill" Value="#FFFFFF" />
-                                <Setter TargetName="Cross" Property="Stroke" Value="#FF3B30" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Button.Template>
-            </Button>
+            <!--  v0.2.20：macOS 风格关闭圆钮——贴住卡片**左上角**向外凸出约 90° 弧。
+                  **只有鼠标移到左上角这一小块（26×26 热区）才出现**，悬停卡片本身不显示；
+                  默认完全隐藏（不占视觉区域、也不吃点击，点击穿透后等同"点卡片"）。
+                  圆内是红色叉号；内容排版仍从左侧起算，不被它挤压。  -->
+            <Grid x:Name="CloseZone"
+                  HorizontalAlignment="Left" VerticalAlignment="Top"
+                  Width="26" Height="26" Margin="-10,-10,0,0"
+                  Background="Transparent"
+                  MouseEnter="OnCloseZoneMouseEnter" MouseLeave="OnCloseZoneMouseLeave">
+                <Button x:Name="CloseButton"
+                        Width="22" Height="22"
+                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Cursor="Hand" Focusable="False" Opacity="0" IsHitTestVisible="False"
+                        Background="Transparent" BorderThickness="0"
+                        ToolTip="关闭这条通知"
+                        RenderTransformOrigin="0.5,0.5"
+                        Click="OnCloseButtonClick">
+                    <Button.RenderTransform>
+                        <ScaleTransform x:Name="CloseScale" ScaleX="1" ScaleY="1" />
+                    </Button.RenderTransform>
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Grid Width="22" Height="22" Background="Transparent">
+                                <!--  完整圆形底：浅灰近白（macOS 亮色圆钮），带一圈极淡描边  -->
+                                <Ellipse x:Name="Disc" Fill="#F2F2F5" Stroke="#33000000" StrokeThickness="0.8" />
+                                <!--  红叉：两根圆头短线，比字体 ✕ 更接近系统观感  -->
+                                <Path x:Name="Cross" Data="M6.6,6.6 L15.4,15.4 M15.4,6.6 L6.6,15.4"
+                                      Stroke="#FF453A" StrokeThickness="1.9"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Disc" Property="Fill" Value="#FFFFFF" />
+                                    <Setter TargetName="Cross" Property="Stroke" Value="#FF3B30" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
 
             <Grid Margin="16,13,16,12">
                 <Grid.RowDefinitions>

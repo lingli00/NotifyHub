@@ -292,6 +292,9 @@ public partial class SettingsWindow : Window
         DumpOnStartCheck.IsChecked = config.DumpUiaOnStart;
         IslandFixedRadio.IsChecked = config.IslandMode != "Free";
         IslandFreeRadio.IsChecked = config.IslandMode == "Free";
+
+        // v0.2.20：自由拖动模式是否也跟随超时收纳（默认跟随）
+        FreeAutoCollapseCheck.IsChecked = config.FreeAutoCollapse;
         MusicEnabledCheck.IsChecked = config.MusicEnabled;
         WbWatchCheck.IsChecked = config.WorkBuddyWatchEnabled;
 
@@ -1083,6 +1086,7 @@ public partial class SettingsWindow : Window
         next.AutoStart = AutoStartCheck.IsChecked == true;
         next.DumpUiaOnStart = DumpOnStartCheck.IsChecked == true;
         next.IslandMode = IslandFreeRadio.IsChecked == true ? "Free" : "Fixed";
+        next.FreeAutoCollapse = FreeAutoCollapseCheck.IsChecked == true;
         next.MusicEnabled = MusicEnabledCheck.IsChecked == true;
         next.WorkBuddyWatchEnabled = WbWatchCheck.IsChecked == true;
         next.NotificationCorner = CornerValues[Math.Clamp(CornerCombo.SelectedIndex, 0, CornerValues.Length - 1)];

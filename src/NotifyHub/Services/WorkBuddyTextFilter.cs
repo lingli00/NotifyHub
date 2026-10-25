@@ -16,8 +16,11 @@ namespace NotifyHub.Services;
 /// </summary>
 public static class WorkBuddyTextFilter
 {
-    /// <summary>结论文字的最大长度（超出截断，保通知一行可读）。</summary>
-    public const int MaxLength = 60;
+    /// <summary>
+    /// 兼容保留：v0.2.20 起**不再截断**结论文字（ntfy 要推全文）。
+    /// 岛内渲染的宽度上限由 `IslandController.IslandDisplayLimit` 单独兜底。
+    /// </summary>
+    public const int MaxLength = int.MaxValue;
 
     /// <summary>单独出现即视为"过程"的动作词（没有结论含义）。</summary>
     private static readonly string[] BareActionWords =
@@ -65,7 +68,7 @@ public static class WorkBuddyTextFilter
                 continue;
             }
 
-            return Cut(line, MaxLength);
+            return line;
         }
 
         return string.Empty;

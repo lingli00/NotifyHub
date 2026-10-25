@@ -309,6 +309,7 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <Grid Grid.Row="0">
@@ -326,19 +327,27 @@
                                     </StackPanel>
                                 </Grid>
 
-                                <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0">
+                                <!--  v0.2.20：自由拖动的子选项——是否也跟随超时收纳  -->
+                                <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,6,0,0">
+                                    <CheckBox x:Name="FreeAutoCollapseCheck" Content="自由拖动时也跟随超时收纳" IsChecked="True"
+                                              ToolTip="勾选：到收纳时长后同样收成顶部窄条（自由模式下也能收起来）；取消：自由模式一直保持展开" />
+                                    <TextBlock Style="{StaticResource HintText}" VerticalAlignment="Center"
+                                               Text="只在「自由拖动」模式生效；固定模式始终跟随收纳时长" />
+                                </WrapPanel>
+
+                                <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="MusicEnabledCheck" Content="音乐控制模块" MinWidth="196" />
                                     <TextBlock Style="{StaticResource HintText}"
                                                Text="播放内置支持的音乐 App（网易云/QQ音乐/Spotify 等）时同一悬浮条内显示 上一首/播放暂停/下一首；无音频自动隐藏" />
                                 </WrapPanel>
 
-                                <WrapPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+                                <WrapPanel Grid.Row="3" Orientation="Horizontal" Margin="0,8,0,0">
                                     <CheckBox x:Name="WbWatchCheck" Content="自动读取 WorkBuddy 任务进度" MinWidth="196" />
                                     <TextBlock Style="{StaticResource HintText}"
                                                Text="AI 的反馈文字实时上岛，回合结束报完成态并响完成音" />
                                 </WrapPanel>
 
-                                <Grid Grid.Row="3" Margin="24,8,0,0">
+                                <Grid Grid.Row="4" Margin="24,8,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
@@ -352,7 +361,7 @@
                                 </Grid>
 
                                 <!--  v0.2.7 需求 2：超时自动收纳（开关 + 时长 + 音乐播放例外）  -->
-                                <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="24,10,0,0">
+                                <StackPanel Grid.Row="5" Orientation="Horizontal" Margin="24,10,0,0">
                                     <CheckBox x:Name="AutoCollapseCheck" Content="超时自动收纳" MinWidth="110"
                                               Checked="OnAutoCollapseToggled" Unchecked="OnAutoCollapseToggled"
                                               ToolTip="开启后：无新事件超过设定时长，灵动岛自动收成屏幕顶部细条" />
@@ -367,10 +376,10 @@
                                               ToolTip="展开的岛上短按鼠标并向上滑，直接收成窄收纳条；强制收纳后只有单击窄条/新通知/开始播放/启动任务才会再展开" />
                                 </StackPanel>
 
-                                <TextBlock Grid.Row="5" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
+                                <TextBlock Grid.Row="6" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
                                            Text="统一收纳规则（v0.2.17）：新消息 / 新任务 / 开始播放都会把灵动岛弹出来，并按上面的时长重新计时，超时收成顶部细条；空闲（无任务/播放/通知）到点同样收纳，之后不会自动再展开。鼠标停在岛上时不计时。「音乐播放时保持展开」是例外开关，默认关闭。多应用共存时只展示活跃项（在放歌/在跑任务），空闲挂着的不占岛。" />
 
-                                <TextBlock Grid.Row="6" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
+                                <TextBlock Grid.Row="7" Style="{StaticResource HintText}" Margin="24,6,0,0" TextWrapping="Wrap"
                                            Text="窄条交互：悬停 + 单击展开信息面板（含暂存的最新通知）；悬停 + 双击唤起对应应用并置顶。岛内有音乐/任务在跑时，新消息（微信/QQ/ntfy）一律走四角卡片（固定 10 秒收起），不在岛内混杂展示；只有岛内空闲时新通知才进岛。短按上滑可随时强制收纳。" />
                             </Grid>
                         </GroupBox>

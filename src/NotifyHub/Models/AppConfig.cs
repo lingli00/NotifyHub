@@ -228,6 +228,13 @@ public sealed class AppConfig
     public int IslandWidthPercent { get; set; } = DefaultIslandWidthPercent;
 
     /// <summary>
+    /// 自由拖动模式下是否也跟随"超时收纳"（v0.2.20）：true = 和固定模式一样，
+    /// 到时间收成顶部窄条；false = 自由模式一直保持展开（方便把它当常驻悬浮条）。
+    /// 只影响 `IslandMode=Free`。
+    /// </summary>
+    public bool FreeAutoCollapse { get; set; } = true;
+
+    /// <summary>
     /// 岛内左右区域分配比例（v0.2.9 需求 6）：左 = 播放器/歌词区占比（百分比）。
     /// 50 = 均衡；调小 → 播放器变窄、右侧变宽；调大 → 播放器变宽、右侧变窄。
     /// </summary>

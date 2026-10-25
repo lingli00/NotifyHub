@@ -246,17 +246,21 @@ public sealed class IslandController : IDisposable
         {
             try
             {
+                var display = single.Length > IslandDisplayLimit
+                    ? single[..IslandDisplayLimit] + "…"
+                    : single;
+
                 if (done)
                 {
-                    Island().ShowDone(single, tag);
+                    Island().ShowDone(display, tag);
                 }
                 else
                 {
                     // 退出布局预览后用它把真实任务状态补回岛上
-                    _lastStatusText = single;
+                    _lastStatusText = display;
                     _lastStatusTag = tag;
 
-                    Island().ShowRunning(single, tag);
+                    Island().ShowRunning(display, tag);
                 }
             }
             catch (Exception ex)
@@ -578,6 +582,7 @@ public sealed class IslandController : IDisposable
         island.AutoCollapseEnabledProvider = () => _config.Current.AutoCollapseEnabled;
         island.AutoCollapseSecondsProvider = () => _config.Current.AutoCollapseSeconds;
         island.KeepOpenWhilePlayingProvider = () => _config.Current.KeepOpenWhilePlaying;
+        island.FreeAutoCollapseProvider = () => _config.Current.FreeAutoCollapse;
 
         // v0.2.18 需求2：短按上滑强制收纳（开关 + 触发距离；不再有长按时长）
         island.SwipeCollapseEnabledProvider = () => _config.Current.SwipeCollapseEnabled;
@@ -646,7 +651,11 @@ public sealed class IslandController : IDisposable
         return island;
     }
 
-    /// <summary>把任意状态文本压成“一行实时动作”：只取首行、压缩空白、最多 90 字。</summary>
+    /// <summary>
+    /// 把任意状态文本压成"一行实时动作"：只取首行、压缩空白、**不截断字数**。
+    /// v0.2.20：ntfy 下行推送要求原样全文（旧版这里砍到 90 字，手机端收到的就是半句）。
+    /// 岛内展示的宽度另由 <see cref="IslandDisplayLimit"/> 兜底（超出走跑马灯）。
+    /// </summary>
     public static string ToSingleLine(string? text, string fallback)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -667,8 +676,14 @@ public sealed class IslandController : IDisposable
             return fallback;
         }
 
-        return firstLine.Length > 90 ? firstLine[..90] + "…" : firstLine;
+        return firstLine;
     }
+
+    /// <summary>
+    /// 岛内正文的渲染上限（字符）：超长文本每帧都要重排跑马灯，太长会掉帧；
+    /// **只影响岛内显示**，ntfy 下行推送始终用未截断的原文。
+    /// </summary>
+    public const int IslandDisplayLimit = 400;
 
     /// <summary>
     /// 曲目变化 → 重新取歌词（同曲走缓存，不重复请求）。

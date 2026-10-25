@@ -398,14 +398,17 @@ public static class SelfTest
                    && !WeChatFilter.ShouldBlock(official, config, out _);
         });
 
-        Check("灵动岛状态只保留单行（多行日志被压平、超长截断）", () =>
+        Check("灵动岛状态只保留单行（多行压平、空白压缩、**不截断字数**）", () =>
         {
             var single = UI.IslandController.ToSingleLine("正在梳理需求文档结构\n第二行日志\n第三行", "…");
             var longText = new string('长', 200);
-            var truncated = UI.IslandController.ToSingleLine(longText, "…");
+            var kept = UI.IslandController.ToSingleLine(longText, "…");
+            var squeezed = UI.IslandController.ToSingleLine("a   b\tc", "-");
+
+            // v0.2.20：ntfy 要推全文，这里不再砍到 90 字（岛内渲染另有 400 字上限）
             return single == "正在梳理需求文档结构"
-                   && truncated.Length <= 91
-                   && truncated.EndsWith('…');
+                   && kept.Length == 200
+                   && squeezed == "a b\tc";
         });
 
         Check("去重缓存落盘：重启后已推送消息不再放行", () =>
@@ -2075,7 +2078,31 @@ public static class SelfTest
                       && WorkBuddyTextFilter.IsProcessLine("查看文件、修改：SelfTest.cs")
                       && !WorkBuddyTextFilter.IsProcessLine("编译验证：");
 
-            return ok1 && ok2 && ok3 && ok4 && ok5 && ok6;
+            // v0.2.20：结论**不截断字数**（ntfy 要推全文）——200 字的结论必须原样保留
+            var longLine = new string('结', 200) + "。";
+            var ok7 = WorkBuddyTextFilter.ToConclusion(longLine).Length == longLine.Length;
+
+            // 单行压平时也不再砍到 90 字
+            var ok8 = IslandController.ToSingleLine(longLine, "-").Length == longLine.Length
+                      && IslandController.IslandDisplayLimit >= 200;
+
+            return ok1 && ok2 && ok3 && ok4 && ok5 && ok6 && ok7 && ok8;
+        });
+
+        Check("v0.2.20：自由拖动可单独选择是否跟随超时收纳（默认跟随）", () =>
+        {
+            var defaults = new AppConfig();
+            var okDefault = defaults.FreeAutoCollapse;
+
+            var off = new AppConfig { FreeAutoCollapse = false };
+            off.Normalize();
+
+            // 与位置模式互不影响：Free + 关掉收纳 = 常驻展开
+            var freeMode = new AppConfig { IslandMode = "Free", FreeAutoCollapse = false };
+            freeMode.Normalize();
+
+            return okDefault && !off.FreeAutoCollapse && !freeMode.FreeAutoCollapse
+                   && freeMode.IslandMode == "Free";
         });
 
         Check("v0.2.19 需求2：预览真实优先（有真实内容不铺样板，没有才用样板兜底）", () =>
@@ -2340,7 +2367,7 @@ public static class SelfTest
             }
         }
 
-        Check("v0.2.19 需求1：通知卡关闭圆钮（右上角外凸 / 默认隐藏 / 点击关闭）", () =>
+        Check("v0.2.19 需求1：通知卡关闭圆钮（左上角外凸 / 默认隐藏 / 点击关闭）", () =>
         {
             return RunSta(() =>
             {
@@ -2365,23 +2392,46 @@ public static class SelfTest
                         return false;
                     }
 
-                    // v0.2.19 需求1：圆钮贴住卡片**右上角**并向外凸出。
-                    // 坐标相对"卡片内容的 Grid"量（避开 Card 的悬停渲染变换干扰）：
-                    // 期望按钮右边超出 Grid 右边界、上边高于 Grid 顶边。
+                    // v0.2.20：圆钮在**左上角**，外面包一层 26×26 透明热区（只有悬浮这一小块才显示）
                     card.UpdateLayout();
-                    var host = close.Parent as System.Windows.FrameworkElement;
-                    var closeTopLeft = host is null
+                    var zone = close.Parent as System.Windows.FrameworkElement;
+                    var host = zone?.Parent as System.Windows.FrameworkElement;
+                    var zonePos = zone is null || host is null
                         ? new System.Windows.Point(0, 0)
-                        : close.TranslatePoint(new System.Windows.Point(0, 0), host);
-                    var hostWidth = host?.ActualWidth ?? 0;
-                    var closeTopRight =
-                        new System.Windows.Point(closeTopLeft.X + close.ActualWidth, closeTopLeft.Y);
-                    var atTopRight = hostWidth > 0
-                                     && closeTopRight.X >= hostWidth + 4
-                                     && closeTopLeft.Y <= -4;
+                        : zone.TranslatePoint(new System.Windows.Point(0, 0), host);
+
+                    var atTopLeft = zonePos.X <= -4 && zonePos.Y <= -4
+                                    && (zone?.Width ?? 0) >= 24;
 
                     // 默认完全隐藏：不透明度 0 且不参与命中测试（不占视觉区域、不吃点击）
                     var hiddenByDefault = close.Opacity <= 0.01 && !close.IsHitTestVisible;
+
+                    // 热区必须始终可命中，否则鼠标移到角落也触发不了"出现"
+                    var zoneHittable = zone?.IsHitTestVisible == true
+                                       && (zone as System.Windows.Controls.Panel)?.Background is not null;
+
+                    // 悬停"卡片本身"不该让圆钮出现（v0.2.20 用户要求：放卡片上别显示）
+                    card.RaiseEvent(new System.Windows.Input.MouseEventArgs(
+                        System.Windows.Input.Mouse.PrimaryDevice, 0)
+                    {
+                        RoutedEvent = System.Windows.UIElement.MouseEnterEvent,
+                    });
+                    var hiddenOnCardHover = !card.IsCloseButtonShown;
+
+                    // 只有悬停左上角热区才出现
+                    zone?.RaiseEvent(new System.Windows.Input.MouseEventArgs(
+                        System.Windows.Input.Mouse.PrimaryDevice, 0)
+                    {
+                        RoutedEvent = System.Windows.UIElement.MouseEnterEvent,
+                    });
+                    var shownOnZoneHover = card.IsCloseButtonShown;
+
+                    zone?.RaiseEvent(new System.Windows.Input.MouseEventArgs(
+                        System.Windows.Input.Mouse.PrimaryDevice, 0)
+                    {
+                        RoutedEvent = System.Windows.UIElement.MouseLeaveEvent,
+                    });
+                    var hiddenAfterLeave = !card.IsCloseButtonShown;
 
                     // 点叉号 → 走 OnCloseButtonClick → Dismiss → 关闭
                     close.RaiseEvent(new System.Windows.RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
@@ -2396,11 +2446,14 @@ public static class SelfTest
                     }
 
                     report.AppendLine(
-                        $"      诊断: 贴右上角={atTopRight} 默认隐藏={hiddenByDefault} " +
-                        $"位置=({closeTopRight.X:F1},{closeTopRight.Y:F1}) 卡宽={card.ActualWidth:F1} " +
-                        $"点击后关闭={card.IsClosed}");
+                        $"      诊断: 贴左上角={atTopLeft} 默认隐藏={hiddenByDefault} " +
+                        $"热区可命中={zoneHittable} 位置=({zonePos.X:F1},{zonePos.Y:F1}) " +
+                        $"卡片悬停不显={hiddenOnCardHover} 热区悬停显示={shownOnZoneHover} " +
+                        $"移开隐藏={hiddenAfterLeave} 点击后关闭={card.IsClosed}");
 
-                    return atTopRight && hiddenByDefault && card.IsClosed;
+                    return atTopLeft && hiddenByDefault && zoneHittable
+                           && hiddenOnCardHover && shownOnZoneHover && hiddenAfterLeave
+                           && card.IsClosed;
                 }
                 finally
                 {

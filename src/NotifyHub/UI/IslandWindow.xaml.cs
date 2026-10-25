@@ -462,6 +462,9 @@ public partial class IslandWindow : Window
     /// <summary>注入的配置读取：岛内左右区域分配比例（左=播放器占比，v0.2.9 需求 6）。</summary>
     public Func<int>? IslandSplitRatioProvider { get; set; }
 
+    /// <summary>注入的配置读取：自由拖动模式下是否跟随超时收纳（v0.2.20，默认跟随）。</summary>
+    public Func<bool>? FreeAutoCollapseProvider { get; set; }
+
     /// <summary>歌词区当前是否展开（诊断用）。</summary>
     public bool IsLyricsShown => LyricsPanel.Visibility == Visibility.Visible;
 
@@ -2842,6 +2845,12 @@ public partial class IslandWindow : Window
         }
 
         if (!AutoCollapseEnabled())
+        {
+            return;
+        }
+
+        // v0.2.20：自由拖动模式可以单独关掉"跟随超时收纳"（关掉就常驻展开）
+        if (IsFreeMode() && !(FreeAutoCollapseProvider?.Invoke() ?? true))
         {
             return;
         }

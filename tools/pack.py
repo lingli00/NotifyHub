@@ -14,7 +14,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "release")
-VER = "v0.2.19"
+VER = "v0.2.20"
 
 # 便携包内不发布的运行期状态/调试产物
 PORTABLE_SKIP_DIRS = {"logs", "dump", "snapshots"}

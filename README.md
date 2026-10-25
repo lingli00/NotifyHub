@@ -5,8 +5,8 @@ Windows 桌面「消息聚合通知 + 灵动岛 + 音乐控制」工具。
 **WorkBuddy 任务状态灵动岛**（内含音乐播放器快捷控制）。托盘常驻、免安装、
 自包含单文件 exe、弹窗不抢键盘焦点。
 
-**下载**：[Release v0.2.19](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.19)
-→ `NotifyHub-v0.2.19-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.19-source.zip`（完整工程）。
+**下载**：[Release v0.2.20](https://github.com/lingli00/NotifyHub/releases/tag/v0.2.20)
+→ `NotifyHub-v0.2.20-portable-win-x64.zip`（解压即用）或 `NotifyHub-v0.2.20-source.zip`（完整工程）。
 
 > 为什么要用 UI Automation 轮询？微信 / QQ 不向 Windows 系统通知中心写入消息，
 > 所以只能直接读它们的会话窗口（UIA），做快照差分来发现新消息。
@@ -224,6 +224,7 @@ $p = Start-Process -FilePath .\NotifyHub.exe -ArgumentList '--island-stream' -Re
 | `WeChatBlockedKeywords` | 服务通知,公众号,… | 追加拦截关键词（逗号分隔，命中会话名或摘要即拦截） |
 | `SwipeCollapseEnabled` | `true` | 上滑手动收纳开关（v0.2.18：短按上滑即触发，不再需要长按） |
 | `SwipeCollapsePx` | `24` | 触发收纳的上滑距离（物理像素，12~96） |
+| `FreeAutoCollapse` | `true` | 自由拖动模式下是否也跟随超时收纳（v0.2.20） |
 | `IslandWidthPercent` | `100` | 岛**长度**（上下边长，%）：100~160，100 = 508px |
 | `IslandHeightPercent` | `70` | 岛**高度**（左右边长，%）：50~80，70 ≈ 104px |
 | `MusicModuleScale` / `TaskModuleScale` | `100` | 音乐 / 任务模块尺寸缩放（%，70~140） |
@@ -384,6 +385,12 @@ python tools\stream_latency.py         # 状态流延迟
 ---
 
 ## 八、版本
+
+**v0.2.20** — 关闭圆钮只在角落热区显示 / ntfy 不限字数 / 自由拖动可选跟随收纳
+
+* **圆钮显隐**：左上角 22px 圆形（外凸 8px），外面包 26×26 透明热区；**只有鼠标移到这块角落才出现**，悬停卡片其它位置不显示；隐藏时不吃点击（点角落=点卡片）
+* **ntfy 不限字数**：去掉 90 字（单行压平）与 60 字（结论）两处截断，推送/卡片用全文；岛内渲染另有 400 字上限（走跑马灯），不影响推送
+* **自由拖动收纳**：新增 `FreeAutoCollapse`（默认开）+ 设置页勾选项「自由拖动时也跟随超时收纳」；关掉则自由模式的岛常驻展开
 
 **v0.2.19** — 通知卡 macOS 圆钮 / 设置预览真实优先 / 只推结论文字 / 双击分区跳转 / 无内容不占岛 / 上滑松手收纳
 

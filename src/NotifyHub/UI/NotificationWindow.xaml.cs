@@ -59,11 +59,14 @@ public partial class NotificationWindow : Window
     private bool _closing;
     private double _entryOffset = EntrySlide;
 
-    /// <summary>卡片是否被悬停（关闭圆钮的显隐条件之一）。</summary>
-    private bool _cardHovered;
+    /// <summary>鼠标是否停在左上角的关闭热区里（v0.2.20：**唯一**的圆钮显隐条件）。</summary>
+    private bool _closeHovered;
 
     /// <summary>关闭圆钮当前是否显示（避免重复起动画）。</summary>
     private bool _closeShown;
+
+    /// <summary>关闭圆钮当前是否处于"显示"状态（自检用）。</summary>
+    public bool IsCloseButtonShown => _closeShown;
 
     public NotificationWindow(NotifyMessage message, int durationMs, double marqueeSpeed = MarqueeText.DefaultSpeed,
         AppConfig? config = null, double uiScale = 1.0)
@@ -374,8 +377,6 @@ public partial class NotificationWindow : Window
         // v0.2.10 需求 3：悬停只做"整卡轻微放大"，不再叠加任何黑色遮罩/变色。
         AnimateHoverScale(1.02, spring: true);
 
-        _cardHovered = true;
-        UpdateCloseVisibility();
 
         if (!_timer.IsEnabled)
         {
@@ -391,8 +392,6 @@ public partial class NotificationWindow : Window
     {
         AnimateHoverScale(1.0, spring: false);
 
-        _cardHovered = false;
-        UpdateCloseVisibility();
 
         if (_closing)
         {
@@ -404,13 +403,22 @@ public partial class NotificationWindow : Window
 
     // ---------------- v0.2.19 需求1：macOS 风格关闭圆钮（悬停才出现） ----------------
 
-    private void OnCloseButtonMouseEnter(object sender, MouseEventArgs e) => UpdateCloseVisibility();
+    private void OnCloseZoneMouseEnter(object sender, MouseEventArgs e)
+    {
+        _closeHovered = true;
+        UpdateCloseVisibility();
+    }
 
-    private void OnCloseButtonMouseLeave(object sender, MouseEventArgs e) => UpdateCloseVisibility();
+    private void OnCloseZoneMouseLeave(object sender, MouseEventArgs e)
+    {
+        _closeHovered = false;
+        UpdateCloseVisibility();
+    }
 
     /// <summary>
-    /// 关闭圆钮显隐：卡片或圆钮自身被悬停时出现，其余时候完全隐掉
-    /// （隐藏时同时关掉命中测试，避免透明圆抢走"点卡片打开消息"的点击）。
+    /// 关闭圆钮显隐（v0.2.20）：**只有鼠标移到左上角那 26×26 热区才出现**，
+    /// 悬停卡片其它位置一律不显示（用户要求"放卡片上别显示，太丑"）。
+    /// 隐藏时同时关掉命中测试，避免透明圆抢走"点卡片打开消息"的点击。
     /// </summary>
     private void UpdateCloseVisibility()
     {
@@ -419,7 +427,7 @@ public partial class NotificationWindow : Window
             return;
         }
 
-        var show = !_closing && (_cardHovered || CloseButton.IsMouseOver);
+        var show = !_closing && _closeHovered;
         if (show == _closeShown)
         {
             return;
